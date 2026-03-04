@@ -2,6 +2,8 @@
 
 Real-time camera surveillance system. Cameras stream H.264 video and Opus audio over QUIC to a bridge server, which translates to WebRTC for browser-based viewing. Cameras are organized into groups; viewers subscribe to a group and receive all feeds over a single PeerConnection.
 
+![Ghostcam viewer with 4 simulated cameras](screenshot.png)
+
 ## Architecture
 
 ```
