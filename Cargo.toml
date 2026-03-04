@@ -1,0 +1,21 @@
+[workspace]
+members = ["ghostcam-common", "ghostcam-agent", "ghostcam-bridge"]
+resolver = "2"
+
+[workspace.dependencies]
+ghostcam-common = { path = "ghostcam-common" }
+quinn = "0.11"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rcgen = "0.13"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+bytes = "1"
+clap = { version = "4", features = ["derive", "env"] }
+axum = { version = "0.7", features = ["macros"] }
+tower-http = { version = "0.6", features = ["cors", "fs"] }
+str0m = "0.6"
+anyhow = "1"

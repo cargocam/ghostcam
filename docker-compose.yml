@@ -1,0 +1,52 @@
+services:
+  bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: bridge
+    ports:
+      - "4433:4433/udp"
+      - "3000:3000"
+    environment:
+      - GHOSTCAM_API_KEY=dev-key
+      - RUST_LOG=ghostcam_bridge=info,str0m=warn
+    command: >
+      ghostcam-bridge
+        --quic-port 4433
+        --http-port 3000
+        --public-ip 127.0.0.1
+        --viewer-dir /app/viewer
+
+  camera-1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: agent
+    depends_on:
+      - bridge
+    environment:
+      - RUST_LOG=ghostcam_agent=info
+    command: >
+      ghostcam-agent
+        --bridge-addr bridge:4433
+        --device-id cam-01
+        --group-id default
+        --test-file /app/test-data/test.h264
+        --fps 30
+
+  camera-2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: agent
+    depends_on:
+      - bridge
+    environment:
+      - RUST_LOG=ghostcam_agent=info
+    command: >
+      ghostcam-agent
+        --bridge-addr bridge:4433
+        --device-id cam-02
+        --group-id default
+        --test-file /app/test-data/test.h264
+        --fps 30

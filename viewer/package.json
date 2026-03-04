@@ -1,0 +1,31 @@
+{
+  "name": "ghostcam-viewer",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json"
+  },
+  "dependencies": {
+    "bits-ui": "^2.15.8",
+    "clsx": "^2",
+    "leaflet": "^1.9.4",
+    "lucide-svelte": "^0.574.0",
+    "mode-watcher": "^1.1.0",
+    "tailwind-merge": "^2",
+    "tailwind-variants": "^0.3"
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^5",
+    "@tailwindcss/vite": "^4",
+    "@types/leaflet": "^1.9.21",
+    "svelte": "^5",
+    "svelte-check": "^4",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vite": "^6"
+  }
+}

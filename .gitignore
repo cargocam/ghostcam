@@ -1,0 +1,17 @@
+# Rust
+target/
+
+# Node
+node_modules/
+
+# Viewer build output
+viewer/build/
+
+# Test data (generated)
+test-data/
+
+# MCP config (local)
+.mcp.json
+
+# OS
+.DS_Store
