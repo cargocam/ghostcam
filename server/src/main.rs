@@ -1,13 +1,10 @@
 mod api;
-mod data_channel;
 mod quic;
-mod router;
-mod rtp;
 mod webrtc;
 
 use clap::Parser;
-use ghostcam_common::config;
-use router::GroupRouter;
+use ghostcam::config;
+use ghostcam::router::GroupRouter;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,7 +13,7 @@ use tracing::info;
 use webrtc::WebRtcEngine;
 
 #[derive(Parser)]
-#[command(name = "ghostcam-bridge", about = "Ghostcam bridge server")]
+#[command(name = "server", about = "Ghostcam bridge server")]
 struct Args {
     /// QUIC listen port for camera connections
     #[arg(long, default_value_t = config::DEFAULT_QUIC_PORT)]
@@ -51,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "ghostcam_bridge=info,str0m=warn".into()),
+                .unwrap_or_else(|_| "server=info,str0m=warn".into()),
         )
         .init();
 

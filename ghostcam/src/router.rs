@@ -1,10 +1,11 @@
 use bytes::Bytes;
-use ghostcam_common::frame::StreamType;
-use ghostcam_common::group::GroupId;
+use crate::frame::StreamType;
+use crate::group::GroupId;
+use crate::telemetry::{SparseTelemetry, TelemetryData};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use tokio::sync::broadcast;
-use tracing::info;
+use tracing::{info, warn};
 
 pub type DeviceId = String;
 pub type SessionId = String;
@@ -40,6 +41,8 @@ pub struct GroupRouter {
     pub sps_cache: HashMap<DeviceId, Bytes>,
     /// Cached PPS NAL per camera
     pub pps_cache: HashMap<DeviceId, Bytes>,
+    /// Last known telemetry per camera
+    pub telemetry: HashMap<DeviceId, TelemetryData>,
 }
 
 impl GroupRouter {
@@ -52,6 +55,7 @@ impl GroupRouter {
             frame_tx,
             sps_cache: HashMap::new(),
             pps_cache: HashMap::new(),
+            telemetry: HashMap::new(),
         }
     }
 
@@ -85,6 +89,7 @@ impl GroupRouter {
             }
             self.sps_cache.remove(device_id);
             self.pps_cache.remove(device_id);
+            self.telemetry.remove(device_id);
             info!(device_id = %device_id, "camera unregistered");
         }
     }
@@ -115,6 +120,26 @@ impl GroupRouter {
             timestamp_us,
             payload,
         });
+    }
+
+    /// Process a telemetry frame — decode SparseTelemetry, merge into stored state, broadcast.
+    pub fn on_telemetry_frame(&mut self, device_id: &str, timestamp_us: u64, payload: Bytes) {
+        match SparseTelemetry::decode(&payload) {
+            Ok(sparse) => {
+                let state = self.telemetry.entry(device_id.to_string()).or_default();
+                sparse.merge_into(state);
+
+                let _ = self.frame_tx.send(CameraFrame {
+                    device_id: device_id.to_string(),
+                    stream_type: StreamType::Telemetry,
+                    timestamp_us,
+                    payload,
+                });
+            }
+            Err(e) => {
+                warn!(device_id = %device_id, error = %e, "failed to decode telemetry");
+            }
+        }
     }
 
     /// Broadcast an audio frame.

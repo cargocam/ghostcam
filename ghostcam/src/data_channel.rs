@@ -1,4 +1,4 @@
-use ghostcam_common::group::GroupId;
+use crate::group::GroupId;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

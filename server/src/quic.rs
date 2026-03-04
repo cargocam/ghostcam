@@ -1,9 +1,7 @@
 use crate::AppState;
 use anyhow::Result;
-use ghostcam_common::frame::Frame;
-use ghostcam_common::hello::DeviceHello;
+use ghostcam::frame::Frame;
 use quinn::Endpoint;
-use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tracing::{info, warn};
@@ -11,21 +9,8 @@ use tracing::{info, warn};
 pub async fn run_quic_listener(port: u16, state: Arc<AppState>) -> Result<()> {
     let addr: SocketAddr = format!("0.0.0.0:{port}").parse()?;
 
-    // Self-signed cert for QUIC server
-    let key_pair = rcgen::KeyPair::generate()?;
-    let cert_params = rcgen::CertificateParams::new(vec!["ghostcam-bridge".into()])?;
-    let cert = cert_params.self_signed(&key_pair)?;
-    let cert_der = CertificateDer::from(cert.der().to_vec());
-    let key_der = PrivatePkcs8KeyDer::from(key_pair.serialize_der());
-
-    let mut server_crypto = rustls::ServerConfig::builder()
-        .with_no_client_auth()
-        .with_single_cert(vec![cert_der], key_der.into())?;
-    server_crypto.alpn_protocols = vec![b"ghostcam".to_vec()];
-
-    let server_config = quinn::ServerConfig::with_crypto(Arc::new(
-        quinn::crypto::rustls::QuicServerConfig::try_from(server_crypto)?,
-    ));
+    let (cert_der, key_der) = ghostcam::quic::generate_self_signed_cert("server")?;
+    let server_config = ghostcam::quic::create_quic_server_config(cert_der, key_der)?;
 
     let endpoint = Endpoint::server(server_config, addr)?;
     info!(addr = %addr, "QUIC listener started");
@@ -56,15 +41,7 @@ async fn handle_camera_connection(
 
     // Read hello from bidirectional control stream
     let (_, mut control_recv) = connection.accept_bi().await?;
-
-    // Read length-prefixed JSON hello
-    let mut len_buf = [0u8; 4];
-    control_recv.read_exact(&mut len_buf).await?;
-    let len = u32::from_be_bytes(len_buf) as usize;
-
-    let mut hello_buf = vec![0u8; len];
-    control_recv.read_exact(&mut hello_buf).await?;
-    let hello: DeviceHello = serde_json::from_slice(&hello_buf)?;
+    let hello = ghostcam::quic::recv_hello(&mut control_recv).await?;
 
     info!(
         device_id = %hello.device_id,
@@ -127,13 +104,17 @@ async fn read_frame_stream(
     let frame = Frame::decode(&data)?;
 
     match frame.stream_type {
-        ghostcam_common::frame::StreamType::Video => {
+        ghostcam::frame::StreamType::Video => {
             let mut router = state.router.write().await;
             router.on_video_frame(device_id, frame.timestamp_us, frame.payload);
         }
-        ghostcam_common::frame::StreamType::Audio => {
+        ghostcam::frame::StreamType::Audio => {
             let router = state.router.read().await;
             router.on_audio_frame(device_id, frame.timestamp_us, frame.payload);
+        }
+        ghostcam::frame::StreamType::Telemetry => {
+            let mut router = state.router.write().await;
+            router.on_telemetry_frame(device_id, frame.timestamp_us, frame.payload);
         }
     }
 

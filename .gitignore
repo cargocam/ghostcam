@@ -4,8 +4,8 @@ target/
 # Node
 node_modules/
 
-# Viewer build output
-viewer/build/
+# UI build output
+ui/build/
 
 # Test data (generated)
 test-data/

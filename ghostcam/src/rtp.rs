@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use ghostcam_common::config::DEFAULT_MTU;
+use crate::config::DEFAULT_MTU;
 
 /// Convert microsecond timestamp to H.264 RTP timestamp (90kHz clock).
 pub fn h264_rtp_timestamp(timestamp_us: u64) -> u32 {

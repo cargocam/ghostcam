@@ -5,7 +5,7 @@ use axum::http::{header, StatusCode};
 use axum::response::Json;
 use axum::routing::{delete, get, post};
 use axum::Router;
-use ghostcam_common::group::GroupId;
+use ghostcam::group::GroupId;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;

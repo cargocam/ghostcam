@@ -7,6 +7,7 @@ use std::io;
 pub enum StreamType {
     Video = 0,
     Audio = 1,
+    Telemetry = 2,
 }
 
 impl TryFrom<u8> for StreamType {
@@ -15,6 +16,7 @@ impl TryFrom<u8> for StreamType {
         match v {
             0 => Ok(Self::Video),
             1 => Ok(Self::Audio),
+            2 => Ok(Self::Telemetry),
             _ => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("unknown stream type: {v}"),
@@ -96,5 +98,19 @@ mod tests {
         assert_eq!(decoded.stream_type, StreamType::Video);
         assert_eq!(decoded.timestamp_us, 1_000_000);
         assert_eq!(decoded.payload, Bytes::from_static(b"hello"));
+    }
+
+    #[test]
+    fn roundtrip_telemetry() {
+        let frame = Frame {
+            stream_type: StreamType::Telemetry,
+            timestamp_us: 42_000,
+            payload: Bytes::from_static(b"\x93\xa3cpu"),
+        };
+        let encoded = frame.encode();
+        let decoded = Frame::decode(&encoded).unwrap();
+        assert_eq!(decoded.stream_type, StreamType::Telemetry);
+        assert_eq!(decoded.timestamp_us, 42_000);
+        assert_eq!(decoded.payload, Bytes::from_static(b"\x93\xa3cpu"));
     }
 }

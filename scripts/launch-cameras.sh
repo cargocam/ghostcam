@@ -26,7 +26,7 @@ trap cleanup EXIT INT TERM
 for i in $(seq 1 "$COUNT"); do
     DEVICE_ID="${GROUP}-cam-$(printf '%02d' "$i")"
     echo "  Starting $DEVICE_ID"
-    cargo run -p ghostcam-agent -- \
+    cargo run -p camera -- \
         --bridge-addr "$BRIDGE" \
         --device-id "$DEVICE_ID" \
         --group-id "$GROUP" \

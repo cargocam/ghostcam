@@ -9,13 +9,13 @@ services:
       - "3000:3000"
     environment:
       - GHOSTCAM_API_KEY=dev-key
-      - RUST_LOG=ghostcam_bridge=info,str0m=warn
+      - RUST_LOG=server=info,str0m=warn
     command: >
-      ghostcam-bridge
+      server
         --quic-port 4433
         --http-port 3000
         --public-ip 127.0.0.1
-        --viewer-dir /app/viewer
+        --viewer-dir /app/ui
 
   camera-1:
     build:
@@ -25,9 +25,9 @@ services:
     depends_on:
       - bridge
     environment:
-      - RUST_LOG=ghostcam_agent=info
+      - RUST_LOG=camera=info
     command: >
-      ghostcam-agent
+      camera
         --bridge-addr bridge:4433
         --device-id cam-01
         --group-id default
@@ -42,9 +42,9 @@ services:
     depends_on:
       - bridge
     environment:
-      - RUST_LOG=ghostcam_agent=info
+      - RUST_LOG=camera=info
     command: >
-      ghostcam-agent
+      camera
         --bridge-addr bridge:4433
         --device-id cam-02
         --group-id default

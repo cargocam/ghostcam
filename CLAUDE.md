@@ -1,5 +1,9 @@
 # CLAUDE.md — Ghostcam Development Guide
 
+## Documentation Policy
+
+When making changes to the codebase, **always update README.md and CLAUDE.md** to reflect those changes. This includes new/changed wire protocol messages, API endpoints, CLI flags, architecture, data flow, viewer features, dependencies, and build instructions. These files are the source of truth — keep them in sync with the code.
+
 ## What is this project?
 
 Ghostcam is a camera surveillance system. Cameras stream H.264 video + Opus audio over QUIC to a bridge server, which translates to WebRTC for browser-based viewing. Cameras are organized into groups; viewers subscribe to a group and receive all feeds over a single PeerConnection.
@@ -8,10 +12,10 @@ Ghostcam is a camera surveillance system. Cameras stream H.264 video + Opus audi
 
 ```
 ghostcam/
-├── ghostcam-common/     Shared library: wire format, handshake, group IDs, config
-├── ghostcam-agent/      Test camera QUIC client (loops H.264 file + Opus silence)
-├── ghostcam-bridge/     Bridge server: QUIC→WebRTC translator, HTTP API
-├── viewer/              Svelte 5 SPA: WebRTC viewer with Tailwind CSS 4
+├── ghostcam/            Shared library: wire format, handshake, group IDs, config, router, RTP, data channel, H.264 parser, QUIC helpers, stream I/O
+├── camera/              Camera agent: QUIC client, real capture (rpicam-vid, cpal, telemetry) or --test-source mode
+├── server/              Bridge server: CLI, QUIC listener, str0m WebRTC engine, Axum HTTP API
+├── ui/                  Svelte 5 SPA: WebRTC viewer with Tailwind CSS 4
 ├── test-data/           Generated test H.264 file
 ├── scripts/             Helper scripts (launch-cameras.sh)
 └── docker-compose.yml   Bridge + 2 camera containers
@@ -32,23 +36,26 @@ cargo build
 # Run tests
 cargo test
 
-# Run bridge (terminal 1)
-cargo run -p ghostcam-bridge -- --public-ip 127.0.0.1
+# Run server (terminal 1)
+cargo run -p server -- --public-ip 127.0.0.1
 
-# Run test camera (terminal 2)
-cargo run -p ghostcam-agent -- --bridge-addr 127.0.0.1:4433 --device-id cam-01 --group-id default
+# Run test camera (terminal 2) — test source mode
+cargo run -p camera -- --test-source --device-id cam-01 --group-id default
+
+# Run real camera (Linux with rpicam-vid)
+cargo run -p camera -- --device-id cam-01 --group-id default
 
 # Launch N cameras at once
 ./scripts/launch-cameras.sh 4 default
 
 # Viewer dev server (terminal 3)
-cd viewer && bun install && bun run dev
+cd ui && bun install && bun run dev
 
 # Build viewer for production
-cd viewer && bun run build
+cd ui && bun run build
 
 # Type-check viewer
-cd viewer && bun run check
+cd ui && bun run check
 ```
 
 ## Key Ports
@@ -60,23 +67,24 @@ cd viewer && bun run check
 ## Logging
 
 ```bash
-RUST_LOG=ghostcam_bridge=debug,str0m=warn cargo run -p ghostcam-bridge -- --public-ip 127.0.0.1
-RUST_LOG=ghostcam_agent=debug cargo run -p ghostcam-agent
+RUST_LOG=server=debug,str0m=warn cargo run -p server -- --public-ip 127.0.0.1
+RUST_LOG=camera=debug cargo run -p camera
 ```
 
-Default filter: `ghostcam_bridge=info,str0m=warn` (bridge), `ghostcam_agent=info` (agent).
+Default filter: `server=info,str0m=warn` (server), `camera=info` (camera).
 
 ## Architecture
 
 ### Data Flow
 
 ```
-Camera Agent                    Bridge                          Browser
+Camera                          Server                          Browser
     │                              │                               │
     │── QUIC connect ─────────────>│                               │
     │── DeviceHello (JSON) ───────>│ register in GroupRouter       │
     │── H.264 NAL (uni stream) ──>│ cache SPS/PPS                 │
     │── Opus frame (uni stream) ─>│ broadcast::send()             │
+    │── Telemetry (uni stream) ──>│ decode + merge + broadcast    │
     │                              │                               │
     │                              │<── POST /watch (SDP offer) ───│
     │                              │    create str0m Rtc            │
@@ -91,16 +99,40 @@ Camera Agent                    Bridge                          Browser
     │                              │    data channel telemetry ───>│ camera list, metrics
 ```
 
-### Bridge Internal Structure
+### Library Structure (`ghostcam/`)
+
+```
+config.rs         Port/MTU constants
+data_channel.rs   DataChannelMessage types (WebRTC data channel JSON)
+frame.rs          13-byte wire format encode/decode
+group.rs          Hierarchical GroupId
+h264.rs           Annex-B NAL parser (parse_h264_file) + streaming NalParser
+hello.rs          DeviceHello handshake
+quic.rs           Shared QUIC/TLS: cert generation, server/client config, hello send/recv
+router.rs         GroupRouter: camera registry, broadcast channel, SPS/PPS cache, telemetry state
+rtp.rs            H.264 NAL→RTP packetizer (Single NAL + FU-A), timestamp math
+stream.rs         send_video_frame, send_audio_frame, send_telemetry_frame, OPUS_SILENCE
+telemetry.rs      TelemetryData, SparseTelemetry, GpsData, diff/merge, MessagePack encode/decode
+```
+
+### Camera Internal Structure
+
+```
+main.rs                CLI parsing, capture orchestration, QUIC reconnect loop
+quic.rs                Quinn QUIC client (connect)
+capture/mod.rs         CaptureMessage enum (VideoNal, Audio, Telemetry)
+capture/video.rs       rpicam-vid subprocess + streaming NalParser
+capture/audio.rs       cpal default input → mono → resample → Opus encode
+capture/telemetry.rs   /proc, /sys readers (Linux) + gpsd TCP client (optional)
+```
+
+### Server Internal Structure
 
 ```
 main.rs           CLI parsing, AppState creation, task spawning
 quic.rs           QUIC listener → per-camera handler → frame reader
-router.rs         GroupRouter: camera registry, broadcast channel, SPS/PPS cache
-rtp.rs            H.264 NAL→RTP packetizer (Single NAL + FU-A), timestamp math
 webrtc.rs         str0m WebRTC engine: session creation, UDP event loop, frame dispatch
 api.rs            Axum HTTP routes + Bearer auth middleware
-data_channel.rs   JSON message types for WebRTC data channel
 ```
 
 ### Viewer Internal Structure
@@ -141,18 +173,35 @@ stores/
 
 ## Wire Protocol Details
 
-### 13-Byte Frame Header
+### QUIC Control Stream (Bidirectional)
+
+Camera opens one bidirectional stream for the handshake. Length-prefixed JSON:
+
+```
+[4 bytes: JSON length (u32 BE)] [JSON: DeviceHello]
+```
+
+```json
+{ "device_id": "cam-01", "group_id": "default", "capabilities": ["h264", "opus"] }
+```
+
+After DeviceHello, the control stream is not used further.
+
+### 13-Byte Frame Header (Unidirectional Streams)
 
 ```
 Offset  Size  Field
-0       1     stream_type (0=video, 1=audio)
+0       1     stream_type (0=video, 1=audio, 2=telemetry)
 1       8     timestamp_us (u64 big-endian, microseconds)
 9       4     payload_len (u32 big-endian)
-13      var   payload (H.264 NAL or Opus frame)
+13      var   payload (H.264 NAL, Opus frame, or MessagePack SparseTelemetry)
 ```
+
+Max frame size: 1 MB. One unidirectional stream per frame.
 
 ### H.264 RTP Packetization
 
+- Non-VCL NALs (SPS, PPS, SEI — types 0,6,7,8) buffered in `nal_accumulator` until a VCL NAL arrives (type 1=slice or 5=IDR), then sent together as Annex-B (`[00 00 00 01][NAL]...`). str0m handles STAP-A/FU-A.
 - NAL ≤ 1188 bytes → Single NAL Unit Packet (raw NAL as RTP payload)
 - NAL > 1188 bytes → FU-A fragments (2-byte header: FU indicator + FU header)
 - RTP timestamp: `(timestamp_us * 90000 + 500000) / 1_000_000` (integer math, 90kHz clock)
@@ -164,9 +213,32 @@ Offset  Size  Field
 - RTP timestamp: `(timestamp_us * 48000 + 500000) / 1_000_000` (48kHz clock)
 - Test agent sends 3-byte silence frames (`[0xF8, 0xFF, 0xFE]`) every 20ms
 
+### Telemetry Wire Format (StreamType::Telemetry = 2)
+
+Camera sends MessagePack-encoded `SparseTelemetry` on unidirectional QUIC streams using the same 13-byte frame header. The `SparseTelemetry` struct uses short serde field names (`c`, `t`, `m`, `u`, `l`, `tx`, `rx`, `g`, `f`) and `Option` wrappers — only changed fields are set.
+
+- Camera polls system metrics every 2s, computes diff against previous state using thresholds (CPU: 5%, temp: 1C, memory: 5MB, network: 10KB, GPS: 0.0001deg)
+- Full heartbeat sent every 30s (`full: true`, all fields populated)
+- Server decodes SparseTelemetry, merges into `router.telemetry` and `session.telemetry_state`, sends JSON `DataChannelMessage::Telemetry` to viewer
+
 ### SPS/PPS Caching
 
 The bridge caches the most recent SPS (NAL type 7) and PPS (NAL type 8) per camera. This allows late-joining viewers to receive decoder initialization parameters before the next IDR frame.
+
+### WebRTC Data Channel Messages
+
+Data channel named "telemetry", all messages are JSON text (not binary). Sent bridge→viewer.
+
+| Type | When | Key Fields |
+|------|------|------------|
+| `cameras` | Session creation | Full camera list with `device_id`, `group_id`, `capabilities` |
+| `camera_join` | Camera connects to group | Single camera object |
+| `camera_leave` | Camera disconnects | `device_id` |
+| `telemetry` | When camera sends telemetry | `cpu_percent`, `temp_celsius`, `memory_mb`, `uptime_secs`, optional `gps` |
+| `track_map` | Data channel opens | Maps SDP `mid` → `device_id` + `kind` ("video"/"audio") |
+| `renegotiate` | Track changes (stub) | `sdp_offer` |
+
+Telemetry is event-driven from camera frames (StreamType::Telemetry = 2, MessagePack SparseTelemetry). The server decodes, merges into per-camera state, and forwards as JSON on the data channel. In test-source mode, no telemetry is sent.
 
 ## API Quick Reference
 
@@ -190,17 +262,17 @@ Default API key: `dev-key` (configurable via `--api-key` or `GHOSTCAM_API_KEY` e
 
 ```bash
 cargo test                    # All Rust tests
-cargo test -p ghostcam-common # Frame encode/decode, group hierarchy, NAL parsing
-cargo test -p ghostcam-bridge # RTP packetization, timestamp conversion
+cargo test -p ghostcam        # Frame encode/decode, group hierarchy, NAL parsing, telemetry, NalParser
+cargo test -p server          # RTP packetization, timestamp conversion
 ```
 
 ### Manual Integration Test
 
-1. Start bridge: `cargo run -p ghostcam-bridge -- --public-ip 127.0.0.1`
-2. Start camera: `cargo run -p ghostcam-agent -- --device-id cam-01 --group-id default`
-3. Verify bridge logs: "camera connected", "received device hello", frame receipt
+1. Start server: `cargo run -p server -- --public-ip 127.0.0.1`
+2. Start camera: `cargo run -p camera -- --test-source --device-id cam-01 --group-id default`
+3. Verify server logs: "camera connected", "received device hello", frame receipt
 4. Test API: `curl -H "Authorization: Bearer dev-key" http://localhost:3000/api/v1/groups`
-5. Start viewer: `cd viewer && bun run dev`, open http://localhost:5173
+5. Start viewer: `cd ui && bun run dev`, open http://localhost:5173
 6. Verify: camera appears in grid, video plays, telemetry updates every 2s
 
 ### Multi-Camera Test
@@ -212,9 +284,9 @@ cargo test -p ghostcam-bridge # RTP packetization, timestamp conversion
 
 ## Debugging Tips
 
-- **No video in browser**: Check bridge logs for "WebRTC session created". Ensure SPS/PPS NALs are being cached (bridge logs NAL types at debug level). Try `RUST_LOG=ghostcam_bridge=debug`.
-- **QUIC connection refused**: Verify bridge QUIC listener started on 4433/udp. Check firewall rules. Agent uses self-signed certs with server verification disabled (dev only).
-- **ICE failures**: Bridge uses ICE-lite with a single host candidate. Ensure `--public-ip` matches the IP reachable from the browser. No STUN/TURN needed for localhost.
+- **No video in browser**: Check server logs for "WebRTC session created". Ensure SPS/PPS NALs are being cached (server logs NAL types at debug level). Try `RUST_LOG=server=debug`.
+- **QUIC connection refused**: Verify server QUIC listener started on 4433/udp. Check firewall rules. Camera uses self-signed certs with server verification disabled (dev only).
+- **ICE failures**: Server uses ICE-lite with a single host candidate. Ensure `--public-ip` matches the IP reachable from the browser. No STUN/TURN needed for localhost.
 - **Broadcast lag**: If viewers fall behind, frames are dropped (broadcast channel). Increase channel capacity in `router.rs` if needed (default: 4096).
 - **str0m issues**: Pin str0m at 0.6.x. API changed significantly between versions. See `webrtc.rs` for correct method signatures.
 
@@ -227,6 +299,9 @@ cargo test -p ghostcam-bridge # RTP packetization, timestamp conversion
 | rustls | 0.23 | TLS backend for quinn. Features: `ring`, `std` (no default) |
 | rcgen | 0.13 | Self-signed certs. `KeyPair::generate()`, `CertificateParams::self_signed(&key_pair)` |
 | axum | 0.7 | HTTP. `from_fn` middleware for auth |
+| rmp-serde | 1 | MessagePack ser/de for telemetry wire format |
+| cpal | 0.15 | Cross-platform audio input (camera) |
+| opus | 0.3 | Opus audio encoding (camera) |
 | svelte | 5 | Runes: `$state`, `$derived`, `$effect` |
 | tailwindcss | 4 | OKLCH color system, `@import "tailwindcss"` |
 | bits-ui | 2 | Headless component primitives |

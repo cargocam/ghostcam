@@ -1,8 +1,9 @@
-use crate::data_channel::{self, DataChannelMessage};
-use crate::router::{CameraFrame, DeviceId, SessionId};
-use crate::rtp;
+use ghostcam::data_channel::{self, CameraInfo, DataChannelMessage, TrackMapping};
+use ghostcam::router::{CameraFrame, DeviceId, SessionId};
+use ghostcam::rtp;
+use ghostcam::telemetry::{SparseTelemetry, TelemetryData};
 use crate::AppState;
-use ghostcam_common::group::GroupId;
+use ghostcam::group::GroupId;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -44,9 +45,11 @@ struct RtcSession {
     /// Data channel ID — set when the browser's channel opens
     data_channel_id: Option<ChannelId>,
     /// Camera list + track map to send when data channel opens
-    pending_camera_list: Option<Vec<crate::data_channel::CameraInfo>>,
-    pending_track_map: Option<Vec<crate::data_channel::TrackMapping>>,
+    pending_camera_list: Option<Vec<CameraInfo>>,
+    pending_track_map: Option<Vec<TrackMapping>>,
     created_at: Instant,
+    /// Per-camera telemetry state for this session
+    telemetry_state: HashMap<DeviceId, TelemetryData>,
 }
 
 pub struct WebRtcEngine {
@@ -87,7 +90,6 @@ impl WebRtcEngine {
 
     pub async fn run(&mut self) {
         let mut tick_interval = tokio::time::interval(std::time::Duration::from_millis(20));
-        let mut telemetry_interval = tokio::time::interval(std::time::Duration::from_secs(2));
 
         loop {
             tokio::select! {
@@ -102,9 +104,6 @@ impl WebRtcEngine {
                 }
                 _ = tick_interval.tick() => {
                     self.poll_all_sessions().await;
-                }
-                _ = telemetry_interval.tick() => {
-                    self.send_telemetry();
                 }
             }
         }
@@ -161,7 +160,7 @@ impl WebRtcEngine {
         // Build camera list for data channel
         let camera_list: Vec<_> = cameras
             .iter()
-            .map(|c| crate::data_channel::CameraInfo {
+            .map(|c| CameraInfo {
                 device_id: c.device_id.clone(),
                 group_id: c.group_id.clone(),
                 capabilities: c.capabilities.clone(),
@@ -172,9 +171,6 @@ impl WebRtcEngine {
         drop(router);
 
         // Use SDP API to add media tracks and accept offer.
-        // We add_media for each camera so str0m generates the correct sendonly direction
-        // in the answer, but the Mids returned here are temporary — str0m will use the
-        // browser's offer Mids (e.g. "0", "1") in the actual answer.
         let mut sdp_api = rtc.sdp_api();
 
         for device_id in &camera_device_ids {
@@ -192,9 +188,6 @@ impl WebRtcEngine {
             );
         }
 
-        // Don't add a bridge-side data channel — the browser's createDataChannel('telemetry')
-        // is already in the offer. We'll get the channel ID via Event::ChannelOpen.
-
         let answer = sdp_api
             .accept_offer(sdp_offer)
             .map_err(|e| format!("accept offer failed: {e}"))?;
@@ -202,8 +195,6 @@ impl WebRtcEngine {
         let sdp_answer = answer.to_sdp_string();
 
         // Parse the SDP answer to discover actual Mids assigned by str0m.
-        // The add_media return values use str0m-internal Mids, but the SDP answer
-        // uses the browser's offer Mids (e.g. "0", "1", "2").
         let mut video_mids: Vec<Mid> = Vec::new();
         let mut audio_mids: Vec<Mid> = Vec::new();
         let mut current_kind = "";
@@ -238,14 +229,14 @@ impl WebRtcEngine {
         // Build track map for data channel (maps mid -> device_id)
         let mut track_mappings = Vec::new();
         for (device_id, mid) in &video_track_map {
-            track_mappings.push(crate::data_channel::TrackMapping {
+            track_mappings.push(TrackMapping {
                 mid: format!("{mid}"),
                 device_id: device_id.clone(),
                 kind: "video".into(),
             });
         }
         for (device_id, mid) in &audio_track_map {
-            track_mappings.push(crate::data_channel::TrackMapping {
+            track_mappings.push(TrackMapping {
                 mid: format!("{mid}"),
                 device_id: device_id.clone(),
                 kind: "audio".into(),
@@ -267,6 +258,7 @@ impl WebRtcEngine {
             pending_camera_list: Some(camera_list),
             pending_track_map: Some(track_mappings),
             created_at: Instant::now(),
+            telemetry_state: HashMap::new(),
         };
 
         self.sessions.insert(session_id.clone(), session);
@@ -357,19 +349,12 @@ impl WebRtcEngine {
     }
 
     fn handle_camera_frame(&mut self, frame: CameraFrame) {
-        use ghostcam_common::frame::StreamType;
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static FRAME_LOG_COUNTER: AtomicU64 = AtomicU64::new(0);
+        use ghostcam::frame::StreamType;
 
         let now = Instant::now();
 
         match frame.stream_type {
             StreamType::Video => {
-                // Accumulate non-VCL NALs (SPS/PPS/SEI) and flush together with
-                // the next VCL NAL (IDR/slice) as Annex-B format. str0m's H264Packetizer
-                // expects Annex-B and handles STAP-A/FU-A creation.
-                // This prevents SPS/PPS from being consumed by the packetizer before
-                // ICE connects, ensuring they're always paired with a decodable frame.
                 let nal_type = if frame.payload.is_empty() { 0 } else { frame.payload[0] & 0x1F };
                 let is_vcl = nal_type == 1 || nal_type == 5; // slice or IDR
 
@@ -381,7 +366,6 @@ impl WebRtcEngine {
                     // Buffer non-VCL NAL with Annex-B start code
                     acc.extend_from_slice(&[0, 0, 0, 1]);
                     acc.extend_from_slice(&frame.payload);
-                    // Don't write to sessions yet — wait for VCL NAL
                 } else {
                     // Build combined payload: accumulated non-VCL NALs + this VCL NAL
                     acc.extend_from_slice(&[0, 0, 0, 1]);
@@ -448,6 +432,48 @@ impl WebRtcEngine {
                     }
                 }
             }
+            StreamType::Telemetry => {
+                // Decode sparse telemetry, merge into session state, send to viewer
+                let sparse = match SparseTelemetry::decode(&frame.payload) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        warn!(device_id = %frame.device_id, error = %e, "failed to decode telemetry");
+                        return;
+                    }
+                };
+
+                for (_session_id, session) in &mut self.sessions {
+                    // Only forward telemetry for cameras this session is watching
+                    if !session.video_track_map.contains_key(&frame.device_id) {
+                        continue;
+                    }
+
+                    let state = session
+                        .telemetry_state
+                        .entry(frame.device_id.clone())
+                        .or_default();
+                    sparse.merge_into(state);
+
+                    if let Some(ch_id) = session.data_channel_id {
+                        let msg = DataChannelMessage::Telemetry {
+                            device_id: frame.device_id.clone(),
+                            cpu_percent: state.cpu_percent as f64,
+                            temp_celsius: state.temp_celsius.unwrap_or(0.0) as f64,
+                            memory_mb: state.memory_mb as f64,
+                            uptime_secs: state.uptime_secs,
+                            gps: state.gps.as_ref().map(|g| data_channel::GpsData {
+                                latitude: g.latitude,
+                                longitude: g.longitude,
+                            }),
+                        };
+                        if let Ok(json) = serde_json::to_string(&msg) {
+                            if let Some(mut ch) = session.rtc.channel(ch_id) {
+                                let _ = ch.write(false, json.as_bytes());
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -473,8 +499,6 @@ impl WebRtcEngine {
                         Output::Event(event) => match &event {
                             Event::IceConnectionStateChange(state) => {
                                 info!(session_id = %session_id, state = ?state, "ICE state change");
-                                // Don't auto-remove on Disconnected — it's transient.
-                                // Sessions are cleaned up via DELETE /session or explicit timeout.
                             }
                             Event::ChannelOpen(ch_id, label) => {
                                 info!(session_id = %session_id, label = %label, "data channel open");
@@ -511,38 +535,4 @@ impl WebRtcEngine {
         }
     }
 
-    fn send_telemetry(&mut self) {
-        for (_session_id, session) in &mut self.sessions {
-            if let Some(ch_id) = session.data_channel_id {
-                for (i, (device_id, _)) in session.video_track_map.iter().enumerate() {
-                    let elapsed = session.created_at.elapsed().as_secs();
-                    let t = elapsed as f64;
-
-                    // Each camera gets a unique GPS starting point offset and movement
-                    let idx = i as f64;
-                    let base_lat = 37.7749 + idx * 0.005;  // SF area, spaced apart
-                    let base_lon = -122.4194 + idx * 0.005;
-                    let lat = base_lat + (t * 0.02 + idx).sin() * 0.002;
-                    let lon = base_lon + (t * 0.015 + idx * 1.5).cos() * 0.002;
-
-                    let msg = DataChannelMessage::Telemetry {
-                        device_id: device_id.clone(),
-                        cpu_percent: 28.0 + (t * 0.1).sin() * 5.0,
-                        temp_celsius: 44.0 + (t * 0.05).cos() * 3.0,
-                        memory_mb: 128.0 + t * 0.5,
-                        uptime_secs: elapsed,
-                        gps: Some(data_channel::GpsData {
-                            latitude: lat,
-                            longitude: lon,
-                        }),
-                    };
-                    if let Ok(json) = serde_json::to_string(&msg) {
-                        if let Some(mut ch) = session.rtc.channel(ch_id) {
-                            let _ = ch.write(false, json.as_bytes());
-                        }
-                    }
-                }
-            }
-        }
-    }
 }

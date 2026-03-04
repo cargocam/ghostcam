@@ -1,5 +1,5 @@
 use anyhow::Result;
-use ghostcam_common::frame::{Frame, StreamType};
+use crate::frame::{Frame, StreamType};
 use quinn::SendStream;
 
 /// Send a single video frame over a unidirectional QUIC stream.
@@ -30,6 +30,23 @@ pub async fn send_audio_frame(
         stream_type: StreamType::Audio,
         timestamp_us,
         payload: bytes::Bytes::copy_from_slice(opus_data),
+    };
+    let encoded = frame.encode();
+    stream.write_all(&encoded).await?;
+    stream.finish()?;
+    Ok(())
+}
+
+/// Send a single telemetry frame over a unidirectional QUIC stream.
+pub async fn send_telemetry_frame(
+    mut stream: SendStream,
+    timestamp_us: u64,
+    msgpack_data: &[u8],
+) -> Result<()> {
+    let frame = Frame {
+        stream_type: StreamType::Telemetry,
+        timestamp_us,
+        payload: bytes::Bytes::copy_from_slice(msgpack_data),
     };
     let encoded = frame.encode();
     stream.write_all(&encoded).await?;
