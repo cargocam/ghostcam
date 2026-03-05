@@ -28,6 +28,7 @@ services:
       - RUST_LOG=camera=info
     command: >
       camera
+        --test-source
         --bridge-addr bridge:4433
         --device-id cam-01
         --group-id default
@@ -45,6 +46,7 @@ services:
       - RUST_LOG=camera=info
     command: >
       camera
+        --test-source
         --bridge-addr bridge:4433
         --device-id cam-02
         --group-id default

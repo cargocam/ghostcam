@@ -4,12 +4,18 @@ import { handleDataChannelMessage } from '$lib/data-channel.js';
 import { cameraStore } from '$lib/stores/cameras.svelte.js';
 import { groupStore } from '$lib/stores/groups.svelte.js';
 import { videoStatsStore } from '$lib/stores/videoStats.svelte.js';
+import { alertsStore } from '$lib/stores/alerts.svelte.js';
+
+const MAX_RETRIES = 10;
+const CONNECTION_TIMEOUT_MS = 10_000;
 
 class TransportStore {
 	connected = $state(false);
 	error = $state<string | null>(null);
 	connectionState = $state<string>('new');
 	connectedAt = $state<number | null>(null);
+	reconnecting = $state(false);
+	reconnectAttempt = $state(0);
 
 	private signaling = new SignalingClient();
 	private session: WebRtcSession | null = null;
@@ -18,6 +24,8 @@ class TransportStore {
 	private prevBytes = new Map<string, number>();
 	private prevTimestamp = new Map<string, number>();
 	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	private autoReconnectTimer: ReturnType<typeof setTimeout> | null = null;
+	private connectionTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
 	async connect(groupId?: string) {
 		if (this.connecting || this.session) return;
@@ -51,13 +59,36 @@ class TransportStore {
 			this.session.onConnectionStateChange = (state) => {
 				this.connectionState = state;
 				this.connected = state === 'connected';
-				if (state === 'connected' && !this.connectedAt) {
-					this.connectedAt = Date.now();
+
+				if (state === 'connected') {
+					this.clearConnectionTimeout();
+					if (this.reconnecting) {
+						alertsStore.addAlert('reconnect', '__session__', 'System', 'Connection restored');
+						this.reconnecting = false;
+						this.reconnectAttempt = 0;
+					}
+					if (!this.connectedAt) {
+						this.connectedAt = Date.now();
+					}
 				}
+
 				if (state === 'failed' || state === 'disconnected') {
 					this.error = `WebRTC ${state}`;
+					this.clearConnectionTimeout();
+					alertsStore.addAlert('disconnect', '__session__', 'System', `Connection ${state}`);
+					this.scheduleAutoReconnect();
 				}
 			};
+
+			// Start connection timeout
+			this.connectionTimeoutTimer = setTimeout(() => {
+				this.connectionTimeoutTimer = null;
+				if (this.connectionState === 'new' || this.connectionState === 'connecting') {
+					this.error = 'Connection timed out';
+					this.teardownSession();
+					this.scheduleAutoReconnect();
+				}
+			}, CONNECTION_TIMEOUT_MS);
 
 			await this.session.connect(connectGroup);
 			this.connected = true;
@@ -68,16 +99,22 @@ class TransportStore {
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : 'Connection failed';
 			this.connected = false;
+			this.clearConnectionTimeout();
+			this.scheduleAutoReconnect();
 		} finally {
 			this.connecting = false;
 		}
 	}
 
 	async disconnect() {
+		this.clearAutoReconnect();
+		this.clearConnectionTimeout();
 		if (this.reconnectTimer) {
 			clearTimeout(this.reconnectTimer);
 			this.reconnectTimer = null;
 		}
+		this.reconnecting = false;
+		this.reconnectAttempt = 0;
 		this.stopStatsPolling();
 		this.connecting = false;
 		if (this.session) {
@@ -112,6 +149,57 @@ class TransportStore {
 			const groups = await this.signaling.listGroups();
 			groupStore.setGroups(groups);
 		} catch {}
+	}
+
+	private scheduleAutoReconnect() {
+		if (this.autoReconnectTimer) return;
+		if (this.reconnectAttempt >= MAX_RETRIES) {
+			this.error = 'Max reconnection attempts reached';
+			this.reconnecting = false;
+			return;
+		}
+
+		this.reconnecting = true;
+		const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempt), 30_000);
+
+		this.autoReconnectTimer = setTimeout(async () => {
+			this.autoReconnectTimer = null;
+			this.reconnectAttempt++;
+
+			// Tear down session without clearing camera store
+			this.teardownSession();
+
+			const groupId = groupStore.activeGroupId;
+			if (groupId) {
+				await this.connect(groupId);
+			}
+		}, delay);
+	}
+
+	private clearAutoReconnect() {
+		if (this.autoReconnectTimer) {
+			clearTimeout(this.autoReconnectTimer);
+			this.autoReconnectTimer = null;
+		}
+	}
+
+	private clearConnectionTimeout() {
+		if (this.connectionTimeoutTimer) {
+			clearTimeout(this.connectionTimeoutTimer);
+			this.connectionTimeoutTimer = null;
+		}
+	}
+
+	/** Tear down session state without clearing camera store or reconnection state. */
+	private teardownSession() {
+		this.stopStatsPolling();
+		this.connecting = false;
+		if (this.session) {
+			this.session.disconnect();
+			this.session = null;
+		}
+		this.connected = false;
+		this.connectedAt = null;
 	}
 
 	private startStatsPolling() {

@@ -270,6 +270,7 @@ Groups use colon-separated hierarchical identifiers: `usr-alice:perimeter`, `usr
 - Camera group switching
 - Inline camera renaming
 - Picture-in-Picture and snapshot capture
+- Auto-reconnection with exponential backoff (1s–30s, up to 10 retries)
 - Connection alerts (disconnect/reconnect notifications)
 - Dark/light/system theme
 - Mobile responsive (sidebar + mobile nav)
@@ -277,10 +278,27 @@ Groups use colon-separated hierarchical identifiers: `usr-alice:perimeter`, `usr
 ## Docker
 
 ```bash
+docker compose build
 docker compose up
 ```
 
-Runs bridge + 2 test cameras. Requires a `Dockerfile` with `bridge` and `agent` build targets.
+Runs bridge + 2 test cameras. Multi-stage `Dockerfile` with `bridge` and `agent` targets. Uses `cargo-chef` for dependency caching and generates test H.264 data at build time.
+
+```bash
+# Build for ARM64
+docker buildx build --platform linux/arm64 --target bridge -t ghostcam-bridge .
+docker buildx build --platform linux/arm64 --target agent -t ghostcam-agent .
+```
+
+## CI
+
+GitHub Actions pipeline (`.github/workflows/ci.yml`) runs on push/PR to main:
+
+| Job | What it checks |
+|-----|---------------|
+| `rust` | `cargo fmt`, `cargo clippy -D warnings`, `cargo test` |
+| `ui` | `bun run check`, `bun run build` |
+| `docker` | Builds both `bridge` and `agent` images |
 
 ## Project Structure
 

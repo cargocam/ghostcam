@@ -18,6 +18,9 @@ ghostcam/
 ├── ui/                  Svelte 5 SPA: WebRTC viewer with Tailwind CSS 4
 ├── test-data/           Generated test H.264 file
 ├── scripts/             Helper scripts (launch-cameras.sh)
+├── Dockerfile           Multi-stage: bridge + agent targets (cargo-chef cached)
+├── .dockerignore
+├── .github/workflows/   CI pipeline (rust, ui, docker jobs)
 └── docker-compose.yml   Bridge + 2 camera containers
 ```
 
@@ -57,6 +60,22 @@ cd ui && bun run build
 # Type-check viewer
 cd ui && bun run check
 ```
+
+## Docker
+
+```bash
+docker compose build     # Build bridge + agent images
+docker compose up        # Run bridge + 2 test cameras
+```
+
+Multi-stage Dockerfile: `chef` → `planner` → `builder` (Rust), `ui-builder` (Bun/Svelte), `test-data` (ffmpeg), then final `bridge` and `agent` targets. Uses `cargo-chef` for dependency layer caching. Both camera commands in docker-compose.yml include `--test-source` since containers don't have rpicam-vid.
+
+## CI
+
+`.github/workflows/ci.yml` — triggers on push/PR to main:
+- **rust**: fmt check, clippy (`-D warnings`), test (all crates). Installs libasound2-dev, libopus-dev.
+- **ui**: `bun install --frozen-lockfile`, `bun run check`, `bun run build`.
+- **docker** (needs: rust, ui): builds both `bridge` and `agent` targets with BuildKit cache.
 
 ## Key Ports
 
@@ -142,7 +161,7 @@ signaling.ts          HTTP client for SDP exchange + REST API
 webrtc.ts             RTCPeerConnection lifecycle, ontrack→store wiring
 data-channel.ts       Routes data channel JSON to appropriate stores
 stores/
-  transport.svelte.ts Orchestrates signaling + WebRTC connection
+  transport.svelte.ts Orchestrates signaling + WebRTC connection + auto-reconnect
   cameras.svelte.ts   Camera list, streams, telemetry state
   groups.svelte.ts    Group list and active group
   settings.svelte.ts  Theme, grid layout, view mode (localStorage)

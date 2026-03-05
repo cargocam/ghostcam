@@ -88,10 +88,14 @@
 		{/if}
 
 		<div class="flex items-center gap-1.5 text-xs text-muted-foreground">
-			<span class={transportStore.connected ? 'text-primary' : 'text-destructive'}>
-				{cameraStore.onlineCount}
-			</span>
-			<span>online</span>
+			{#if transportStore.reconnecting}
+				<span class="text-warning animate-pulse">Reconnecting ({transportStore.reconnectAttempt})…</span>
+			{:else}
+				<span class={transportStore.connected ? 'text-primary' : 'text-destructive'}>
+					{cameraStore.onlineCount}
+				</span>
+				<span>online</span>
+			{/if}
 		</div>
 
 		<Button variant="ghost" size="icon" class="relative" onclick={onAlertsClick}>
