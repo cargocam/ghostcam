@@ -58,9 +58,10 @@ cargo run -p camera -- --enable-gps --device-id cam-01 --group-id default
 
 1. **Connect** — Generates self-signed cert, opens QUIC connection to bridge
 2. **Handshake** — Sends `DeviceHello` JSON on bidirectional control stream
-3. **Capture** — Starts capture modules (video, audio, telemetry) which produce `CaptureMessage`s on a channel
-4. **Send loop** — Reads from capture channel, sends each message on a unidirectional QUIC stream with 13-byte frame header
-5. **Reconnect** — On connection loss, drains capture messages during backoff, then reconnects
+3. **Command listener** — Spawns a task to read `CameraCommand` messages from the bridge on the control stream (stream control, config, group reassign)
+4. **Capture** — Starts capture modules (video, audio, telemetry) which produce `CaptureMessage`s on a channel
+5. **Send loop** — Reads from capture channel, checks `tokio::sync::watch` gates set by command handler, sends each message on a unidirectional QUIC stream with 13-byte frame header
+6. **Reconnect** — On connection loss, drains capture messages during backoff, then reconnects
 
 ### Test Source Mode
 
@@ -78,19 +79,20 @@ cargo run -p camera -- --enable-gps --device-id cam-01 --group-id default
 
 | Module | Purpose |
 |--------|---------|
-| `main` | CLI parsing, capture orchestration, QUIC reconnect loop |
+| `main` | CLI parsing, capture orchestration, QUIC reconnect loop, command handler |
 | `quic` | QUIC client setup (uses `ghostcam::quic` helpers) |
 | `capture/mod` | `CaptureMessage` enum (VideoNal, Audio, Telemetry) |
 | `capture/video` | `rpicam-vid` subprocess + streaming NAL parser |
 | `capture/audio` | `cpal` input + Opus encoding |
 | `capture/telemetry` | Linux `/proc`/`/sys` readers + gpsd client |
 
-Shared modules in `ghostcam` lib: `h264` (NAL parser, `NalParser`), `stream` (frame send), `quic` (cert gen, hello), `telemetry` (SparseTelemetry types).
+Shared modules in `ghostcam` lib: `h264` (NAL parser, `NalParser`), `stream` (frame send), `quic` (cert gen, hello, command recv), `command` (CameraCommand types), `telemetry` (SparseTelemetry types).
 
 ## Notes
 
 - Server certificate verification is disabled (dev only). Production will use mTLS.
-- The agent is currently write-only — the bridge does not send commands back over QUIC.
+- The bridge sends `CameraCommand` messages back over the QUIC control stream (start/stop video/audio/telemetry, configure, force_keyframe, reassign_group, custom). Commands use `tokio::sync::watch` channels to gate frame sending without blocking.
+- Unknown commands are logged and ignored for forward compatibility.
 - `rpicam-vid` child process is killed on drop (`kill_on_drop(true)`) and on SIGTERM/SIGINT.
 - Audio capture failure is non-fatal — the camera continues without audio.
 - Telemetry readers return zero/None on non-Linux platforms (stubs for cross-compilation).

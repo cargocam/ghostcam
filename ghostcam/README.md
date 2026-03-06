@@ -6,14 +6,16 @@ Shared library for the Ghostcam system. Contains wire protocol definitions, seri
 
 | Module | Purpose |
 |--------|---------|
+| `audit` | `AuditEvent`, `AuditEntry`, `AuditLogger`: HMAC-SHA256 signed audit trail with broadcast channel |
+| `command` | `CameraCommand`, `CommandResponse`: bridge→camera control messages (stream control, configure, reassign, custom) |
 | `config` | Default constants (ports, MTU) |
-| `data_channel` | `DataChannelMessage` enum and types for WebRTC data channel JSON |
+| `data_channel` | `DataChannelMessage` enum and types for WebRTC data channel JSON (incl. `SdpAnswer` for renegotiation) |
 | `frame` | 13-byte frame header codec for QUIC media streams |
 | `group` | Hierarchical colon-separated group identifiers (`usr-alice:perimeter:north`) |
 | `h264` | Annex-B NAL parser (`parse_h264_file`) and streaming `NalParser` |
 | `hello` | `DeviceHello` handshake message (device_id, group_id, capabilities) |
-| `quic` | Shared QUIC/TLS helpers: cert generation, server/client config, hello send/recv |
-| `router` | `GroupRouter`: camera registry, broadcast channel, SPS/PPS cache, telemetry state |
+| `quic` | Shared QUIC/TLS helpers: cert generation, server/client config, hello send/recv, command send/recv |
+| `router` | `GroupRouter`: camera registry, broadcast channels (frames + events), SPS/PPS cache, telemetry state, command channels, group reassign |
 | `rtp` | H.264 NAL→RTP packetizer (Single NAL + FU-A), timestamp math |
 | `stream` | `send_video_frame`, `send_audio_frame`, `send_telemetry_frame`, `OPUS_SILENCE` |
 | `telemetry` | `TelemetryData`, `SparseTelemetry`, `GpsData`; diff/merge logic, MessagePack encode/decode |
@@ -47,4 +49,4 @@ Groups use colon-separated IDs. `GroupId` provides:
 cargo test -p ghostcam
 ```
 
-15 unit tests: frame encode/decode roundtrip (incl. telemetry), group ancestry and parent traversal, RTP packetization (single NAL, FU-A, timestamp conversion), H.264 NAL parsing, `NalParser` streaming, telemetry encode/decode/diff/merge.
+31 unit tests: frame encode/decode roundtrip (incl. telemetry), group ancestry and parent traversal, RTP packetization (single NAL, FU-A, timestamp conversion), H.264 NAL parsing, `NalParser` streaming, telemetry encode/decode/diff/merge, command roundtrip (stream control, configure, custom, reassign, response, unknown type), router reassign (move, nonexistent, preserves others, command_tx cleanup), audit events (serialization, HMAC validation, sequence numbering), camera events (register emits joined, unregister emits left).

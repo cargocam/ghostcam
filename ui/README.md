@@ -26,13 +26,16 @@ bun run check     # Type-check
 
 - Multi-camera grid with auto-fit and 1+5 featured layouts
 - Full-screen single-camera view (keyboard: F/M/S/P/Esc)
+- Live audio playback with per-camera mute (one camera unmuted at a time)
 - Live telemetry display (CPU, memory, temperature, uptime, GPS)
 - Camera group switching
 - Inline camera renaming (persisted to localStorage)
 - Picture-in-Picture and snapshot capture
 - Map view with camera markers (dot/detailed/PiP modes)
 - Dashboard view with aggregate stats and sparkline charts
+- Dynamic renegotiation: cameras can join/leave without page reload
 - Connection alerts (disconnect/reconnect notifications)
+- Auto-reconnection with exponential backoff (1s–30s, up to 10 retries)
 - Dark/light/system theme
 - Mobile responsive (sidebar + drawer nav)
 
@@ -47,6 +50,8 @@ bun run check     # Type-check
 5. Apply SDP answer, receive media tracks
 6. `track_map` message maps SDP mids to device IDs
 7. Poll WebRTC stats every 2s for bitrate/frame metrics
+8. On `renegotiate`: `setRemoteDescription(offer)` → `createAnswer()` → send `sdp_answer` on data channel
+9. Updated `track_map` maps new SDP mids to device IDs
 
 ### Stores
 
@@ -68,19 +73,27 @@ Stores are exported object literals with `$state` fields and methods (not class-
 | File | Purpose |
 |------|---------|
 | `signaling.ts` | HTTP client for SDP exchange + REST API |
-| `webrtc.ts` | `RTCPeerConnection` lifecycle, track mapping, data channel setup |
+| `webrtc.ts` | `RTCPeerConnection` lifecycle, track mapping, data channel setup, dynamic renegotiation |
 | `data-channel.ts` | Routes incoming JSON messages to appropriate stores |
 
-### Data Channel Messages (bridge → viewer)
+### Data Channel Messages
+
+**Bridge → Viewer:**
 
 | Type | Handler |
 |------|---------|
 | `cameras` | `cameraStore.setCameras()` |
-| `camera_join` | `cameraStore.addCamera()` + alert + reconnect |
+| `camera_join` | `cameraStore.addCamera()` + alert |
 | `camera_leave` | `cameraStore.removeCamera()` + alert |
 | `telemetry` | `cameraStore.updateTelemetry()` |
-| `track_map` | `WebRtcSession.handleTrackMap()` |
-| `renegotiate` | `transportStore.reconnect()` |
+| `track_map` | `WebRtcSession.handleTrackMap()` (intercepted in `webrtc.ts`) |
+| `renegotiate` | `WebRtcSession.handleRenegotiate()` (intercepted in `webrtc.ts`, not propagated) |
+
+**Viewer → Bridge:**
+
+| Type | Handler |
+|------|---------|
+| `sdp_answer` | Sent by `WebRtcSession.handleRenegotiate()` after completing SDP answer |
 
 ## Conventions
 
