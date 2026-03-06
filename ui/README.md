@@ -2,6 +2,8 @@
 
 Svelte 5 SPA for viewing live camera feeds from the Ghostcam bridge over WebRTC.
 
+![Ghostcam viewer with 4 simulated cameras](assets/screenshot.png)
+
 ## Setup
 
 ```bash

@@ -3,8 +3,9 @@ use crate::AppState;
 use axum::extract::{Path, State};
 use axum::http::{header, StatusCode};
 use axum::response::Json;
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::Router;
+use ghostcam::command::CameraCommand;
 use ghostcam::group::GroupId;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -22,6 +23,9 @@ pub fn create_router(state: Arc<AppState>, viewer_dir: Option<PathBuf>) -> Route
         .route("/api/v1/session/:id/ice", post(trickle_ice))
         .route("/api/v1/groups", get(list_groups))
         .route("/api/v1/groups/:group_id/cameras", get(list_cameras))
+        .route("/api/v1/cameras/:device_id/status", get(camera_status))
+        .route("/api/v1/cameras/:device_id/group", put(reassign_camera_group))
+        .route("/api/v1/cameras/:device_id/command", post(send_camera_command))
         .route_layer(axum::middleware::from_fn(
             move |req: axum::extract::Request, next: axum::middleware::Next| {
                 let key = api_key.clone();
@@ -205,4 +209,126 @@ async fn healthz() -> &'static str {
 async fn readyz(State(state): State<Arc<AppState>>) -> Result<&'static str, StatusCode> {
     // Ready if we have at least the QUIC listener running
     Ok("ok")
+}
+
+// --- Camera management API (#3, #25) ---
+
+#[derive(Serialize)]
+struct TelemetryStatusInfo {
+    cpu_percent: f32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temp_celsius: Option<f32>,
+    memory_mb: f32,
+    uptime_secs: u64,
+}
+
+#[derive(Serialize)]
+struct CameraStatusResponse {
+    device_id: String,
+    group_id: String,
+    capabilities: Vec<String>,
+    connected_at: u64,
+    connection_duration_secs: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    telemetry: Option<TelemetryStatusInfo>,
+}
+
+async fn camera_status(
+    State(state): State<Arc<AppState>>,
+    Path(device_id): Path<String>,
+) -> Result<Json<CameraStatusResponse>, (StatusCode, String)> {
+    let router = state.router.read().await;
+    let camera = router
+        .cameras
+        .get(&device_id)
+        .ok_or_else(|| (StatusCode::NOT_FOUND, format!("camera {device_id} not found")))?;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let telemetry = router.telemetry.get(&device_id).map(|t| TelemetryStatusInfo {
+        cpu_percent: t.cpu_percent,
+        temp_celsius: t.temp_celsius,
+        memory_mb: t.memory_mb,
+        uptime_secs: t.uptime_secs,
+    });
+
+    Ok(Json(CameraStatusResponse {
+        device_id: camera.device_id.clone(),
+        group_id: camera.group_id.0.clone(),
+        capabilities: camera.capabilities.clone(),
+        connected_at: camera.connected_at,
+        connection_duration_secs: now.saturating_sub(camera.connected_at),
+        telemetry,
+    }))
+}
+
+#[derive(Deserialize)]
+struct ReassignGroupRequest {
+    group_id: String,
+}
+
+#[derive(Serialize)]
+struct ReassignGroupResponse {
+    device_id: String,
+    old_group_id: String,
+    new_group_id: String,
+}
+
+async fn reassign_camera_group(
+    State(state): State<Arc<AppState>>,
+    Path(device_id): Path<String>,
+    Json(body): Json<ReassignGroupRequest>,
+) -> Result<Json<ReassignGroupResponse>, (StatusCode, String)> {
+    let new_group_id = GroupId::new(&body.group_id);
+
+    // Acquire write lock, mutate, clone Sender, release lock
+    let (old_group_id, cmd_tx) = {
+        let mut router = state.router.write().await;
+        let old = router
+            .reassign_camera(&device_id, new_group_id)
+            .map_err(|e| (StatusCode::NOT_FOUND, e))?;
+        let tx = router.command_txs.get(&device_id).cloned();
+        (old, tx)
+    };
+    // Lock released — safe to await
+
+    // Notify the camera (best-effort)
+    if let Some(tx) = cmd_tx {
+        let _ = tx
+            .send(CameraCommand::ReassignGroup {
+                group_id: body.group_id.clone(),
+            })
+            .await;
+    }
+
+    Ok(Json(ReassignGroupResponse {
+        device_id,
+        old_group_id: old_group_id.0,
+        new_group_id: body.group_id,
+    }))
+}
+
+async fn send_camera_command(
+    State(state): State<Arc<AppState>>,
+    Path(device_id): Path<String>,
+    Json(cmd): Json<CameraCommand>,
+) -> Result<StatusCode, (StatusCode, String)> {
+    let cmd_tx = {
+        let router = state.router.read().await;
+        router
+            .command_txs
+            .get(&device_id)
+            .cloned()
+            .ok_or_else(|| (StatusCode::NOT_FOUND, format!("camera {device_id} not found")))?
+    };
+
+    cmd_tx
+        .send(cmd)
+        .await
+        .map_err(|_| (StatusCode::GONE, "camera disconnected".into()))?;
+
+    Ok(StatusCode::ACCEPTED)
 }

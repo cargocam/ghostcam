@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Launch N test camera instances pointing at the bridge.
-# Usage: ./scripts/launch-cameras.sh [count] [group_id]
+# Usage: ./camera/launch-cameras.sh [count] [group_id]
 
 set -e
 

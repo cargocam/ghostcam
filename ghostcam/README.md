@@ -10,12 +10,13 @@ Shared library for the Ghostcam system. Contains wire protocol definitions, seri
 | `data_channel` | `DataChannelMessage` enum and types for WebRTC data channel JSON |
 | `frame` | 13-byte frame header codec for QUIC media streams |
 | `group` | Hierarchical colon-separated group identifiers (`usr-alice:perimeter:north`) |
-| `h264` | Annex-B NAL parser (`parse_h264_file`) |
+| `h264` | Annex-B NAL parser (`parse_h264_file`) and streaming `NalParser` |
 | `hello` | `DeviceHello` handshake message (device_id, group_id, capabilities) |
 | `quic` | Shared QUIC/TLS helpers: cert generation, server/client config, hello send/recv |
-| `router` | `GroupRouter`: camera registry, broadcast channel, SPS/PPS cache |
+| `router` | `GroupRouter`: camera registry, broadcast channel, SPS/PPS cache, telemetry state |
 | `rtp` | H.264 NAL→RTP packetizer (Single NAL + FU-A), timestamp math |
-| `stream` | `send_video_frame`, `send_audio_frame`, `OPUS_SILENCE` |
+| `stream` | `send_video_frame`, `send_audio_frame`, `send_telemetry_frame`, `OPUS_SILENCE` |
+| `telemetry` | `TelemetryData`, `SparseTelemetry`, `GpsData`; diff/merge logic, MessagePack encode/decode |
 
 ## Wire Format
 
@@ -23,7 +24,7 @@ Every media frame sent over QUIC uses this header:
 
 ```
 Offset  Size  Field
-0       1     stream_type   0=video (H.264 NAL), 1=audio (Opus)
+0       1     stream_type   0=video (H.264 NAL), 1=audio (Opus), 2=telemetry (MessagePack SparseTelemetry)
 1       8     timestamp_us  u64 big-endian, microseconds
 9       4     payload_len   u32 big-endian
 13      var   payload
@@ -46,4 +47,4 @@ Groups use colon-separated IDs. `GroupId` provides:
 cargo test -p ghostcam
 ```
 
-7 unit tests: frame encode/decode roundtrip, group ancestry, group parent traversal, RTP packetization (single NAL, FU-A, timestamp conversion), H.264 NAL parsing.
+15 unit tests: frame encode/decode roundtrip (incl. telemetry), group ancestry and parent traversal, RTP packetization (single NAL, FU-A, timestamp conversion), H.264 NAL parsing, `NalParser` streaming, telemetry encode/decode/diff/merge.

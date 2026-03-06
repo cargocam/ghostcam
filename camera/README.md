@@ -33,7 +33,7 @@ cargo run -p camera -- --bridge-addr 127.0.0.1:4433 --device-id cam-01 --group-i
 cargo run -p camera -- --enable-gps --device-id cam-01 --group-id default
 
 # Launch multiple test cameras
-./scripts/launch-cameras.sh 4 default
+./camera/launch-cameras.sh 4 default
 ```
 
 ## CLI Flags

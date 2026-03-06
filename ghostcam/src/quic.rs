@@ -3,6 +3,7 @@ use quinn::SendStream;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer};
 use std::sync::Arc;
 
+use crate::command::{CameraCommand, CommandResponse};
 use crate::hello::DeviceHello;
 
 /// Generate a self-signed certificate for QUIC transport (dev only).
@@ -70,6 +71,50 @@ pub async fn recv_hello(recv: &mut quinn::RecvStream) -> Result<DeviceHello> {
     recv.read_exact(&mut hello_buf).await?;
     let hello: DeviceHello = serde_json::from_slice(&hello_buf)?;
     Ok(hello)
+}
+
+/// Send a length-prefixed JSON CameraCommand on the control stream.
+pub async fn send_command(stream: &mut SendStream, cmd: &CameraCommand) -> Result<()> {
+    let json = serde_json::to_vec(cmd)?;
+    stream
+        .write_all(&(json.len() as u32).to_be_bytes())
+        .await?;
+    stream.write_all(&json).await?;
+    Ok(())
+}
+
+/// Read a length-prefixed JSON CameraCommand from the control stream.
+pub async fn recv_command(recv: &mut quinn::RecvStream) -> Result<CameraCommand> {
+    let mut len_buf = [0u8; 4];
+    recv.read_exact(&mut len_buf).await?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+    anyhow::ensure!(len <= 1024 * 1024, "command too large: {len} bytes");
+    let mut buf = vec![0u8; len];
+    recv.read_exact(&mut buf).await?;
+    let cmd: CameraCommand = serde_json::from_slice(&buf)?;
+    Ok(cmd)
+}
+
+/// Send a length-prefixed JSON CommandResponse on the control stream.
+pub async fn send_response(stream: &mut SendStream, resp: &CommandResponse) -> Result<()> {
+    let json = serde_json::to_vec(resp)?;
+    stream
+        .write_all(&(json.len() as u32).to_be_bytes())
+        .await?;
+    stream.write_all(&json).await?;
+    Ok(())
+}
+
+/// Read a length-prefixed JSON CommandResponse from the control stream.
+pub async fn recv_response(recv: &mut quinn::RecvStream) -> Result<CommandResponse> {
+    let mut len_buf = [0u8; 4];
+    recv.read_exact(&mut len_buf).await?;
+    let len = u32::from_be_bytes(len_buf) as usize;
+    anyhow::ensure!(len <= 1024 * 1024, "response too large: {len} bytes");
+    let mut buf = vec![0u8; len];
+    recv.read_exact(&mut buf).await?;
+    let resp: CommandResponse = serde_json::from_slice(&buf)?;
+    Ok(resp)
 }
 
 /// Accepts any server certificate (dev only).

@@ -5,12 +5,13 @@ use anyhow::Result;
 use bytes::Bytes;
 use capture::CaptureMessage;
 use clap::Parser;
+use ghostcam::command::CameraCommand;
 use ghostcam::h264;
 use ghostcam::stream;
 use ghostcam::{group::GroupId, hello::DeviceHello};
 use std::path::PathBuf;
 use std::time::Duration;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tracing::{info, warn};
 
 #[derive(Parser)]
@@ -158,7 +159,7 @@ async fn connect_and_run(
     args: &Args,
     capture_rx: &mut mpsc::Receiver<CaptureMessage>,
 ) -> Result<()> {
-    let (connection, mut control_send, _control_recv) =
+    let (connection, mut control_send, control_recv) =
         quic::connect(&args.bridge_addr).await?;
     info!("connected to bridge");
 
@@ -170,6 +171,24 @@ async fn connect_and_run(
     };
     ghostcam::quic::send_hello(&mut control_send, &hello).await?;
     info!("sent device hello");
+
+    // Stream enable flags — toggled by bridge commands
+    let (video_enabled_tx, video_enabled_rx) = watch::channel(true);
+    let (audio_enabled_tx, audio_enabled_rx) = watch::channel(!args.no_audio);
+    let (telemetry_enabled_tx, telemetry_enabled_rx) = watch::channel(!args.no_telemetry);
+
+    // Spawn command reader task
+    let cmd_device_id = args.device_id.clone();
+    tokio::spawn(async move {
+        handle_commands(
+            control_recv,
+            &cmd_device_id,
+            video_enabled_tx,
+            audio_enabled_tx,
+            telemetry_enabled_tx,
+        )
+        .await;
+    });
 
     // Send loop
     let mut video_ts: u64 = 0;
@@ -185,6 +204,9 @@ async fn connect_and_run(
 
         match msg {
             CaptureMessage::VideoNal { nal_data, nal_type } => {
+                if !*video_enabled_rx.borrow() {
+                    continue;
+                }
                 let uni = tokio::time::timeout(open_uni_timeout, connection.open_uni())
                     .await
                     .map_err(|_| anyhow::anyhow!("open_uni timeout"))??;
@@ -196,6 +218,9 @@ async fn connect_and_run(
                 }
             }
             CaptureMessage::Audio { opus_data } => {
+                if !*audio_enabled_rx.borrow() {
+                    continue;
+                }
                 let uni = tokio::time::timeout(open_uni_timeout, connection.open_uni())
                     .await
                     .map_err(|_| anyhow::anyhow!("open_uni timeout"))??;
@@ -203,6 +228,9 @@ async fn connect_and_run(
                 audio_ts += 20_000; // 20ms per Opus frame
             }
             CaptureMessage::Telemetry { msgpack_data } => {
+                if !*telemetry_enabled_rx.borrow() {
+                    continue;
+                }
                 let uni = tokio::time::timeout(open_uni_timeout, connection.open_uni())
                     .await
                     .map_err(|_| anyhow::anyhow!("open_uni timeout"))??;
@@ -211,6 +239,67 @@ async fn connect_and_run(
                     .unwrap()
                     .as_micros() as u64;
                 stream::send_telemetry_frame(uni, ts, &msgpack_data).await?;
+            }
+        }
+    }
+}
+
+/// Read and handle commands from the bridge on the QUIC control stream.
+async fn handle_commands(
+    mut recv: quinn::RecvStream,
+    device_id: &str,
+    video_tx: watch::Sender<bool>,
+    audio_tx: watch::Sender<bool>,
+    telemetry_tx: watch::Sender<bool>,
+) {
+    loop {
+        match ghostcam::quic::recv_command(&mut recv).await {
+            Ok(cmd) => {
+                info!(device_id = %device_id, command = ?cmd, "received command from bridge");
+                match cmd {
+                    CameraCommand::StartVideo => {
+                        let _ = video_tx.send(true);
+                    }
+                    CameraCommand::StopVideo => {
+                        let _ = video_tx.send(false);
+                    }
+                    CameraCommand::StartAudio => {
+                        let _ = audio_tx.send(true);
+                    }
+                    CameraCommand::StopAudio => {
+                        let _ = audio_tx.send(false);
+                    }
+                    CameraCommand::StartTelemetry => {
+                        let _ = telemetry_tx.send(true);
+                    }
+                    CameraCommand::StopTelemetry => {
+                        let _ = telemetry_tx.send(false);
+                    }
+                    CameraCommand::Configure { .. } => {
+                        warn!(device_id = %device_id, "configure command not yet implemented");
+                    }
+                    CameraCommand::ForceKeyframe => {
+                        warn!(device_id = %device_id, "force keyframe not yet implemented");
+                    }
+                    CameraCommand::ReassignGroup { group_id } => {
+                        info!(
+                            device_id = %device_id,
+                            new_group = %group_id,
+                            "group reassignment received (server handles routing)"
+                        );
+                    }
+                    CameraCommand::Custom { name, .. } => {
+                        warn!(
+                            device_id = %device_id,
+                            name = %name,
+                            "unknown custom command, ignoring"
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                info!(device_id = %device_id, error = %e, "command stream ended");
+                break;
             }
         }
     }

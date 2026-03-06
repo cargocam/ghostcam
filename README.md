@@ -2,8 +2,6 @@
 
 Real-time camera surveillance system. Cameras stream H.264 video and Opus audio over QUIC to a bridge server, which translates to WebRTC for browser-based viewing. Cameras are organized into groups; viewers subscribe to a group and receive all feeds over a single PeerConnection.
 
-![Ghostcam viewer with 4 simulated cameras](assets/screenshot.png)
-
 ## Architecture
 
 ```
@@ -100,7 +98,7 @@ Open http://localhost:5173 in your browser. The viewer's Vite dev server proxies
 ### Multi-camera test
 
 ```bash
-./scripts/launch-cameras.sh 4 default
+./camera/launch-cameras.sh 4 default
 ```
 
 Launches 4 test cameras (`test-cam-01` through `test-cam-04`) in group `default`. Environment variables: `BRIDGE_ADDR`, `FPS`, `TEST_FILE`.
@@ -194,6 +192,34 @@ Response: 200 OK
 }]
 ```
 
+### Camera Management
+
+**Camera status** — `GET /api/v1/cameras/{device_id}/status`
+```json
+{
+  "device_id": "cam-01",
+  "group_id": "default",
+  "capabilities": ["h264", "opus"],
+  "connected_at": 1709500000,
+  "connection_duration_secs": 3600,
+  "telemetry": { "cpu_percent": 28.0, "temp_celsius": 44.0, "memory_mb": 128.0, "uptime_secs": 3600 }
+}
+```
+
+**Reassign camera to group** — `PUT /api/v1/cameras/{device_id}/group`
+```
+Request:  { "group_id": "perimeter" }
+Response: { "device_id": "cam-01", "old_group_id": "default", "new_group_id": "perimeter" }
+```
+
+**Send command to camera** — `POST /api/v1/cameras/{device_id}/command`
+```
+Request:  { "type": "stop_video" }
+          { "type": "configure", "fps": 15, "bitrate": 500000 }
+          { "type": "custom", "name": "ptz", "params": { "pan": 45 } }
+Response: 202 Accepted
+```
+
 ### Health
 
 - `GET /healthz` — always `200 OK` (no auth)
@@ -205,16 +231,22 @@ Response: 200 OK
 
 **Control stream** (bidirectional, opened by camera):
 ```
-[4 bytes: JSON length (u32 BE)] [JSON: DeviceHello]
+Camera → Bridge: [4 bytes: JSON length (u32 BE)] [JSON: DeviceHello]
+Bridge → Camera: [4 bytes: JSON length (u32 BE)] [JSON: CameraCommand] (repeated)
 ```
 
 `DeviceHello`:
 ```json
-{
-  "device_id": "cam-01",
-  "group_id": "default",
-  "capabilities": ["h264", "opus"]
-}
+{ "device_id": "cam-01", "group_id": "default", "capabilities": ["h264", "opus"] }
+```
+
+`CameraCommand` (tagged JSON, `"type"` field):
+```jsonc
+{ "type": "stop_video" }                                         // stream control
+{ "type": "configure", "fps": 15, "bitrate": 500000 }           // hot config
+{ "type": "force_keyframe" }                                     // request IDR
+{ "type": "reassign_group", "group_id": "perimeter" }           // move group
+{ "type": "custom", "name": "ptz", "params": { "pan": 45 } }   // extensible
 ```
 
 **Frame streams** (unidirectional, one per frame):
@@ -307,31 +339,35 @@ ghostcam/
 ├── Cargo.toml                    # Workspace root
 ├── ghostcam/src/
 │   ├── lib.rs
+│   ├── command.rs                # CameraCommand/CommandResponse (bridge→camera control)
 │   ├── config.rs                 # Port/MTU constants
 │   ├── data_channel.rs           # DataChannelMessage types (WebRTC)
 │   ├── frame.rs                  # 13-byte wire format encode/decode
 │   ├── group.rs                  # Hierarchical GroupId
 │   ├── h264.rs                   # Annex-B NAL parser + streaming NalParser
 │   ├── hello.rs                  # DeviceHello handshake
-│   ├── quic.rs                   # Shared QUIC/TLS helpers (cert gen, hello)
-│   ├── router.rs                 # GroupRouter, broadcast, SPS/PPS cache, telemetry state
+│   ├── quic.rs                   # Shared QUIC/TLS helpers (cert gen, hello, command send/recv)
+│   ├── router.rs                 # GroupRouter, broadcast, SPS/PPS cache, telemetry, command channels
 │   ├── rtp.rs                    # H.264 FU-A packetizer, timestamp math
 │   ├── stream.rs                 # send_video_frame, send_audio_frame, send_telemetry_frame
 │   └── telemetry.rs              # TelemetryData, SparseTelemetry, GpsData, diff/merge
-├── camera/src/
-│   ├── main.rs                   # CLI, capture orchestration, QUIC reconnect loop
-│   ├── quic.rs                   # Quinn QUIC client (connect)
-│   └── capture/
-│       ├── mod.rs                # CaptureMessage enum
-│       ├── video.rs              # rpicam-vid subprocess + NalParser
-│       ├── audio.rs              # cpal input + Opus encoding
-│       └── telemetry.rs          # /proc, /sys readers + gpsd client
+├── camera/
+│   ├── launch-cameras.sh         # Launch N test camera instances
+│   └── src/
+│       ├── main.rs               # CLI, capture orchestration, QUIC reconnect loop
+│       ├── quic.rs               # Quinn QUIC client (connect)
+│       └── capture/
+│           ├── mod.rs                # CaptureMessage enum
+│           ├── video.rs              # rpicam-vid subprocess + NalParser
+│           ├── audio.rs              # cpal input + Opus encoding
+│           └── telemetry.rs          # /proc, /sys readers + gpsd client
 ├── server/src/
 │   ├── main.rs                   # CLI, AppState, task spawning
 │   ├── quic.rs                   # QUIC listener, camera handler
 │   ├── webrtc.rs                 # str0m WebRTC engine, session mgmt
 │   └── api.rs                    # Axum HTTP routes + auth middleware
 ├── ui/
+│   ├── assets/screenshot.png
 │   ├── package.json
 │   ├── vite.config.ts
 │   └── src/
@@ -345,7 +381,6 @@ ghostcam/
 │       │   ├── views/            # LiveView, CameraView
 │       │   └── components/       # UI components
 ├── test-data/test.h264
-├── scripts/launch-cameras.sh
 └── docker-compose.yml
 ```
 

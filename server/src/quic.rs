@@ -1,9 +1,11 @@
 use crate::AppState;
 use anyhow::Result;
+use ghostcam::command::CameraCommand;
 use ghostcam::frame::Frame;
 use quinn::Endpoint;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 pub async fn run_quic_listener(port: u16, state: Arc<AppState>) -> Result<()> {
@@ -40,7 +42,7 @@ async fn handle_camera_connection(
     info!(remote = %remote, "camera connected");
 
     // Read hello from bidirectional control stream
-    let (_, mut control_recv) = connection.accept_bi().await?;
+    let (mut control_send, mut control_recv) = connection.accept_bi().await?;
     let hello = ghostcam::quic::recv_hello(&mut control_recv).await?;
 
     info!(
@@ -50,16 +52,30 @@ async fn handle_camera_connection(
         "received device hello"
     );
 
-    // Register camera
+    // Register camera with command channel
     let device_id = hello.device_id.clone();
+    let (cmd_tx, mut cmd_rx) = mpsc::channel::<CameraCommand>(64);
     {
         let mut router = state.router.write().await;
         router.register_camera(
             hello.device_id.clone(),
             hello.group_id.clone(),
             hello.capabilities.clone(),
+            cmd_tx,
         );
     }
+
+    // Spawn task to forward commands from channel to QUIC control stream
+    let cmd_device_id = device_id.clone();
+    tokio::spawn(async move {
+        while let Some(cmd) = cmd_rx.recv().await {
+            info!(device_id = %cmd_device_id, command = ?cmd, "sending command to camera");
+            if let Err(e) = ghostcam::quic::send_command(&mut control_send, &cmd).await {
+                warn!(device_id = %cmd_device_id, error = %e, "failed to send command to camera");
+                break;
+            }
+        }
+    });
 
     // Accept unidirectional streams (each carries one frame)
     let state_for_frames = state.clone();

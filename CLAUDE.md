@@ -13,11 +13,10 @@ Ghostcam is a camera surveillance system. Cameras stream H.264 video + Opus audi
 ```
 ghostcam/
 ├── ghostcam/            Shared library: wire format, handshake, group IDs, config, router, RTP, data channel, H.264 parser, QUIC helpers, stream I/O
-├── camera/              Camera agent: QUIC client, real capture (rpicam-vid, cpal, telemetry) or --test-source mode
+├── camera/              Camera agent: QUIC client, real capture (rpicam-vid, cpal, telemetry) or --test-source mode; launch-cameras.sh helper
 ├── server/              Bridge server: CLI, QUIC listener, str0m WebRTC engine, Axum HTTP API
 ├── ui/                  Svelte 5 SPA: WebRTC viewer with Tailwind CSS 4
 ├── test-data/           Generated test H.264 file
-├── scripts/             Helper scripts (launch-cameras.sh)
 ├── Dockerfile           Multi-stage: bridge + agent targets (cargo-chef cached)
 ├── .dockerignore
 ├── .github/workflows/   CI pipeline (rust, ui, docker jobs)
@@ -49,7 +48,7 @@ cargo run -p camera -- --test-source --device-id cam-01 --group-id default
 cargo run -p camera -- --device-id cam-01 --group-id default
 
 # Launch N cameras at once
-./scripts/launch-cameras.sh 4 default
+./camera/launch-cameras.sh 4 default
 
 # Viewer dev server (terminal 3)
 cd ui && bun install && bun run dev
@@ -101,6 +100,7 @@ Camera                          Server                          Browser
     │                              │                               │
     │── QUIC connect ─────────────>│                               │
     │── DeviceHello (JSON) ───────>│ register in GroupRouter       │
+    │<── CameraCommand (JSON) ────│ stream control / config       │
     │── H.264 NAL (uni stream) ──>│ cache SPS/PPS                 │
     │── Opus frame (uni stream) ─>│ broadcast::send()             │
     │── Telemetry (uni stream) ──>│ decode + merge + broadcast    │
@@ -121,14 +121,15 @@ Camera                          Server                          Browser
 ### Library Structure (`ghostcam/`)
 
 ```
+command.rs        CameraCommand/CommandResponse enums (bridge→camera control), serde tagged JSON
 config.rs         Port/MTU constants
 data_channel.rs   DataChannelMessage types (WebRTC data channel JSON)
 frame.rs          13-byte wire format encode/decode
 group.rs          Hierarchical GroupId
 h264.rs           Annex-B NAL parser (parse_h264_file) + streaming NalParser
 hello.rs          DeviceHello handshake
-quic.rs           Shared QUIC/TLS: cert generation, server/client config, hello send/recv
-router.rs         GroupRouter: camera registry, broadcast channel, SPS/PPS cache, telemetry state
+quic.rs           Shared QUIC/TLS: cert generation, server/client config, hello/command send/recv
+router.rs         GroupRouter: camera registry, broadcast channel, SPS/PPS cache, telemetry state, command channels, reassign
 rtp.rs            H.264 NAL→RTP packetizer (Single NAL + FU-A), timestamp math
 stream.rs         send_video_frame, send_audio_frame, send_telemetry_frame, OPUS_SILENCE
 telemetry.rs      TelemetryData, SparseTelemetry, GpsData, diff/merge, MessagePack encode/decode
@@ -137,7 +138,7 @@ telemetry.rs      TelemetryData, SparseTelemetry, GpsData, diff/merge, MessagePa
 ### Camera Internal Structure
 
 ```
-main.rs                CLI parsing, capture orchestration, QUIC reconnect loop
+main.rs                CLI parsing, capture orchestration, QUIC reconnect loop, command handler
 quic.rs                Quinn QUIC client (connect)
 capture/mod.rs         CaptureMessage enum (VideoNal, Audio, Telemetry)
 capture/video.rs       rpicam-vid subprocess + streaming NalParser
@@ -204,7 +205,32 @@ Camera opens one bidirectional stream for the handshake. Length-prefixed JSON:
 { "device_id": "cam-01", "group_id": "default", "capabilities": ["h264", "opus"] }
 ```
 
-After DeviceHello, the control stream is not used further.
+After DeviceHello, the control stream remains open for bridge→camera commands.
+
+### QUIC Command Channel (Bidirectional, bridge→camera)
+
+After the handshake, the bridge sends `CameraCommand` messages on the same bidirectional control stream using the same length-prefixed JSON framing:
+
+```
+[4 bytes: JSON length (u32 BE)] [JSON: CameraCommand]
+```
+
+`CameraCommand` is a tagged enum (`"type"` field):
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| `start_video` | — | Resume video streaming |
+| `stop_video` | — | Pause video streaming |
+| `start_audio` | — | Resume audio streaming |
+| `stop_audio` | — | Pause audio streaming |
+| `start_telemetry` | — | Resume telemetry |
+| `stop_telemetry` | — | Pause telemetry |
+| `configure` | `width?`, `height?`, `fps?`, `bitrate?`, `keyframe_interval?` | Hot-update capture params (sparse, only set fields change) |
+| `force_keyframe` | — | Request immediate IDR frame |
+| `reassign_group` | `group_id` | Move camera to new group (server handles routing) |
+| `custom` | `name`, `params` | Extensible: PTZ, drone, GPIO. Unknown → warn + ignore |
+
+The camera reads commands via a spawned task and uses `tokio::sync::watch` channels to gate frame sending (non-blocking `borrow()`). Unknown commands are logged and ignored for forward compatibility.
 
 ### 13-Byte Frame Header (Unidirectional Streams)
 
@@ -269,6 +295,9 @@ DELETE /api/v1/session/{id}                Tear down WebRTC session
 POST   /api/v1/session/{id}/ice           Trickle ICE candidate
 GET    /api/v1/groups                      List groups with camera counts
 GET    /api/v1/groups/{group_id}/cameras   List cameras in group
+GET    /api/v1/cameras/{device_id}/status  Camera health, connection info, telemetry
+PUT    /api/v1/cameras/{device_id}/group   Reassign camera to different group
+POST   /api/v1/cameras/{device_id}/command Send CameraCommand to camera (fire-and-forget, 202)
 GET    /healthz                            Health check (no auth)
 GET    /readyz                             Readiness probe (no auth)
 ```
@@ -281,7 +310,7 @@ Default API key: `dev-key` (configurable via `--api-key` or `GHOSTCAM_API_KEY` e
 
 ```bash
 cargo test                    # All Rust tests
-cargo test -p ghostcam        # Frame encode/decode, group hierarchy, NAL parsing, telemetry, NalParser
+cargo test -p ghostcam        # Frame encode/decode, group hierarchy, NAL parsing, telemetry, NalParser, command roundtrip, router reassign
 cargo test -p server          # RTP packetization, timestamp conversion
 ```
 
@@ -297,8 +326,8 @@ cargo test -p server          # RTP packetization, timestamp conversion
 ### Multi-Camera Test
 
 ```bash
-./scripts/launch-cameras.sh 4 default     # 4 cameras in "default" group
-./scripts/launch-cameras.sh 2 perimeter   # 2 cameras in "perimeter" group
+./camera/launch-cameras.sh 4 default     # 4 cameras in "default" group
+./camera/launch-cameras.sh 2 perimeter   # 2 cameras in "perimeter" group
 ```
 
 ## Debugging Tips

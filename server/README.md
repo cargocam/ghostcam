@@ -52,12 +52,11 @@ Three async tasks run concurrently:
 | Module | Purpose |
 |--------|---------|
 | `main` | CLI parsing, `AppState` creation, task spawning |
-| `quic` | QUIC listener, per-camera handler, frame reader, self-signed certs |
-| `router` | `GroupRouter`: camera registry, broadcast channel (4096), SPS/PPS cache |
-| `rtp` | Timestamp conversion (μs → 90kHz/48kHz), FU-A packetization |
+| `quic` | QUIC listener, per-camera handler, frame reader |
 | `webrtc` | str0m session lifecycle, NAL accumulation, RTP output, ICE-lite |
 | `api` | Axum routes, Bearer auth middleware, static file fallback |
-| `data_channel` | JSON message types for WebRTC data channel |
+
+Shared modules from `ghostcam` lib: `router` (GroupRouter, broadcast, SPS/PPS cache, telemetry state), `rtp` (packetizer, timestamp math), `data_channel` (message types), `telemetry` (SparseTelemetry decode/merge).
 
 ## API Endpoints
 
@@ -82,7 +81,7 @@ Sent bridge → browser as JSON text over the `"telemetry"` data channel:
 | `cameras` | Session created | Full camera list |
 | `camera_join` | Camera connects | Single camera info |
 | `camera_leave` | Camera disconnects | `device_id` |
-| `telemetry` | Every 2s | CPU, temp, memory, uptime, GPS (currently synthetic) |
+| `telemetry` | Camera sends telemetry frame | CPU, temp, memory, uptime, GPS (event-driven from `StreamType::Telemetry`) |
 | `track_map` | Data channel opens | Maps SDP mid → device_id + kind |
 | `renegotiate` | Track changes | SDP offer (stub) |
 
@@ -104,7 +103,7 @@ Default filter: `server=info,str0m=warn`.
 ## Tests
 
 ```bash
-cargo test -p ghostcam-bridge
+cargo test -p server
 ```
 
 Tests cover RTP timestamp conversion and H.264 FU-A packetization.
