@@ -1,5 +1,5 @@
 use ghostcam::data_channel::{self, CameraInfo, DataChannelMessage, TrackMapping};
-use ghostcam::router::{CameraFrame, DeviceId, SessionId};
+use ghostcam::router::{CameraEvent, CameraFrame, DeviceId, SessionId};
 use ghostcam::rtp;
 use ghostcam::telemetry::{SparseTelemetry, TelemetryData};
 use crate::AppState;
@@ -7,8 +7,8 @@ use ghostcam::group::GroupId;
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use std::time::Instant;
-use str0m::change::SdpOffer;
+use std::time::{Duration, Instant};
+use str0m::change::{SdpAnswer, SdpOffer, SdpPendingOffer};
 use str0m::channel::ChannelId;
 use str0m::format::Codec;
 use str0m::media::{Direction, Frequency, MediaKind, Mid};
@@ -16,7 +16,7 @@ use str0m::net::Protocol;
 use str0m::{Candidate, Event, Input, Output, Rtc};
 use tokio::net::UdpSocket;
 use tokio::sync::{broadcast, mpsc, oneshot};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 pub enum WebRtcCommand {
     CreateSession {
@@ -50,6 +50,13 @@ struct RtcSession {
     created_at: Instant,
     /// Per-camera telemetry state for this session
     telemetry_state: HashMap<DeviceId, TelemetryData>,
+    /// SDP offer awaiting viewer's answer (only one at a time per str0m)
+    pending_offer: Option<SdpPendingOffer>,
+    pending_offer_timestamp: Option<Instant>,
+    /// Track additions waiting for accept_answer before applying to track maps
+    pending_track_additions: Vec<(DeviceId, Mid, Mid)>,
+    /// Camera events queued while a renegotiation is in-flight
+    queued_camera_events: Vec<CameraEvent>,
 }
 
 pub struct WebRtcEngine {
@@ -60,6 +67,7 @@ pub struct WebRtcEngine {
     addr_to_session: HashMap<SocketAddr, SessionId>,
     cmd_rx: mpsc::Receiver<WebRtcCommand>,
     frame_rx: broadcast::Receiver<CameraFrame>,
+    camera_event_rx: broadcast::Receiver<CameraEvent>,
     buf: Vec<u8>,
     /// Accumulates non-VCL NALs (SPS/PPS/SEI) per device, flushed when VCL NAL arrives.
     /// Stored as Annex-B format: [00 00 00 01][NAL][00 00 00 01][NAL]...
@@ -71,6 +79,7 @@ impl WebRtcEngine {
         state: Arc<AppState>,
         cmd_rx: mpsc::Receiver<WebRtcCommand>,
         frame_rx: broadcast::Receiver<CameraFrame>,
+        camera_event_rx: broadcast::Receiver<CameraEvent>,
     ) -> Self {
         let socket = UdpSocket::bind("0.0.0.0:0").await.expect("bind UDP socket");
         let local_addr = socket.local_addr().unwrap();
@@ -83,6 +92,7 @@ impl WebRtcEngine {
             addr_to_session: HashMap::new(),
             cmd_rx,
             frame_rx,
+            camera_event_rx,
             buf: vec![0u8; 2000],
             nal_accumulator: HashMap::new(),
         }
@@ -101,6 +111,9 @@ impl WebRtcEngine {
                 }
                 Ok(frame) = self.frame_rx.recv() => {
                     self.handle_camera_frame(frame);
+                }
+                Ok(event) = self.camera_event_rx.recv() => {
+                    self.handle_camera_event(event);
                 }
                 _ = tick_interval.tick() => {
                     self.poll_all_sessions().await;
@@ -259,6 +272,10 @@ impl WebRtcEngine {
             pending_track_map: Some(track_mappings),
             created_at: Instant::now(),
             telemetry_state: HashMap::new(),
+            pending_offer: None,
+            pending_offer_timestamp: None,
+            pending_track_additions: Vec::new(),
+            queued_camera_events: Vec::new(),
         };
 
         self.sessions.insert(session_id.clone(), session);
@@ -477,12 +494,304 @@ impl WebRtcEngine {
         }
     }
 
+    fn handle_camera_event(&mut self, event: CameraEvent) {
+        let group_id = match &event {
+            CameraEvent::Joined { group_id, .. } => group_id.clone(),
+            CameraEvent::Left { group_id, .. } => group_id.clone(),
+        };
+
+        // Find sessions watching this group (or __all__)
+        let session_ids: Vec<SessionId> = self.sessions.iter()
+            .filter(|(_, s)| s.group_id == group_id || s.group_id.0 == "__all__")
+            .map(|(sid, _)| sid.clone())
+            .collect();
+
+        for session_id in session_ids {
+            match &event {
+                CameraEvent::Joined { device_id, capabilities, .. } => {
+                    self.add_camera_to_session(&session_id, device_id, &group_id, capabilities);
+                }
+                CameraEvent::Left { device_id, .. } => {
+                    self.remove_camera_from_session(&session_id, device_id);
+                }
+            }
+        }
+
+        // Clean up NAL accumulator on camera leave
+        if let CameraEvent::Left { device_id, .. } = &event {
+            self.nal_accumulator.remove(device_id);
+        }
+    }
+
+    fn add_camera_to_session(
+        &mut self,
+        session_id: &str,
+        device_id: &str,
+        group_id: &GroupId,
+        capabilities: &[String],
+    ) {
+        let session = match self.sessions.get_mut(session_id) {
+            Some(s) => s,
+            None => return,
+        };
+
+        // If renegotiation in-flight, queue this event
+        if session.pending_offer.is_some() {
+            session.queued_camera_events.push(CameraEvent::Joined {
+                device_id: device_id.to_string(),
+                group_id: group_id.clone(),
+                capabilities: capabilities.to_vec(),
+            });
+            debug!(session_id = %session_id, device_id = %device_id, "queued camera join (renegotiation in-flight)");
+            return;
+        }
+
+        // Skip if camera already has tracks
+        if session.video_track_map.contains_key(device_id) {
+            return;
+        }
+
+        // If data channel not yet open, queue the event
+        let ch_id = match session.data_channel_id {
+            Some(id) => id,
+            None => {
+                session.queued_camera_events.push(CameraEvent::Joined {
+                    device_id: device_id.to_string(),
+                    group_id: group_id.clone(),
+                    capabilities: capabilities.to_vec(),
+                });
+                debug!(session_id = %session_id, device_id = %device_id, "queued camera join (data channel not open)");
+                return;
+            }
+        };
+
+        // Send camera_join notification
+        let camera_info = CameraInfo {
+            device_id: device_id.to_string(),
+            group_id: group_id.clone(),
+            capabilities: capabilities.to_vec(),
+        };
+        let join_msg = DataChannelMessage::CameraJoin { camera: camera_info };
+        if let Ok(json) = serde_json::to_string(&join_msg) {
+            if let Some(mut ch) = session.rtc.channel(ch_id) {
+                let _ = ch.write(false, json.as_bytes());
+            }
+        }
+
+        // Add media tracks via SDP API
+        let mut sdp_api = session.rtc.sdp_api();
+        let video_mid = sdp_api.add_media(
+            MediaKind::Video,
+            Direction::SendOnly,
+            Some(device_id.to_string()),
+            None,
+        );
+        let audio_mid = sdp_api.add_media(
+            MediaKind::Audio,
+            Direction::SendOnly,
+            Some(device_id.to_string()),
+            None,
+        );
+
+        if let Some((offer, pending)) = sdp_api.apply() {
+            let sdp_offer_str = offer.to_sdp_string();
+
+            // Store pending state
+            session.pending_offer = Some(pending);
+            session.pending_offer_timestamp = Some(Instant::now());
+            session.pending_track_additions.push((device_id.to_string(), video_mid, audio_mid));
+
+            // Send renegotiate message
+            let reneg_msg = DataChannelMessage::Renegotiate { sdp_offer: sdp_offer_str };
+            if let Ok(json) = serde_json::to_string(&reneg_msg) {
+                if let Some(mut ch) = session.rtc.channel(ch_id) {
+                    let _ = ch.write(false, json.as_bytes());
+                }
+            }
+
+            info!(
+                session_id = %session_id,
+                device_id = %device_id,
+                video_mid = ?video_mid,
+                audio_mid = ?audio_mid,
+                "renegotiation started: adding camera"
+            );
+        } else {
+            // No negotiation needed (shouldn't happen for media addition)
+            session.video_track_map.insert(device_id.to_string(), video_mid);
+            session.audio_track_map.insert(device_id.to_string(), audio_mid);
+            Self::send_track_map_on_session(session);
+        }
+    }
+
+    fn remove_camera_from_session(
+        &mut self,
+        session_id: &str,
+        device_id: &str,
+    ) {
+        let session = match self.sessions.get_mut(session_id) {
+            Some(s) => s,
+            None => return,
+        };
+
+        // If renegotiation in-flight, queue this event
+        if session.pending_offer.is_some() {
+            // We need the group_id — grab from the session
+            session.queued_camera_events.push(CameraEvent::Left {
+                device_id: device_id.to_string(),
+                group_id: session.group_id.clone(),
+            });
+            debug!(session_id = %session_id, device_id = %device_id, "queued camera leave (renegotiation in-flight)");
+            return;
+        }
+
+        let video_mid = session.video_track_map.remove(device_id);
+        let audio_mid = session.audio_track_map.remove(device_id);
+
+        // Nothing to do if camera didn't have tracks
+        if video_mid.is_none() && audio_mid.is_none() {
+            return;
+        }
+
+        let ch_id = match session.data_channel_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        // Send camera_leave notification
+        let leave_msg = DataChannelMessage::CameraLeave { device_id: device_id.to_string() };
+        if let Ok(json) = serde_json::to_string(&leave_msg) {
+            if let Some(mut ch) = session.rtc.channel(ch_id) {
+                let _ = ch.write(false, json.as_bytes());
+            }
+        }
+
+        // Set direction to Inactive
+        let mut sdp_api = session.rtc.sdp_api();
+        if let Some(mid) = video_mid {
+            sdp_api.set_direction(mid, Direction::Inactive);
+        }
+        if let Some(mid) = audio_mid {
+            sdp_api.set_direction(mid, Direction::Inactive);
+        }
+
+        if let Some((offer, pending)) = sdp_api.apply() {
+            let sdp_offer_str = offer.to_sdp_string();
+
+            session.pending_offer = Some(pending);
+            session.pending_offer_timestamp = Some(Instant::now());
+
+            let reneg_msg = DataChannelMessage::Renegotiate { sdp_offer: sdp_offer_str };
+            if let Ok(json) = serde_json::to_string(&reneg_msg) {
+                if let Some(mut ch) = session.rtc.channel(ch_id) {
+                    let _ = ch.write(false, json.as_bytes());
+                }
+            }
+
+            info!(
+                session_id = %session_id,
+                device_id = %device_id,
+                "renegotiation started: removing camera"
+            );
+        } else {
+            // Direction change didn't need renegotiation — just send updated track map
+            Self::send_track_map_on_session(session);
+        }
+
+        // Clean up telemetry state for this camera
+        session.telemetry_state.remove(device_id);
+    }
+
+    /// Handle an SDP answer received from the viewer via data channel.
+    fn handle_sdp_answer(session: &mut RtcSession, sdp_answer_str: &str, session_id: &str) {
+        let pending = match session.pending_offer.take() {
+            Some(p) => p,
+            None => {
+                warn!(session_id = %session_id, "received SDP answer but no pending offer");
+                return;
+            }
+        };
+        session.pending_offer_timestamp = None;
+
+        let answer = match SdpAnswer::from_sdp_string(sdp_answer_str) {
+            Ok(a) => a,
+            Err(e) => {
+                warn!(session_id = %session_id, error = %e, "failed to parse SDP answer");
+                return;
+            }
+        };
+
+        if let Err(e) = session.rtc.sdp_api().accept_answer(pending, answer) {
+            warn!(session_id = %session_id, error = %e, "failed to accept SDP answer");
+            session.pending_track_additions.clear();
+            return;
+        }
+
+        // Apply pending track additions to track maps
+        for (device_id, video_mid, audio_mid) in session.pending_track_additions.drain(..) {
+            session.video_track_map.insert(device_id.clone(), video_mid);
+            session.audio_track_map.insert(device_id, audio_mid);
+        }
+
+        // Send updated track map
+        Self::send_track_map_on_session(session);
+
+        info!(session_id = %session_id, "renegotiation completed");
+    }
+
+    /// Build and send a track_map message from the session's current track maps.
+    fn send_track_map_on_session(session: &mut RtcSession) {
+        let ch_id = match session.data_channel_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        let mut tracks = Vec::new();
+        for (device_id, mid) in &session.video_track_map {
+            tracks.push(TrackMapping {
+                mid: format!("{mid}"),
+                device_id: device_id.clone(),
+                kind: "video".into(),
+            });
+        }
+        for (device_id, mid) in &session.audio_track_map {
+            tracks.push(TrackMapping {
+                mid: format!("{mid}"),
+                device_id: device_id.clone(),
+                kind: "audio".into(),
+            });
+        }
+
+        let msg = DataChannelMessage::TrackMap { tracks };
+        if let Ok(json) = serde_json::to_string(&msg) {
+            if let Some(mut ch) = session.rtc.channel(ch_id) {
+                let _ = ch.write(false, json.as_bytes());
+            }
+        }
+    }
+
     async fn poll_all_sessions(&mut self) {
         let now = Instant::now();
         let mut to_remove: Vec<String> = Vec::new();
+        // Collect SDP answers and queued events to process after the borrow loop
+        let mut sdp_answers: Vec<(String, String)> = Vec::new();
+        let mut sessions_with_queued: Vec<String> = Vec::new();
 
         for (session_id, session) in &mut self.sessions {
-            session.rtc.handle_input(Input::Timeout(now));
+            // Check for renegotiation timeout
+            if let Some(ts) = session.pending_offer_timestamp {
+                if now.duration_since(ts) > Duration::from_secs(10) {
+                    warn!(session_id = %session_id, "renegotiation timed out");
+                    session.pending_offer = None;
+                    session.pending_offer_timestamp = None;
+                    session.pending_track_additions.clear();
+                    if !session.queued_camera_events.is_empty() {
+                        sessions_with_queued.push(session_id.clone());
+                    }
+                }
+            }
+
+            let _ = session.rtc.handle_input(Input::Timeout(now));
 
             loop {
                 match session.rtc.poll_output() {
@@ -521,11 +830,60 @@ impl WebRtcEngine {
                                         }
                                     }
                                 }
+                                // Process any queued camera events now that the channel is open
+                                if !session.queued_camera_events.is_empty() {
+                                    sessions_with_queued.push(session_id.clone());
+                                }
+                            }
+                            Event::ChannelData(data) => {
+                                // Parse incoming data channel messages (viewer→server)
+                                if !data.binary {
+                                    if let Ok(text) = std::str::from_utf8(&data.data) {
+                                        if let Ok(msg) = serde_json::from_str::<DataChannelMessage>(text) {
+                                            if let DataChannelMessage::SdpAnswer { sdp_answer } = msg {
+                                                sdp_answers.push((session_id.clone(), sdp_answer));
+                                            }
+                                        }
+                                    }
+                                }
                             }
                             _ => {}
                         },
                     },
                     Err(_) => break,
+                }
+            }
+        }
+
+        // Process SDP answers outside the poll loop
+        for (session_id, sdp_answer) in sdp_answers {
+            if let Some(session) = self.sessions.get_mut(&session_id) {
+                Self::handle_sdp_answer(session, &sdp_answer, &session_id);
+                // After completing renegotiation, check for queued events
+                if !session.queued_camera_events.is_empty() {
+                    sessions_with_queued.push(session_id);
+                }
+            }
+        }
+
+        // Process queued camera events
+        for session_id in sessions_with_queued {
+            if let Some(session) = self.sessions.get_mut(&session_id) {
+                if session.pending_offer.is_some() {
+                    continue; // Still in-flight, will process next tick
+                }
+                let events: Vec<CameraEvent> = session.queued_camera_events.drain(..).collect();
+                // Re-dispatch events — the first one that needs renegotiation will proceed,
+                // the rest will re-queue since pending_offer will be set
+                for event in events {
+                    match event {
+                        CameraEvent::Joined { device_id, group_id, capabilities } => {
+                            self.add_camera_to_session(&session_id, &device_id, &group_id, &capabilities);
+                        }
+                        CameraEvent::Left { device_id, .. } => {
+                            self.remove_camera_from_session(&session_id, &device_id);
+                        }
+                    }
                 }
             }
         }

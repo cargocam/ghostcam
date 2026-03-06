@@ -12,6 +12,19 @@ pub type DeviceId = String;
 pub type SessionId = String;
 
 #[derive(Debug, Clone)]
+pub enum CameraEvent {
+    Joined {
+        device_id: DeviceId,
+        group_id: GroupId,
+        capabilities: Vec<String>,
+    },
+    Left {
+        device_id: DeviceId,
+        group_id: GroupId,
+    },
+}
+
+#[derive(Debug, Clone)]
 pub struct CameraFrame {
     pub device_id: DeviceId,
     pub stream_type: StreamType,
@@ -38,6 +51,8 @@ pub struct GroupRouter {
     pub groups: HashMap<GroupId, HashSet<DeviceId>>,
     pub viewers: HashMap<SessionId, ViewerSession>,
     pub frame_tx: broadcast::Sender<CameraFrame>,
+    /// Camera join/leave events for WebRTC renegotiation
+    pub event_tx: broadcast::Sender<CameraEvent>,
     /// Cached SPS NAL per camera
     pub sps_cache: HashMap<DeviceId, Bytes>,
     /// Cached PPS NAL per camera
@@ -51,11 +66,13 @@ pub struct GroupRouter {
 impl GroupRouter {
     pub fn new() -> Self {
         let (frame_tx, _) = broadcast::channel(4096);
+        let (event_tx, _) = broadcast::channel(256);
         Self {
             cameras: HashMap::new(),
             groups: HashMap::new(),
             viewers: HashMap::new(),
             frame_tx,
+            event_tx,
             sps_cache: HashMap::new(),
             pps_cache: HashMap::new(),
             telemetry: HashMap::new(),
@@ -87,21 +104,31 @@ impl GroupRouter {
             .or_default()
             .insert(device_id.clone());
         self.command_txs.insert(device_id.clone(), command_tx);
+        let _ = self.event_tx.send(CameraEvent::Joined {
+            device_id: device_id.clone(),
+            group_id: group_id.clone(),
+            capabilities: self.cameras[&device_id].capabilities.clone(),
+        });
         info!(device_id = %device_id, group_id = %group_id, "camera registered");
     }
 
     pub fn unregister_camera(&mut self, device_id: &str) {
         if let Some(camera) = self.cameras.remove(device_id) {
-            if let Some(set) = self.groups.get_mut(&camera.group_id) {
+            let group_id = camera.group_id.clone();
+            if let Some(set) = self.groups.get_mut(&group_id) {
                 set.remove(device_id);
                 if set.is_empty() {
-                    self.groups.remove(&camera.group_id);
+                    self.groups.remove(&group_id);
                 }
             }
             self.sps_cache.remove(device_id);
             self.pps_cache.remove(device_id);
             self.telemetry.remove(device_id);
             self.command_txs.remove(device_id);
+            let _ = self.event_tx.send(CameraEvent::Left {
+                device_id: device_id.to_string(),
+                group_id,
+            });
             info!(device_id = %device_id, "camera unregistered");
         }
     }
@@ -309,5 +336,52 @@ mod tests {
 
         router.unregister_camera("cam-01");
         assert!(!router.command_txs.contains_key("cam-01"));
+    }
+
+    #[test]
+    fn register_emits_joined_event() {
+        let mut router = GroupRouter::new();
+        let mut rx = router.event_tx.subscribe();
+
+        router.register_camera(
+            "cam-01".into(),
+            GroupId::new("alpha"),
+            vec!["h264".into()],
+            dummy_command_tx(),
+        );
+
+        let event = rx.try_recv().unwrap();
+        match event {
+            CameraEvent::Joined { device_id, group_id, capabilities } => {
+                assert_eq!(device_id, "cam-01");
+                assert_eq!(group_id, GroupId::new("alpha"));
+                assert_eq!(capabilities, vec!["h264".to_string()]);
+            }
+            _ => panic!("expected Joined event"),
+        }
+    }
+
+    #[test]
+    fn unregister_emits_left_event() {
+        let mut router = GroupRouter::new();
+        let mut rx = router.event_tx.subscribe();
+
+        router.register_camera(
+            "cam-01".into(),
+            GroupId::new("alpha"),
+            vec![],
+            dummy_command_tx(),
+        );
+        let _ = rx.try_recv(); // consume Joined event
+
+        router.unregister_camera("cam-01");
+        let event = rx.try_recv().unwrap();
+        match event {
+            CameraEvent::Left { device_id, group_id } => {
+                assert_eq!(device_id, "cam-01");
+                assert_eq!(group_id, GroupId::new("alpha"));
+            }
+            _ => panic!("expected Left event"),
+        }
     }
 }

@@ -21,6 +21,7 @@ export class WebRtcSession {
 	onAudioTrack: OnAudioTrackCallback | null = null;
 	onData: OnDataCallback | null = null;
 	onConnectionStateChange: ((state: RTCPeerConnectionState) => void) | null = null;
+	onTrackEnded: ((deviceId: string) => void) | null = null;
 
 	constructor(signaling: SignalingClient) {
 		this.signaling = signaling;
@@ -42,6 +43,20 @@ export class WebRtcSession {
 
 			const stream = new MediaStream([track]);
 			const deviceId = this.trackDeviceMap.get(mid);
+
+			// Handle track ended — resolve device from mid at event time
+			track.onended = () => {
+				const dev = this.trackDeviceMap.get(mid!);
+				if (dev && track.kind === 'video' && this.onTrackEnded) {
+					this.onTrackEnded(dev);
+				}
+			};
+			track.onmute = () => {
+				const dev = this.trackDeviceMap.get(mid!);
+				if (dev && track.kind === 'video' && this.onTrackEnded) {
+					this.onTrackEnded(dev);
+				}
+			};
 
 			if (track.kind === 'video') {
 				if (deviceId && this.onTrack) {
@@ -134,11 +149,35 @@ export class WebRtcSession {
 				if (msg.type === 'track_map') {
 					this.handleTrackMap(msg.tracks);
 				}
+				// Intercept renegotiate — handle SDP offer/answer internally
+				if (msg.type === 'renegotiate') {
+					this.handleRenegotiate(msg.sdp_offer);
+					return; // Don't propagate to data handler
+				}
 				if (this.onData) {
 					this.onData(msg);
 				}
 			} catch {}
 		};
+	}
+
+	/** Handle a server-initiated renegotiation offer (new/removed tracks). */
+	private async handleRenegotiate(sdpOffer: string): Promise<void> {
+		if (!this.pc || !this.dataChannel || this.dataChannel.readyState !== 'open') return;
+
+		try {
+			await this.pc.setRemoteDescription({ type: 'offer', sdp: sdpOffer });
+			const answer = await this.pc.createAnswer();
+			await this.pc.setLocalDescription(answer);
+
+			const msg = JSON.stringify({
+				type: 'sdp_answer',
+				sdp_answer: this.pc.localDescription!.sdp,
+			});
+			this.dataChannel.send(msg);
+		} catch (err) {
+			console.error('Renegotiation failed:', err);
+		}
 	}
 
 	/**

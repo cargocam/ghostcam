@@ -74,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
 
     let group_router = GroupRouter::new();
     let frame_tx = group_router.frame_tx.clone();
+    let camera_event_rx = group_router.event_tx.subscribe();
 
     let audit = Arc::new(AuditLogger::new(args.hmac_key.as_bytes()));
     let metrics = Arc::new(Metrics::new());
@@ -100,7 +101,7 @@ async fn main() -> anyhow::Result<()> {
     let webrtc_state = state.clone();
     let webrtc_frame_rx = frame_tx.subscribe();
     tokio::spawn(async move {
-        let mut engine = WebRtcEngine::new(webrtc_state, webrtc_cmd_rx, webrtc_frame_rx).await;
+        let mut engine = WebRtcEngine::new(webrtc_state, webrtc_cmd_rx, webrtc_frame_rx, camera_event_rx).await;
         engine.run().await;
     });
 

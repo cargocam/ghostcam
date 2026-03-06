@@ -116,6 +116,16 @@ Camera                          Server                          Browser
     │                              │    write RTP via str0m ──────>│ video.srcObject
     │                              │    write Opus RTP ───────────>│ audio
     │                              │    data channel telemetry ───>│ camera list, metrics
+    │                              │                               │
+    │── New camera QUIC connect ─>│ event_tx(CameraJoined)        │
+    │                              │    add_media(video+audio)      │
+    │                              │    sdp_api.apply() → offer     │
+    │                              │    DC: camera_join ───────────>│
+    │                              │    DC: renegotiate ───────────>│ setRemoteDescription
+    │                              │                               │ createAnswer
+    │                              │<── DC: sdp_answer ────────────│
+    │                              │    accept_answer(pending)      │
+    │                              │    DC: track_map ────────────>│ ontrack → stream
 ```
 
 ### Library Structure (`ghostcam/`)
@@ -130,7 +140,7 @@ group.rs          Hierarchical GroupId
 h264.rs           Annex-B NAL parser (parse_h264_file) + streaming NalParser
 hello.rs          DeviceHello handshake
 quic.rs           Shared QUIC/TLS: cert generation, server/client config, hello/command send/recv
-router.rs         GroupRouter: camera registry, broadcast channel, SPS/PPS cache, telemetry state, command channels, reassign
+router.rs         GroupRouter: camera registry, broadcast channels (frames + events), SPS/PPS cache, telemetry state, command channels, reassign
 rtp.rs            H.264 NAL→RTP packetizer (Single NAL + FU-A), timestamp math
 stream.rs         send_video_frame, send_audio_frame, send_telemetry_frame, OPUS_SILENCE
 telemetry.rs      TelemetryData, SparseTelemetry, GpsData, diff/merge, MessagePack encode/decode
@@ -161,7 +171,7 @@ metrics.rs        Prometheus metrics (prometheus-client): gauges, counters, text
 
 ```
 signaling.ts          HTTP client for SDP exchange + REST API
-webrtc.ts             RTCPeerConnection lifecycle, ontrack→store wiring (video + audio tracks)
+webrtc.ts             RTCPeerConnection lifecycle, ontrack→store wiring (video + audio tracks), dynamic renegotiation (SDP offer/answer via data channel)
 data-channel.ts       Routes data channel JSON to appropriate stores
 stores/
   transport.svelte.ts Orchestrates signaling + WebRTC connection + auto-reconnect, audio wiring
@@ -274,7 +284,9 @@ The bridge caches the most recent SPS (NAL type 7) and PPS (NAL type 8) per came
 
 ### WebRTC Data Channel Messages
 
-Data channel named "telemetry", all messages are JSON text (not binary). Sent bridge→viewer.
+Data channel named "telemetry", JSON text (not binary). Bidirectional.
+
+**Bridge → Viewer:**
 
 | Type | When | Key Fields |
 |------|------|------------|
@@ -282,8 +294,14 @@ Data channel named "telemetry", all messages are JSON text (not binary). Sent br
 | `camera_join` | Camera connects to group | Single camera object |
 | `camera_leave` | Camera disconnects | `device_id` |
 | `telemetry` | When camera sends telemetry | `cpu_percent`, `temp_celsius`, `memory_mb`, `uptime_secs`, optional `gps` |
-| `track_map` | Data channel opens | Maps SDP `mid` → `device_id` + `kind` ("video"/"audio") |
-| `renegotiate` | Track changes (stub) | `sdp_offer` |
+| `track_map` | Data channel opens or after renegotiation | Maps SDP `mid` → `device_id` + `kind` ("video"/"audio") |
+| `renegotiate` | Camera join/leave triggers track changes | `sdp_offer` — server-initiated SDP offer for dynamic renegotiation |
+
+**Viewer → Bridge:**
+
+| Type | When | Key Fields |
+|------|------|------------|
+| `sdp_answer` | Response to `renegotiate` | `sdp_answer` — viewer's SDP answer completing renegotiation |
 
 Telemetry is event-driven from camera frames (StreamType::Telemetry = 2, MessagePack SparseTelemetry). The server decodes, merges into per-camera state, and forwards as JSON on the data channel. In test-source mode, no telemetry is sent.
 

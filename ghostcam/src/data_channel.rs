@@ -42,6 +42,10 @@ pub enum DataChannelMessage {
     TrackMap {
         tracks: Vec<TrackMapping>,
     },
+    /// SDP answer from viewer (viewer→server, for renegotiation)
+    SdpAnswer {
+        sdp_answer: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

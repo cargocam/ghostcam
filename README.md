@@ -285,11 +285,14 @@ Bridge → Camera: [4 bytes: JSON length (u32 BE)] [JSON: CameraCommand] (repeat
 // Periodic telemetry (every 2s)
 { "type": "telemetry", "device_id": "...", "cpu_percent": 28.0, "temp_celsius": 44.0, "memory_mb": 128.0, "uptime_secs": 3600 }
 
-// Track-to-camera mapping (sent when data channel opens)
+// Track-to-camera mapping (sent when data channel opens or after renegotiation)
 { "type": "track_map", "tracks": [{ "mid": "0", "device_id": "cam-01", "kind": "video" }] }
 
-// Request SDP renegotiation (stub — not yet implemented)
+// Server-initiated SDP renegotiation (bridge→viewer, on camera join/leave)
 { "type": "renegotiate", "sdp_offer": "..." }
+
+// Viewer's SDP answer (viewer→bridge, completes renegotiation)
+{ "type": "sdp_answer", "sdp_answer": "..." }
 ```
 
 ## Group IDs
@@ -305,6 +308,7 @@ Groups use colon-separated hierarchical identifiers: `usr-alice:perimeter`, `usr
 - Camera group switching
 - Inline camera renaming
 - Picture-in-Picture and snapshot capture
+- Dynamic renegotiation: cameras can join/leave without page reload
 - Auto-reconnection with exponential backoff (1s–30s, up to 10 retries)
 - Connection alerts (disconnect/reconnect notifications)
 - Dark/light/system theme
@@ -351,7 +355,7 @@ ghostcam/
 │   ├── h264.rs                   # Annex-B NAL parser + streaming NalParser
 │   ├── hello.rs                  # DeviceHello handshake
 │   ├── quic.rs                   # Shared QUIC/TLS helpers (cert gen, hello, command send/recv)
-│   ├── router.rs                 # GroupRouter, broadcast, SPS/PPS cache, telemetry, command channels
+│   ├── router.rs                 # GroupRouter, broadcast (frames + events), SPS/PPS cache, telemetry, command channels
 │   ├── rtp.rs                    # H.264 FU-A packetizer, timestamp math
 │   ├── stream.rs                 # send_video_frame, send_audio_frame, send_telemetry_frame
 │   └── telemetry.rs              # TelemetryData, SparseTelemetry, GpsData, diff/merge
@@ -368,7 +372,7 @@ ghostcam/
 ├── server/src/
 │   ├── main.rs                   # CLI, AppState, task spawning
 │   ├── quic.rs                   # QUIC listener, camera handler
-│   ├── webrtc.rs                 # str0m WebRTC engine, session mgmt
+│   ├── webrtc.rs                 # str0m WebRTC engine, session mgmt, dynamic renegotiation
 │   ├── api.rs                    # Axum HTTP routes + auth middleware
 │   └── metrics.rs                # Prometheus metrics (gauges, counters)
 ├── ui/

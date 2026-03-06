@@ -48,7 +48,8 @@ export type DataChannelMessage =
   | { type: 'camera_leave'; device_id: string }
   | { type: 'telemetry'; device_id: string; cpu_percent: number; temp_celsius: number; memory_mb: number; uptime_secs: number; gps?: GpsData }
   | { type: 'renegotiate'; sdp_offer: string }
-  | { type: 'track_map'; tracks: TrackMapping[] };
+  | { type: 'track_map'; tracks: TrackMapping[] }
+  | { type: 'sdp_answer'; sdp_answer: string };
 
 export type GridLayout = 'auto' | '1+5';
 export type ViewMode = 'live' | 'map' | 'dashboard' | 'camera';

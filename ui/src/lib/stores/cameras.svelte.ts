@@ -55,6 +55,14 @@ class CameraStore {
 		}
 	}
 
+	removeStream(deviceId: string) {
+		const idx = this.cameras.findIndex((c) => c.device_id === deviceId);
+		if (idx >= 0) {
+			this.cameras[idx].stream = undefined;
+			this.cameras[idx].audioStream = undefined;
+		}
+	}
+
 	updateTelemetry(data: TelemetryData) {
 		const idx = this.cameras.findIndex((c) => c.device_id === data.device_id);
 		if (idx >= 0) {

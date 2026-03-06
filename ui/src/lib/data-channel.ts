@@ -2,7 +2,6 @@ import type { DataChannelMessage } from '$lib/types.js';
 import { cameraStore } from '$lib/stores/cameras.svelte.js';
 import { alertsStore } from '$lib/stores/alerts.svelte.js';
 import { cameraConfigStore } from '$lib/stores/cameraConfig.svelte.js';
-import { transportStore } from '$lib/stores/transport.svelte.js';
 
 export function handleDataChannelMessage(msg: DataChannelMessage) {
 	switch (msg.type) {
@@ -18,8 +17,7 @@ export function handleDataChannelMessage(msg: DataChannelMessage) {
 				cameraConfigStore.getDisplayName(msg.camera.device_id),
 				`Camera joined group ${msg.camera.group_id}`
 			);
-			// Reconnect to pick up the new camera's tracks
-			transportStore.reconnect();
+			// Renegotiation handles track addition — no reconnect needed
 			break;
 
 		case 'camera_leave':
@@ -44,7 +42,7 @@ export function handleDataChannelMessage(msg: DataChannelMessage) {
 			break;
 
 		case 'renegotiate':
-			transportStore.reconnect();
+			// Handled internally by WebRtcSession — should not reach here
 			break;
 	}
 }
