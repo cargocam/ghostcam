@@ -113,6 +113,7 @@ Launches 4 test cameras (`test-cam-01` through `test-cam-04`) in group `default`
 | `--http-port` | | `3000` | HTTP API port |
 | `--public-ip` | | `127.0.0.1` | Public IP for ICE host candidates |
 | `--api-key` | `GHOSTCAM_API_KEY` | `dev-key` | Bearer token for API auth |
+| `--hmac-key` | `GHOSTCAM_HMAC_KEY` | `dev-hmac-key` | HMAC key for audit log integrity |
 | `--viewer-dir` | | _(none)_ | Serve built viewer static files |
 
 ### Camera CLI
@@ -220,10 +221,11 @@ Request:  { "type": "stop_video" }
 Response: 202 Accepted
 ```
 
-### Health
+### Health & Metrics
 
 - `GET /healthz` — always `200 OK` (no auth)
 - `GET /readyz` — `200 OK` (no auth)
+- `GET /metrics` — Prometheus text format (no auth)
 
 ## Wire Protocol
 
@@ -298,6 +300,7 @@ Groups use colon-separated hierarchical identifiers: `usr-alice:perimeter`, `usr
 
 - Multi-camera grid with responsive auto-fit and 1+5 featured layouts
 - Fullscreen single-camera view with keyboard shortcuts (F/M/S/P/Esc)
+- Live audio playback with per-camera mute (one camera unmuted at a time)
 - Live telemetry display with sparkline graphs (CPU, memory, temperature)
 - Camera group switching
 - Inline camera renaming
@@ -339,6 +342,7 @@ ghostcam/
 ├── Cargo.toml                    # Workspace root
 ├── ghostcam/src/
 │   ├── lib.rs
+│   ├── audit.rs                  # AuditEvent, AuditLogger with HMAC-SHA256 integrity
 │   ├── command.rs                # CameraCommand/CommandResponse (bridge→camera control)
 │   ├── config.rs                 # Port/MTU constants
 │   ├── data_channel.rs           # DataChannelMessage types (WebRTC)
@@ -365,7 +369,8 @@ ghostcam/
 │   ├── main.rs                   # CLI, AppState, task spawning
 │   ├── quic.rs                   # QUIC listener, camera handler
 │   ├── webrtc.rs                 # str0m WebRTC engine, session mgmt
-│   └── api.rs                    # Axum HTTP routes + auth middleware
+│   ├── api.rs                    # Axum HTTP routes + auth middleware
+│   └── metrics.rs                # Prometheus metrics (gauges, counters)
 ├── ui/
 │   ├── assets/screenshot.png
 │   ├── package.json
@@ -395,6 +400,8 @@ ghostcam/
 | rcgen | 0.13 | Self-signed certificate generation |
 | tokio | 1 | Async runtime |
 | rmp-serde | 1 | MessagePack serialization (telemetry wire format) |
+| ring | 0.17 | HMAC-SHA256 for audit log integrity |
+| prometheus-client | 0.23 | Prometheus metrics (gauges, counters) |
 | cpal | 0.15 | Cross-platform audio input |
 | opus | 0.3 | Opus audio encoding |
 | svelte | 5 | Frontend framework (runes reactivity) |

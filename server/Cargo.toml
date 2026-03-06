@@ -17,3 +17,4 @@ axum = { workspace = true }
 tower-http = { workspace = true }
 str0m = { workspace = true }
 anyhow = { workspace = true }
+prometheus-client = { workspace = true }

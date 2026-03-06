@@ -3,6 +3,7 @@ import type { CameraInfo, TelemetryData } from '$lib/types.js';
 export interface CameraState extends CameraInfo {
 	telemetry?: TelemetryData;
 	stream?: MediaStream;
+	audioStream?: MediaStream;
 }
 
 class CameraStore {
@@ -18,7 +19,7 @@ class CameraStore {
 	setCameras(list: CameraInfo[]) {
 		this.cameras = list.map((cam) => {
 			const existing = this.cameras.find((c) => c.device_id === cam.device_id);
-			return { ...cam, connected: true, telemetry: existing?.telemetry, stream: existing?.stream };
+			return { ...cam, connected: true, telemetry: existing?.telemetry, stream: existing?.stream, audioStream: existing?.audioStream };
 		});
 	}
 
@@ -36,6 +37,7 @@ class CameraStore {
 		if (idx >= 0) {
 			this.cameras[idx].connected = false;
 			this.cameras[idx].stream = undefined;
+			this.cameras[idx].audioStream = undefined;
 		}
 	}
 
@@ -43,6 +45,13 @@ class CameraStore {
 		const idx = this.cameras.findIndex((c) => c.device_id === deviceId);
 		if (idx >= 0) {
 			this.cameras[idx].stream = stream;
+		}
+	}
+
+	setAudioStream(deviceId: string, stream: MediaStream) {
+		const idx = this.cameras.findIndex((c) => c.device_id === deviceId);
+		if (idx >= 0) {
+			this.cameras[idx].audioStream = stream;
 		}
 	}
 

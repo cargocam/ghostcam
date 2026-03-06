@@ -20,6 +20,7 @@
 
 	let isSelected = $derived(cameraStore.selectedId === deviceId);
 	let camera = $derived(cameraStore.cameras.find((c) => c.device_id === deviceId));
+	let isMuted = $derived(settingsStore.isCameraMuted(deviceId));
 	let videoElement = $state<HTMLVideoElement | undefined>(undefined);
 	let cardEl = $state<HTMLButtonElement | undefined>(undefined);
 	let isVisible = $state(true);
@@ -61,9 +62,7 @@
 
 	function toggleMute(e: MouseEvent) {
 		e.stopPropagation();
-		if (videoElement) {
-			videoElement.muted = !videoElement.muted;
-		}
+		settingsStore.toggleCameraMute(deviceId);
 	}
 </script>
 
@@ -79,7 +78,7 @@
 >
 	<!-- Video feed -->
 	<div class="absolute inset-0">
-		<VideoPlayer {deviceId} bind:videoElement active={isVisible} />
+		<VideoPlayer {deviceId} bind:videoElement active={isVisible} muted={isMuted} />
 	</div>
 
 	<!-- Top gradient overlay -->
@@ -129,7 +128,7 @@
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
 		<!-- svelte-ignore a11y_no_static_element_interactions -->
 		<div class="cursor-pointer rounded bg-black/50 p-1" onclick={toggleMute} title="Toggle audio">
-			{#if videoElement?.muted !== false}
+			{#if isMuted}
 				<VolumeOff class="h-3 w-3 text-white/70" />
 			{:else}
 				<Volume2 class="h-3 w-3 text-white/70" />

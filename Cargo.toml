@@ -20,5 +20,7 @@ tower-http = { version = "0.6", features = ["cors", "fs"] }
 str0m = "0.6"
 anyhow = "1"
 rmp-serde = "1"
+ring = "0.17"
+prometheus-client = "0.23"
 cpal = "0.15"
 opus = "0.3"

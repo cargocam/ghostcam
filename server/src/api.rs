@@ -1,13 +1,15 @@
 use crate::webrtc::WebRtcCommand;
 use crate::AppState;
-use axum::extract::{Path, State};
+use axum::extract::{ConnectInfo, Path, State};
 use axum::http::{header, StatusCode};
 use axum::response::Json;
 use axum::routing::{delete, get, post, put};
 use axum::Router;
+use ghostcam::audit::AuditEvent;
 use ghostcam::command::CameraCommand;
 use ghostcam::group::GroupId;
 use serde::{Deserialize, Serialize};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -15,8 +17,6 @@ use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
 pub fn create_router(state: Arc<AppState>, viewer_dir: Option<PathBuf>) -> Router {
-    let api_key = state.api_key.clone();
-
     let api = Router::new()
         .route("/api/v1/watch/:group_id", post(watch))
         .route("/api/v1/session/:id", delete(delete_session))
@@ -26,27 +26,15 @@ pub fn create_router(state: Arc<AppState>, viewer_dir: Option<PathBuf>) -> Route
         .route("/api/v1/cameras/:device_id/status", get(camera_status))
         .route("/api/v1/cameras/:device_id/group", put(reassign_camera_group))
         .route("/api/v1/cameras/:device_id/command", post(send_camera_command))
-        .route_layer(axum::middleware::from_fn(
-            move |req: axum::extract::Request, next: axum::middleware::Next| {
-                let key = api_key.clone();
-                async move {
-                    let auth = req
-                        .headers()
-                        .get(header::AUTHORIZATION)
-                        .and_then(|v: &axum::http::HeaderValue| v.to_str().ok())
-                        .unwrap_or("");
-                    if auth.starts_with("Bearer ") && &auth[7..] == key {
-                        Ok::<_, StatusCode>(next.run(req).await)
-                    } else {
-                        Err(StatusCode::UNAUTHORIZED)
-                    }
-                }
-            },
+        .route_layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
         ));
 
     let health = Router::new()
         .route("/healthz", get(healthz))
-        .route("/readyz", get(readyz));
+        .route("/readyz", get(readyz))
+        .route("/metrics", get(metrics_handler));
 
     let mut app = Router::new()
         .merge(api)
@@ -60,6 +48,50 @@ pub fn create_router(state: Arc<AppState>, viewer_dir: Option<PathBuf>) -> Route
     }
 
     app
+}
+
+async fn auth_middleware(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Result<axum::response::Response, StatusCode> {
+    let path = req.uri().path().to_string();
+    let remote_addr = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0.to_string())
+        .unwrap_or_else(|| "unknown".into());
+
+    let auth = req
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if auth.starts_with("Bearer ") && &auth[7..] == state.api_key {
+        state.audit.log(AuditEvent::AuthSuccess {
+            remote_addr,
+            path,
+        });
+        state.metrics.auth_successes_total.inc();
+        Ok(next.run(req).await)
+    } else {
+        state.audit.log(AuditEvent::AuthFailure {
+            remote_addr,
+            path,
+        });
+        state.metrics.auth_failures_total.inc();
+        Err(StatusCode::UNAUTHORIZED)
+    }
+}
+
+async fn metrics_handler(State(state): State<Arc<AppState>>) -> (StatusCode, [(String, String); 1], String) {
+    let body = state.metrics.encode();
+    (
+        StatusCode::OK,
+        [("content-type".to_string(), "text/plain; version=0.0.4; charset=utf-8".to_string())],
+        body,
+    )
 }
 
 #[derive(Deserialize)]
@@ -303,6 +335,12 @@ async fn reassign_camera_group(
             })
             .await;
     }
+
+    state.audit.log(AuditEvent::GroupChange {
+        device_id: device_id.clone(),
+        old_group: old_group_id.0.clone(),
+        new_group: body.group_id.clone(),
+    });
 
     Ok(Json(ReassignGroupResponse {
         device_id,

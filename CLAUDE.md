@@ -121,6 +121,7 @@ Camera                          Server                          Browser
 ### Library Structure (`ghostcam/`)
 
 ```
+audit.rs          AuditEvent/AuditEntry/AuditLogger: HMAC-SHA256 signed audit trail, broadcast channel
 command.rs        CameraCommand/CommandResponse enums (bridge→camera control), serde tagged JSON
 config.rs         Port/MTU constants
 data_channel.rs   DataChannelMessage types (WebRTC data channel JSON)
@@ -150,22 +151,23 @@ capture/telemetry.rs   /proc, /sys readers (Linux) + gpsd TCP client (optional)
 
 ```
 main.rs           CLI parsing, AppState creation, task spawning
-quic.rs           QUIC listener → per-camera handler → frame reader
+quic.rs           QUIC listener → per-camera handler → frame reader, audit + metrics instrumentation
 webrtc.rs         str0m WebRTC engine: session creation, UDP event loop, frame dispatch
-api.rs            Axum HTTP routes + Bearer auth middleware
+api.rs            Axum HTTP routes + Bearer auth middleware, audit events, /metrics endpoint
+metrics.rs        Prometheus metrics (prometheus-client): gauges, counters, text encoding
 ```
 
 ### Viewer Internal Structure
 
 ```
 signaling.ts          HTTP client for SDP exchange + REST API
-webrtc.ts             RTCPeerConnection lifecycle, ontrack→store wiring
+webrtc.ts             RTCPeerConnection lifecycle, ontrack→store wiring (video + audio tracks)
 data-channel.ts       Routes data channel JSON to appropriate stores
 stores/
-  transport.svelte.ts Orchestrates signaling + WebRTC connection + auto-reconnect
-  cameras.svelte.ts   Camera list, streams, telemetry state
+  transport.svelte.ts Orchestrates signaling + WebRTC connection + auto-reconnect, audio wiring
+  cameras.svelte.ts   Camera list, video + audio streams, telemetry state
   groups.svelte.ts    Group list and active group
-  settings.svelte.ts  Theme, grid layout, view mode (localStorage)
+  settings.svelte.ts  Theme, grid layout, view mode, global/per-camera mute (localStorage)
   alerts.svelte.ts    Disconnect/reconnect notifications
   cameraConfig.svelte.ts   Per-camera display name overrides
   videoStats.svelte.ts     Per-track WebRTC stats
@@ -300,9 +302,11 @@ PUT    /api/v1/cameras/{device_id}/group   Reassign camera to different group
 POST   /api/v1/cameras/{device_id}/command Send CameraCommand to camera (fire-and-forget, 202)
 GET    /healthz                            Health check (no auth)
 GET    /readyz                             Readiness probe (no auth)
+GET    /metrics                            Prometheus metrics (no auth)
 ```
 
 Default API key: `dev-key` (configurable via `--api-key` or `GHOSTCAM_API_KEY` env).
+HMAC key: `dev-hmac-key` (configurable via `--hmac-key` or `GHOSTCAM_HMAC_KEY` env).
 
 ## Testing
 
@@ -310,7 +314,7 @@ Default API key: `dev-key` (configurable via `--api-key` or `GHOSTCAM_API_KEY` e
 
 ```bash
 cargo test                    # All Rust tests
-cargo test -p ghostcam        # Frame encode/decode, group hierarchy, NAL parsing, telemetry, NalParser, command roundtrip, router reassign
+cargo test -p ghostcam        # Frame encode/decode, group hierarchy, NAL parsing, telemetry, NalParser, command roundtrip, router reassign, audit events
 cargo test -p server          # RTP packetization, timestamp conversion
 ```
 
@@ -346,7 +350,9 @@ cargo test -p server          # RTP packetization, timestamp conversion
 | quinn | 0.11 | QUIC transport. `Endpoint::server()`, uni/bi streams |
 | rustls | 0.23 | TLS backend for quinn. Features: `ring`, `std` (no default) |
 | rcgen | 0.13 | Self-signed certs. `KeyPair::generate()`, `CertificateParams::self_signed(&key_pair)` |
-| axum | 0.7 | HTTP. `from_fn` middleware for auth |
+| axum | 0.7 | HTTP. `from_fn_with_state` middleware for auth + audit |
+| ring | 0.17 | HMAC-SHA256 for audit log integrity (transitive via rustls) |
+| prometheus-client | 0.23 | Prometheus metrics: gauges, counters, text encoding |
 | rmp-serde | 1 | MessagePack ser/de for telemetry wire format |
 | cpal | 0.15 | Cross-platform audio input (camera) |
 | opus | 0.3 | Opus audio encoding (camera) |

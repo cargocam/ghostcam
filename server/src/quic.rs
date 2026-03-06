@@ -1,5 +1,6 @@
 use crate::AppState;
 use anyhow::Result;
+use ghostcam::audit::AuditEvent;
 use ghostcam::command::CameraCommand;
 use ghostcam::frame::Frame;
 use quinn::Endpoint;
@@ -65,6 +66,14 @@ async fn handle_camera_connection(
         );
     }
 
+    state.audit.log(AuditEvent::CameraConnect {
+        device_id: device_id.clone(),
+        group_id: hello.group_id.0.clone(),
+        remote_addr: remote.to_string(),
+    });
+    state.metrics.camera_connections_total.inc();
+    state.metrics.active_cameras.inc();
+
     // Spawn task to forward commands from channel to QUIC control stream
     let cmd_device_id = device_id.clone();
     tokio::spawn(async move {
@@ -107,6 +116,13 @@ async fn handle_camera_connection(
         router.unregister_camera(&device_id);
     }
 
+    state.audit.log(AuditEvent::CameraDisconnect {
+        device_id: device_id.clone(),
+        reason: "connection closed".into(),
+    });
+    state.metrics.camera_disconnections_total.inc();
+    state.metrics.active_cameras.dec();
+
     Ok(())
 }
 
@@ -121,10 +137,14 @@ async fn read_frame_stream(
 
     match frame.stream_type {
         ghostcam::frame::StreamType::Video => {
+            state.metrics.video_frames_total.inc();
+            state.metrics.video_bytes_total.inc_by(frame.payload.len() as u64);
             let mut router = state.router.write().await;
             router.on_video_frame(device_id, frame.timestamp_us, frame.payload);
         }
         ghostcam::frame::StreamType::Audio => {
+            state.metrics.audio_frames_total.inc();
+            state.metrics.audio_bytes_total.inc_by(frame.payload.len() as u64);
             let router = state.router.read().await;
             router.on_audio_frame(device_id, frame.timestamp_us, frame.payload);
         }

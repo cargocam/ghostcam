@@ -1,10 +1,13 @@
 mod api;
+mod metrics;
 mod quic;
 mod webrtc;
 
 use clap::Parser;
+use ghostcam::audit::AuditLogger;
 use ghostcam::config;
 use ghostcam::router::GroupRouter;
+use metrics::Metrics;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -31,6 +34,10 @@ struct Args {
     #[arg(long, env = "GHOSTCAM_API_KEY", default_value = "dev-key")]
     api_key: String,
 
+    /// HMAC key for audit log integrity
+    #[arg(long, env = "GHOSTCAM_HMAC_KEY", default_value = "dev-hmac-key")]
+    hmac_key: String,
+
     /// Directory to serve built viewer from
     #[arg(long)]
     viewer_dir: Option<PathBuf>,
@@ -41,6 +48,8 @@ pub struct AppState {
     pub webrtc_cmd_tx: tokio::sync::mpsc::Sender<webrtc::WebRtcCommand>,
     pub api_key: String,
     pub public_ip: IpAddr,
+    pub audit: Arc<AuditLogger>,
+    pub metrics: Arc<Metrics>,
 }
 
 #[tokio::main]
@@ -66,11 +75,16 @@ async fn main() -> anyhow::Result<()> {
     let group_router = GroupRouter::new();
     let frame_tx = group_router.frame_tx.clone();
 
+    let audit = Arc::new(AuditLogger::new(args.hmac_key.as_bytes()));
+    let metrics = Arc::new(Metrics::new());
+
     let state = Arc::new(AppState {
         router: RwLock::new(group_router),
         webrtc_cmd_tx,
         api_key: args.api_key,
         public_ip: args.public_ip,
+        audit,
+        metrics,
     });
 
     // Spawn QUIC listener for cameras

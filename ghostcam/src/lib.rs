@@ -1,3 +1,4 @@
+pub mod audit;
 pub mod command;
 pub mod config;
 pub mod data_channel;

@@ -52,6 +52,10 @@ class TransportStore {
 				cameraStore.setStream(deviceId, stream);
 			};
 
+			this.session.onAudioTrack = (deviceId, stream) => {
+				cameraStore.setAudioStream(deviceId, stream);
+			};
+
 			this.session.onData = (msg) => {
 				handleDataChannelMessage(msg);
 			};

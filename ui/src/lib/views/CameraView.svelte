@@ -11,6 +11,7 @@
 	let cameraId = $derived(settingsStore.focusedCameraId);
 	let camera = $derived(cameraId ? cameraStore.cameras.find((c) => c.device_id === cameraId) : null);
 	let displayName = $derived(camera ? cameraConfigStore.getDisplayName(camera.device_id) : '');
+	let isMuted = $derived(cameraId ? settingsStore.isCameraMuted(cameraId) : true);
 
 	let showOverlay = $state(true);
 	let overlayTimer: ReturnType<typeof setTimeout> | null = null;
@@ -38,8 +39,8 @@
 	}
 
 	function toggleMute() {
-		if (videoElement) {
-			videoElement.muted = !videoElement.muted;
+		if (cameraId) {
+			settingsStore.toggleCameraMute(cameraId);
 		}
 	}
 
@@ -103,7 +104,7 @@
 		onclick={resetOverlayTimer}
 	>
 		<div class="absolute inset-0">
-			<VideoPlayer deviceId={cameraId} bind:videoElement />
+			<VideoPlayer deviceId={cameraId} bind:videoElement muted={isMuted} />
 		</div>
 
 		<!-- Top overlay -->
@@ -140,7 +141,7 @@
 						<PictureInPicture2 class="h-4 w-4" />
 					</Button>
 					<Button variant="ghost" size="icon" class="text-white hover:bg-white/10" onclick={toggleMute} title="Mute (M)">
-						{#if videoElement?.muted !== false}
+						{#if isMuted}
 							<VolumeOff class="h-5 w-5" />
 						{:else}
 							<Volume2 class="h-5 w-5" />

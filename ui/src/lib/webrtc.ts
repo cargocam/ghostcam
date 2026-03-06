@@ -2,6 +2,7 @@ import { SignalingClient } from '$lib/signaling.js';
 import type { DataChannelMessage } from '$lib/types.js';
 
 export type OnTrackCallback = (deviceId: string, stream: MediaStream) => void;
+export type OnAudioTrackCallback = (deviceId: string, stream: MediaStream) => void;
 export type OnDataCallback = (msg: DataChannelMessage) => void;
 
 export class WebRtcSession {
@@ -11,10 +12,13 @@ export class WebRtcSession {
 	private dataChannel: RTCDataChannel | null = null;
 	/** Track mid → device_id mapping received from data channel */
 	private trackDeviceMap = new Map<string, string>();
-	/** Streams received before track_map, keyed by mid */
+	/** Video streams received before track_map, keyed by mid */
 	private pendingStreams = new Map<string, MediaStream>();
+	/** Audio streams received before track_map, keyed by mid */
+	private pendingAudioStreams = new Map<string, MediaStream>();
 
 	onTrack: OnTrackCallback | null = null;
+	onAudioTrack: OnAudioTrackCallback | null = null;
 	onData: OnDataCallback | null = null;
 	onConnectionStateChange: ((state: RTCPeerConnectionState) => void) | null = null;
 
@@ -36,19 +40,21 @@ export class WebRtcSession {
 			const track = event.track;
 			if (!mid || !track) return;
 
-			// Only handle video tracks — audio is on the <video> element via stream
-			if (track.kind !== 'video') return;
-
-			// Create a new MediaStream with just this video track
 			const stream = new MediaStream([track]);
-
-			// Look up device_id from track map
 			const deviceId = this.trackDeviceMap.get(mid);
-			if (deviceId && this.onTrack) {
-				this.onTrack(deviceId, stream);
-			} else {
-				// Buffer until track_map arrives
-				this.pendingStreams.set(mid, stream);
+
+			if (track.kind === 'video') {
+				if (deviceId && this.onTrack) {
+					this.onTrack(deviceId, stream);
+				} else {
+					this.pendingStreams.set(mid, stream);
+				}
+			} else if (track.kind === 'audio') {
+				if (deviceId && this.onAudioTrack) {
+					this.onAudioTrack(deviceId, stream);
+				} else {
+					this.pendingAudioStreams.set(mid, stream);
+				}
 			}
 		};
 
@@ -101,7 +107,7 @@ export class WebRtcSession {
 		for (const t of tracks) {
 			this.trackDeviceMap.set(t.mid, t.device_id);
 		}
-		// Flush any pending streams that arrived before the track map
+		// Flush any pending video streams
 		for (const [mid, stream] of this.pendingStreams) {
 			const deviceId = this.trackDeviceMap.get(mid);
 			if (deviceId && this.onTrack) {
@@ -109,6 +115,14 @@ export class WebRtcSession {
 			}
 		}
 		this.pendingStreams.clear();
+		// Flush any pending audio streams
+		for (const [mid, stream] of this.pendingAudioStreams) {
+			const deviceId = this.trackDeviceMap.get(mid);
+			if (deviceId && this.onAudioTrack) {
+				this.onAudioTrack(deviceId, stream);
+			}
+		}
+		this.pendingAudioStreams.clear();
 	}
 
 	private setupDataChannel(channel: RTCDataChannel) {
@@ -191,6 +205,7 @@ export class WebRtcSession {
 		this.dataChannel = null;
 		this.trackDeviceMap.clear();
 		this.pendingStreams.clear();
+		this.pendingAudioStreams.clear();
 	}
 
 	getStats(): Promise<RTCStatsReport> | null {

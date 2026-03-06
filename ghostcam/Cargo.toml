@@ -15,3 +15,4 @@ rcgen = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 rmp-serde = { workspace = true }
+ring = { workspace = true }
