@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::state::AppState;
 use crate::auth;
-use crate::db::{NewSession, SOLO_USER_ID};
+use crate::db_trait::{NewSession, SOLO_USER_ID};
 
 /// Authenticated user identity, extracted by middleware.
 #[derive(Debug, Clone)]

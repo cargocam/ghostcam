@@ -1,5 +1,5 @@
 use anyhow::Result;
-use server_core::frames::InboundStreamTag;
+use ghostcam::wire::frames::InboundStreamTag;
 
 /// Push the current manifest to the server via a QUIC upload stream.
 pub async fn push_manifest(connection: &quinn::Connection, manifest: &str) -> Result<()> {

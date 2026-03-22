@@ -5,7 +5,6 @@ edition = "2021"
 
 [dependencies]
 ghostcam = { workspace = true }
-server-core = { workspace = true }
 quinn = { workspace = true }
 rustls = { workspace = true }
 rcgen = { workspace = true }

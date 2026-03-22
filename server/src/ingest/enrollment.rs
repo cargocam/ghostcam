@@ -4,7 +4,7 @@ use ghostcam::wire::alert::Alert;
 use ghostcam::wire::command::Command;
 use ghostcam::wire::framing;
 
-use crate::db::{Database, NewCameraRecord, SOLO_USER_ID};
+use crate::db_trait::{Database, NewCameraRecord, SOLO_USER_ID};
 use crate::frames::InboundStreamTag;
 use crate::pki::ca::CaManager;
 

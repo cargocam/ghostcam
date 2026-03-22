@@ -6,7 +6,7 @@ use anyhow::Result;
 use bytes::Bytes;
 use ghostcam::wire::alert::{Alert, StreamKind};
 use ghostcam::wire::framing;
-use server_core::frames::InboundStreamTag;
+use ghostcam::wire::frames::InboundStreamTag;
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 

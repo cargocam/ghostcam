@@ -1,5 +1,5 @@
 [package]
-name = "server-core"
+name = "server"
 version = "0.1.0"
 edition = "2021"
 
@@ -21,6 +21,7 @@ ring = { workspace = true }
 base64 = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -34,8 +35,8 @@ axum-extra = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 str0m = { workspace = true }
+sqlx = { workspace = true, features = ["sqlite"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }
-server-solo = { path = "../server-solo" }
 tempfile = "3"

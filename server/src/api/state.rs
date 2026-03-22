@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crate::db::Database;
+use crate::db_trait::Database;
 use crate::egress::sessions::SessionManager;
 use crate::ingest::registry::RoutingRegistry;
 use crate::pki::ca::CaManager;

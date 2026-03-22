@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use super::auth::AuthUser;
 use super::state::AppState;
 use crate::auth;
-use crate::db::NewApiToken;
+use crate::db_trait::NewApiToken;
 
 #[derive(Serialize)]
 pub struct TokenResponse {

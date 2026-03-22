@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::auth::AuthUser;
 use super::state::AppState;
-use crate::db::CameraUpdate;
+use crate::db_trait::CameraUpdate;
 
 #[derive(Serialize)]
 pub struct CameraResponse {
@@ -79,7 +79,7 @@ pub async fn enroll(
     let jti = claims.jti.clone();
 
     // Store enrollment token in DB
-    let token_record = crate::db::NewEnrollmentToken {
+    let token_record = crate::db_trait::NewEnrollmentToken {
         jti: jti.clone(),
         user_id: user.user_id.clone(),
         expires_at,

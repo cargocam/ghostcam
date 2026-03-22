@@ -1,17 +1,30 @@
+mod api;
+mod audit;
+mod auth;
+mod db;
+mod db_trait;
+mod egress;
+mod frames;
+mod ingest;
+mod pki;
+mod redis;
+mod sse;
+
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use server_core::api::routes::build_router;
-use server_core::api::state::AppState;
-use server_core::egress::sessions::SessionManager;
-use server_core::ingest::accept::run_accept_loop;
-use server_core::ingest::quic_config::build_server_endpoint;
-use server_core::ingest::registry::RoutingRegistry;
-use server_core::pki::bootstrap::bootstrap_pki;
-use server_core::pki::revocation::RevocationCache;
-use server_core::redis::connection::RedisManager;
-use server_core::sse::SseEventBus;
-use server_solo::db::SqliteDatabase;
+use crate::api::routes::build_router;
+use crate::api::state::AppState;
+use crate::db::SqliteDatabase;
+use crate::db_trait::Database;
+use crate::egress::sessions::SessionManager;
+use crate::ingest::accept::run_accept_loop;
+use crate::ingest::quic_config::build_server_endpoint;
+use crate::ingest::registry::RoutingRegistry;
+use crate::pki::bootstrap::bootstrap_pki;
+use crate::pki::revocation::RevocationCache;
+use crate::redis::connection::RedisManager;
+use crate::sse::SseEventBus;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -42,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
     let db = SqliteDatabase::open(&db_path).await?;
     if let Some(initial_password) = db.initialize().await? {
         println!("============================================================");
-        println!("Ghostcam server-solo first run");
+        println!("Ghostcam server first run");
         println!();
         println!("Initial operator password: {initial_password}");
         println!();
@@ -52,7 +65,7 @@ async fn main() -> anyhow::Result<()> {
         println!("Losing this file requires re-enrolling all cameras.");
         println!("============================================================");
     }
-    let db: Arc<dyn server_core::db::Database> = Arc::new(db);
+    let db: Arc<dyn Database> = Arc::new(db);
     tracing::info!("database initialized at {db_path}");
 
     // --- PKI ---

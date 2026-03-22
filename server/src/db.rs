@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use ghostcam::types::{CertFingerprint, DeviceId, SessionId, TokenId, UserId};
-use server_core::auth;
-use server_core::db::{
+use crate::auth;
+use crate::db_trait::{
     ApiTokenRecord, CameraRecord, CameraUpdate, Database, NewApiToken, NewCameraRecord,
     NewEnrollmentToken, NewSession, SessionRecord, UserRecord, UserUpdate, SOLO_USER_ID,
 };

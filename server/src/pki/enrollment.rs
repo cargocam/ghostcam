@@ -3,7 +3,7 @@ use ghostcam::types::UserId;
 use serde::{Deserialize, Serialize};
 
 use super::ca::CaManager;
-use crate::db::{Database, NewEnrollmentToken};
+use crate::db_trait::{Database, NewEnrollmentToken};
 
 /// JWT claims for an enrollment token.
 #[derive(Debug, Serialize, Deserialize)]

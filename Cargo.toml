@@ -1,10 +1,9 @@
 [workspace]
-members = ["ghostcam", "camera", "server-core", "server-solo", "server-multi"]
+members = ["ghostcam", "camera", "server"]
 resolver = "2"
 
 [workspace.dependencies]
 ghostcam = { path = "ghostcam" }
-server-core = { path = "server-core" }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }

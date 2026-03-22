@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use ghostcam::wire::alert::Alert;
 use ghostcam::wire::command::Command;
 use ghostcam::wire::framing;
-use server_core::frames::InboundStreamTag;
+use ghostcam::wire::frames::InboundStreamTag;
 
 /// Data extracted from an enrollment JWT.
 pub struct EnrollmentData {

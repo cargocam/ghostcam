@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 use super::enrollment::handle_enrollment;
 use super::registry::RoutingRegistry;
 use super::slot::IngestSlot;
-use crate::db::Database;
+use crate::db_trait::Database;
 use crate::frames::InboundStreamTag;
 use crate::pki::ca::CaManager;
 use crate::pki::revocation::RevocationCache;

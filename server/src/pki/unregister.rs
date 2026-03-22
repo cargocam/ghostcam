@@ -2,7 +2,7 @@ use anyhow::Result;
 use ghostcam::types::DeviceId;
 
 use super::revocation::RevocationCache;
-use crate::db::Database;
+use crate::db_trait::Database;
 use crate::ingest::registry::RoutingRegistry;
 use crate::redis::connection::RedisManager;
 
