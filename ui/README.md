@@ -1,103 +1,106 @@
-# Ghostcam Viewer
-
-Svelte 5 SPA for viewing live camera feeds from the Ghostcam bridge over WebRTC.
+# Ghostcam UI
+Svelte 5 single-page viewer for live and playback camera monitoring.
 
 ![Ghostcam viewer with 4 simulated cameras](assets/screenshot.png)
 
 ## Setup
-
 ```bash
 bun install
-bun run dev       # Dev server at http://localhost:5173 (proxies /api → :3000)
-bun run build     # Production build
-bun run check     # Type-check
+bun run dev      # http://localhost:5173
+bun run build
+bun run check
 ```
 
-## Tech Stack
+Equivalent `npm run ...` commands also work after `npm install`.
 
-- **Svelte 5** with runes (`$state`, `$derived`, `$effect`)
-- **Vite 6** dev server and build
-- **Tailwind CSS 4** with OKLCH color tokens
-- **bits-ui 2** headless component primitives
-- **lucide-svelte** icons
-- **Leaflet** map integration
+## Dev-server integration
+`vite.config.ts` proxies these paths to backend port `3000`:
+- `/api`
+- `/events`
+- `/hls`
 
-## Features
+This matches the current `server-core` HTTP surface.
 
-- Multi-camera grid with auto-fit and 1+5 featured layouts
-- Full-screen single-camera view (keyboard: F/M/S/P/Esc)
-- Live audio playback with per-camera mute (one camera unmuted at a time)
-- Live telemetry display (CPU, memory, temperature, uptime, GPS)
-- Camera group switching
-- Inline camera renaming (persisted to localStorage)
-- Picture-in-Picture and snapshot capture
-- Map view with camera markers (dot/detailed/PiP modes)
-- Dashboard view with aggregate stats and sparkline charts
-- Dynamic renegotiation: cameras can join/leave without page reload
-- Connection alerts (disconnect/reconnect notifications)
-- Auto-reconnection with exponential backoff (1s–30s, up to 10 retries)
-- Dark/light/system theme
-- Mobile responsive (sidebar + drawer nav)
+## Stack
+- Svelte 5 (runes-based state model)
+- Vite 6
+- Tailwind CSS 4
+- bits-ui + lucide-svelte
+- Leaflet (map view)
+- hls.js (playback path)
 
-## Architecture
+## High-level architecture
+The UI uses a **per-camera connection model**:
+- one `RTCPeerConnection` per online camera,
+- one `EventSource` for global online/offline events,
+- one central store (`transportStore`) coordinating auth/session lifecycle.
 
-### Connection Flow
+### Startup flow
+`App.svelte` calls `transportStore.initialize()`:
+1. check auth session by probing `/api/v1/cameras`,
+2. fetch initial camera list (`GET /api/v1/cameras`),
+3. start SSE (`GET /events`),
+4. create `ConnectionManager`,
+5. connect WebRTC for each currently-online camera.
 
-1. Fetch group list from bridge HTTP API
-2. Create `RTCPeerConnection` with recv-only transceivers (1 video + 1 audio per camera)
-3. Create `"telemetry"` data channel
-4. Generate SDP offer, POST to `/api/v1/watch/{group_id}`
-5. Apply SDP answer, receive media tracks
-6. `track_map` message maps SDP mids to device IDs
-7. Poll WebRTC stats every 2s for bitrate/frame metrics
-8. On `renegotiate`: `setRemoteDescription(offer)` → `createAnswer()` → send `sdp_answer` on data channel
-9. Updated `track_map` maps new SDP mids to device IDs
+### SSE flow
+`sse.ts` listens for:
+- `camera_online`
+- `camera_offline`
 
-### Stores
+`transportStore` applies these to `cameraStore`, opens/closes per-camera connections, and pushes alert entries.
 
-| Store | File | Purpose |
-|-------|------|---------|
-| `transportStore` | `transport.svelte.ts` | WebRTC connection lifecycle, reconnect, stats polling |
-| `cameraStore` | `cameras.svelte.ts` | Camera registry, streams, telemetry, selection |
-| `groupStore` | `groups.svelte.ts` | Group list and active group |
-| `settingsStore` | `settings.svelte.ts` | Theme, grid layout, view mode, sidebar (localStorage) |
-| `alertStore` | `alerts.svelte.ts` | Disconnect/reconnect event log |
-| `cameraConfigStore` | `cameraConfig.svelte.ts` | Per-camera display name overrides (localStorage) |
-| `videoStatsStore` | `videoStats.svelte.ts` | Per-track WebRTC inbound-rtp stats |
-| `thumbnailStore` | `thumbnails.svelte.ts` | Canvas-captured frame thumbnails (data URLs) |
+### WebRTC flow per camera
+`CameraConnection` (`webrtc.ts`) does:
+1. create peer connection (ICE-lite assumptions),
+2. add recv-only transceivers (video + audio),
+3. create `telemetry` and `commands` data channels,
+4. generate offer, strip `a=candidate` lines,
+5. call `POST /api/v1/watch` with `device_id` + `sdp_offer`,
+6. apply `sdp_answer`,
+7. stream tracks + telemetry updates into stores.
 
-Stores are exported object literals with `$state` fields and methods (not class-based).
+On disconnect, `ConnectionManager` retries after `RECONNECT_DELAY_MS` while camera remains online.
 
-### Key Files
+## Client mode and server demand control
+The `commands` data channel is used to send:
+- `{"type":"client_mode","mode":"live|playback|map"}`
 
-| File | Purpose |
-|------|---------|
-| `signaling.ts` | HTTP client for SDP exchange + REST API |
-| `webrtc.ts` | `RTCPeerConnection` lifecycle, track mapping, data channel setup, dynamic renegotiation |
-| `data-channel.ts` | Routes incoming JSON messages to appropriate stores |
+`App.svelte` wires scrubber mode changes to:
+- broadcast mode updates to all cameras, or
+- in focused `1+5` layout, set playback mode only for the focused camera.
 
-### Data Channel Messages
+This aligns server ingest demand (`start/stop video/audio`) with viewer intent.
 
-**Bridge → Viewer:**
+## Playback model
+Playback uses server HLS endpoints directly:
+- manifest: `/hls/<device_id>/playlist.m3u8`
+- init segment: `/hls/<device_id>/init.mp4`
+- segment objects: `/hls/<device_id>/<segment_id>`
 
-| Type | Handler |
-|------|---------|
-| `cameras` | `cameraStore.setCameras()` |
-| `camera_join` | `cameraStore.addCamera()` + alert |
-| `camera_leave` | `cameraStore.removeCamera()` + alert |
-| `telemetry` | `cameraStore.updateTelemetry()` |
-| `track_map` | `WebRtcSession.handleTrackMap()` (intercepted in `webrtc.ts`) |
-| `renegotiate` | `WebRtcSession.handleRenegotiate()` (intercepted in `webrtc.ts`, not propagated) |
+`HlsPlayer.svelte`:
+- parses manifest window bounds from segment IDs,
+- supports seek updates from scrubber time,
+- attempts media-source recovery on certain append failures.
 
-**Viewer → Bridge:**
+`scrubberStore` provides global live/playback timeline state and playback ticking.
 
-| Type | Handler |
-|------|---------|
-| `sdp_answer` | Sent by `WebRtcSession.handleRenegotiate()` after completing SDP answer |
+## Telemetry model
+- Live telemetry arrives via WebRTC `telemetry` data channel.
+- Historical telemetry for dashboard/map playback modes comes from:
+  - `GET /api/v1/telemetry/:device_id?from=&to=&limit=`
+- `telemetry-history.ts` adds short-lived client caching + nearest-sample lookup helpers.
 
-## Conventions
+## State stores
+- `transportStore`: auth/session bootstrap + SSE + connection manager lifecycle.
+- `cameraStore`: camera list, stream refs, telemetry snapshots.
+- `settingsStore`: theme/layout/view/mute preferences.
+- `scrubberStore`: timeline mode + playhead.
+- `videoStatsStore`: inbound RTP-derived resolution/codec/bitrate/drops.
+- `alertsStore`: online/offline alert feed.
+- `cameraConfigStore`: local display-name overrides.
 
-- **Svelte 5 runes only** — no legacy `$:` reactivity
-- **Tailwind CSS 4** — OKLCH color tokens in `app.css`, `cn()` for class merging
-- **localStorage** keys prefixed with `ghostcam-`
-- **bits-ui** primitives in `components/ui/`, domain components alongside views
+## Known compatibility stubs in current UI code
+- `signaling.ts::listGroups()` targets `/api/v1/groups`; server route is not currently present, and callers already treat it as optional.
+- `playback.ts` exposes legacy `/api/v1/cameras/:id/playback` helpers that are not used by current views (playback uses `/hls/...` paths).
+- `sendIceCandidate()` is defined for API completeness; current ICE-lite flow does not depend on active trickle exchange.

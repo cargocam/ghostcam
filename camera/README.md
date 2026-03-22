@@ -1,98 +1,112 @@
 # camera
+`camera` is the device-side runtime. It owns enrollment, QUIC session management, media capture fanout, local fMP4 recording, command execution, and telemetry buffering.
 
-Ghostcam camera agent — streams H.264 video and Opus audio over QUIC to the bridge server. Connects, performs a `DeviceHello` handshake, then continuously sends media frames on unidirectional QUIC streams.
+This README describes the runtime at the current `rewrite` branch shape.
 
-Supports two modes:
-- **Test source** (`--test-source`): Loops a pre-recorded H.264 file with Opus silence. No system dependencies beyond Rust.
-- **Real capture** (default): Uses `rpicam-vid`/`libcamera-vid` for video, `cpal` + Opus for audio, and reads `/proc`/`/sys` for system telemetry. Requires Linux with a camera.
+## What this process does
+At startup the camera binary:
+1. Resolves configuration (`CLI` → `/boot/ghostcam.conf` → `<data_dir>/server.addr` fallback).
+2. Loads or creates persistent device identity (`device.crt` + `device.key`).
+3. Optionally runs enrollment if no user association cert exists (`user.crt` + `user.key`).
+4. Starts capture sources and a telemetry loop.
+5. Connects to the server over QUIC and establishes a control/media session.
+6. Runs until shutdown, reconnecting with exponential backoff on disconnect.
 
-Automatically reconnects to the bridge with exponential backoff (1s → 30s cap).
+## Runtime layout
+- `src/main.rs`: process orchestration and reconnect loop.
+- `src/session.rs`: one live QUIC session, command reader, stream writers, recording/upload workers.
+- `src/commands.rs`: server command handling (`start/stop`, uploads, network config, firmware, unregister).
+- `src/enrollment.rs`: JWT-driven enrollment flow (token + CSR + signed cert install).
+- `src/certs.rs`: cert/key load or generation helpers.
+- `src/quic.rs`: client endpoint + connect helpers.
+- `src/capture/`: capture sources (`video_test`, `audio_test`) and `CaptureMessage` definitions.
+- `src/recording/`: local segmenter/muxer, ring buffer, manifest generation, upload responders.
+- `src/telemetry/`: sensor reads + buffered datagram sender.
+- `src/network.rs`: `nmcli`-based Wi-Fi command handlers.
+- `src/firmware.rs`: update download/verify/swap/exit flow.
 
-## System Requirements (Real Capture)
+Per-component docs:
+- `src/README.md`
+- `src/capture/README.md`
+- `src/stream/README.md`
+- `src/recording/README.md`
+- `src/telemetry/README.md`
 
-- `rpicam-vid` or `libcamera-vid` in PATH (Raspberry Pi OS, or any libcamera-enabled Linux)
-- `libopus-dev` (Linux) or `brew install opus` (macOS, for cross-compilation)
-- Optional: `gpsd` running on `localhost:2947` for GPS data
+## Data directory contract
+Default data root is `/var/ghostcam` (override with `--data-dir`).
 
-## Usage
+Important files:
+- `device.crt`, `device.key`: long-lived device identity.
+- `user.crt`, `user.key`: enrollment-issued user association cert/key.
+- `ca.crt`: server CA (optional, received during cert refresh / enrollment).
+- `server.addr`: remembered QUIC endpoint.
+- `server_fingerprint`: TOFU pin written during enrollment.
+- `telemetry.buf`: persisted telemetry backlog while offline.
+- `firmware/current`, `firmware/previous`, `firmware/healthy`: update + watchdog markers.
+- `segments/*.m4s` + generated init/manifest state via recording pipeline.
 
-```bash
-# Generate test video (one-time, for --test-source mode)
-mkdir -p test-data
-ffmpeg -f lavfi -i testsrc2=duration=10:size=640x480:rate=30 \
-  -c:v libx264 -profile:v baseline -x264-params keyint=60:min-keyint=60 \
-  -f h264 test-data/test.h264
+## CLI flags
+Implemented flags in `main.rs`:
+- `--server-addr <host:port>`
+- `--test-source`
+- `--test-video <path>`
+- `--segment-dir <path>`
+- `--no-audio`
+- `--no-gps`
+- `--data-dir <path>`
+- `--enrollment-jwt <jwt>`
+- `--no-tofu`
 
-# Test source mode (any platform)
-cargo run -p camera -- --test-source --bridge-addr 127.0.0.1:4433 --device-id cam-01 --group-id default
+Notes:
+- `--segment-dir` is parsed into config, but the active session path currently derives segments from `<data_dir>/segments`.
+- `--no-tofu` is currently parsed but not applied in the connect path.
 
-# Real capture (Linux with camera)
-cargo run -p camera -- --bridge-addr 127.0.0.1:4433 --device-id cam-01 --group-id default
+## Enrollment and identity model
+Enrollment path (`src/enrollment.rs`) is used when no `user.crt` exists:
+1. Parse enrollment JWT (without local signature validation).
+2. Connect with device cert only.
+3. Open control bidi stream and send `Alert::Enrollment { token }`.
+4. Send CSR (`Alert::Csr`).
+5. Receive `Command::CertRefresh`.
+6. Ack `cert_refresh`, then persist new cert chain artifacts.
 
-# Real capture with GPS
-cargo run -p camera -- --enable-gps --device-id cam-01 --group-id default
+After enrollment, reconnects include the user cert as the second certificate in the client chain.
 
-# Launch multiple test cameras
-./camera/launch-cameras.sh 4 default
-```
+## Session model (camera ↔ server)
+For each connection (`Session::establish` / `Session::run`):
+- Open control stream and send `InboundStreamTag::Alerts` + `Alert::Handshake`.
+- Open persistent unidirectional media streams:
+  - `InboundStreamTag::Video`
+  - `InboundStreamTag::Audio`
+- Spawn concurrent workers:
+  - command reader
+  - video writer
+  - audio writer
+  - recording muxer
+  - segment event handler
+  - upload command handler
+- Upload any buffered telemetry backlog once at session establishment.
 
-## CLI Flags
+Server commands toggle atomic `video_enabled` / `audio_enabled` flags; local recording still continues even if live streaming is disabled.
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--bridge-addr` | `127.0.0.1:4433` | Bridge QUIC address (host:port) |
-| `--device-id` | `test-cam-01` | Unique device identifier |
-| `--group-id` | `default` | Camera group assignment |
-| `--test-source` | _(off)_ | Use test source instead of real capture |
-| `--test-file` | `test-data/test.h264` | Raw H.264 Annex-B file (for `--test-source`) |
-| `--width` | `1280` | Video width (real capture) |
-| `--height` | `720` | Video height (real capture) |
-| `--fps` | `30` | Target frame rate |
-| `--bitrate` | `0` (auto) | Video bitrate in bits/s |
-| `--keyframe-interval` | `60` | Keyframe interval in frames |
-| `--no-audio` | _(off)_ | Disable audio capture |
-| `--no-telemetry` | _(off)_ | Disable telemetry collection |
-| `--enable-gps` | _(off)_ | Enable GPS via gpsd |
+## Recording behavior
+The recording pipeline (`src/recording`) writes rolling fMP4 segments and emits events:
+- `SegmentEvent::InitReady`
+- `SegmentEvent::Finalized`
+- `SegmentEvent::ManifestUpdated`
+- storage / eviction events
 
-## How It Works
+Upload commands from server (`UploadSegment`, `UploadInit`) are fulfilled from this local store.
 
-1. **Connect** — Generates self-signed cert, opens QUIC connection to bridge
-2. **Handshake** — Sends `DeviceHello` JSON on bidirectional control stream
-3. **Command listener** — Spawns a task to read `CameraCommand` messages from the bridge on the control stream (stream control, config, group reassign)
-4. **Capture** — Starts capture modules (video, audio, telemetry) which produce `CaptureMessage`s on a channel
-5. **Send loop** — Reads from capture channel, checks `tokio::sync::watch` gates set by command handler, sends each message on a unidirectional QUIC stream with 13-byte frame header
-6. **Reconnect** — On connection loss, drains capture messages during backoff, then reconnects
+## Telemetry behavior
+Telemetry loop (`src/telemetry/mod.rs`):
+- polls sensors every `TELEMETRY_POLL_INTERVAL_SECS`,
+- sends on threshold changes or heartbeat interval,
+- writes to QUIC datagrams when connected,
+- otherwise appends to `TelemetryBuffer` with run-length deduplication,
+- flushes to disk on shutdown.
 
-### Test Source Mode
-
-- Video: Parses H.264 NALs from test file, loops indefinitely with FPS-paced timing
-- Audio: Sends 3-byte Opus silence frames every 20ms
-- No telemetry (server shows no telemetry in viewer, fine for dev)
-
-### Real Capture Mode
-
-- **Video**: Spawns `rpicam-vid` (or `libcamera-vid`) as subprocess, reads H.264 from stdout, parses NAL units via streaming `NalParser`
-- **Audio**: `cpal` default input → stereo-to-mono → resample to 48kHz → Opus encode (20ms frames). Non-fatal if no audio device.
-- **Telemetry**: Polls `/proc/stat` (CPU), `/sys/class/thermal` (temp), `/proc/meminfo` (memory), `/proc/uptime`, `/proc/loadavg`, `/proc/net/dev` (network). GPS via gpsd TCP. Sends sparse diffs with thresholds, full heartbeat every 30s. MessagePack-encoded as `StreamType::Telemetry`.
-
-## Modules
-
-| Module | Purpose |
-|--------|---------|
-| `main` | CLI parsing, capture orchestration, QUIC reconnect loop, command handler |
-| `quic` | QUIC client setup (uses `ghostcam::quic` helpers) |
-| `capture/mod` | `CaptureMessage` enum (VideoNal, Audio, Telemetry) |
-| `capture/video` | `rpicam-vid` subprocess + streaming NAL parser |
-| `capture/audio` | `cpal` input + Opus encoding |
-| `capture/telemetry` | Linux `/proc`/`/sys` readers + gpsd client |
-
-Shared modules in `ghostcam` lib: `h264` (NAL parser, `NalParser`), `stream` (frame send), `quic` (cert gen, hello, command recv), `command` (CameraCommand types), `telemetry` (SparseTelemetry types).
-
-## Notes
-
-- Server certificate verification is disabled (dev only). Production will use mTLS.
-- The bridge sends `CameraCommand` messages back over the QUIC control stream (start/stop video/audio/telemetry, configure, force_keyframe, reassign_group, custom). Commands use `tokio::sync::watch` channels to gate frame sending without blocking.
-- Unknown commands are logged and ignored for forward compatibility.
-- `rpicam-vid` child process is killed on drop (`kill_on_drop(true)`) and on SIGTERM/SIGINT.
-- Audio capture failure is non-fatal — the camera continues without audio.
-- Telemetry readers return zero/None on non-Linux platforms (stubs for cross-compilation).
+## Current implementation notes
+- “Real capture” mode currently falls back to test audio/video sources (capture hardware pipeline is stubbed for future plans).
+- Stream writer helpers in `src/stream/` are maintained, but session currently inlines equivalent writer loops.
+- TOFU verification helpers exist in `src/tofu.rs`, but main session connect path does not currently invoke them.
