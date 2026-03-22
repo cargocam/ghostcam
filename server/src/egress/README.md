@@ -1,50 +1,39 @@
-# server-core/src/egress
-Viewer-facing WebRTC egress path. Converts ingest slot broadcasts into per-viewer WebRTC media/data flows.
+# egress
 
-## Main components
-- `handle.rs`: `EgressHandle` lifecycle and str0m integration.
-- `data_channel.rs`: client command message schema (`client_mode`).
-- `rtp.rs`: H.264 NAL parsing/accumulation helpers and timestamp conversion.
-- `sessions.rs`: `SessionManager` for teardown/scoping.
+WebRTC egress pipeline. Each viewer × camera pair is one `EgressHandle` running a str0m WebRTC session on its own UDP socket. The server operates in ICE-lite mode — it never initiates connectivity checks, only responds to STUN binding requests from the browser.
 
-## Session creation path
-`/api/v1/watch` calls `EgressHandle::create(...)`:
-1. Bind UDP socket.
-2. Build ICE-lite str0m `Rtc` (H.264 + Opus enabled).
-3. Add local host candidate using configured public IP + bound UDP port.
-4. Accept browser SDP offer and generate answer.
-5. Parse negotiated video/audio mids.
-6. Create telemetry data channel.
-7. Subscribe to slot broadcast channels (video/audio/telemetry).
+## Flow
 
-The spawned handle event loop is then tracked in `SessionManager`.
+```
+POST /api/v1/watch { device_id, sdp_offer }
+    │
+    ▼
+EgressHandle::create()
+    ├── bind UDP socket (0.0.0.0:0)
+    ├── build str0m Rtc (ICE-lite, H.264 + Opus only)
+    ├── add local candidate: public_ip:bound_port
+    ├── accept_offer(sdp_offer) → SdpAnswer
+    ├── parse video mid, audio mid, telemetry channel from answer SDP
+    └── subscribe to IngestSlot broadcast channels
 
-## Runtime loop behavior (`EgressHandle::run`)
-The loop multiplexes:
-- str0m output polling (`Transmit`, `Timeout`, internal events),
-- UDP receives from browser peer,
-- slot video frames,
-- slot audio frames,
-- slot telemetry datagrams.
+EgressHandle::run()
+    loop {
+        poll str0m output (Transmit → send UDP, Event → handle)
+        recv UDP packet → rtc.handle_input(Receive)
+        recv timeout → rtc.handle_input(Timeout)
+        recv VideoFrame → packetize H.264 → rtc writer
+        recv AudioFrame → rtc writer (one RTP per Opus frame)
+        recv TelemetryDatagram → send JSON on data channel
+    }
+```
 
-On shutdown, subscriber demand counters are decremented via `update_subscriber_demand`.
+ICE candidate note: browser SDP offers may include mDNS-obfuscated candidates (Firefox) that str0m cannot parse. The viewer strips all `a=candidate` lines before posting the offer — safe because the server is ICE-lite and never uses the browser's candidates anyway.
 
-## Client mode protocol
-Client can send JSON on commands data channel:
-- `{"type":"client_mode","mode":"live|playback|map"}`
+## Files
 
-This feeds `ingest::demand` and controls camera-side start/stop command emission.
-
-## Video packetization helpers
-`rtp.rs` provides:
-- `parse_annex_b` to split byte streams into NAL units,
-- `NalAccumulator` to prepend buffered SPS/PPS/SEI before next VCL access unit,
-- timestamp conversion helpers for 90kHz video and 48kHz audio clocks.
-
-## Session management (`sessions.rs`)
-`SessionManager` tracks active sessions by `session_id`:
-- register,
-- teardown by session,
-- teardown by device (camera disconnect),
-- teardown by user,
-- ownership lookup for API authorization.
+| File | Purpose |
+|------|---------|
+| `handle.rs` | `EgressHandle` — one per viewer×camera: WebRTC session lifecycle, UDP event loop, frame dispatch |
+| `sessions.rs` | `SessionManager` — concurrent map of `session_id → EgressHandle`, creation and teardown |
+| `rtp.rs` | H.264 NAL → RTP packetization (Single NAL ≤ 1188 bytes, FU-A fragmentation for larger). Timestamp conversion (µs → 90 kHz video, 48 kHz audio). |
+| `data_channel.rs` | `ClientMessage` — JSON messages sent to the viewer on the WebRTC data channel (telemetry, camera events) |

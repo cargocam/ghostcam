@@ -1,39 +1,44 @@
-# server-core/src/pki
-PKI and enrollment primitives used by server deployments.
+# pki
 
-## Components
-- `ca.rs`: in-memory CA manager (load/generate, CSR signing, enrollment JWT signing/verification, user-cert verification).
-- `bootstrap.rs`: first-run PKI bootstrap (`ca.crt`, `ca.key`, `server.crt`, `server.key`) and reload path.
-- `server_tls.rs`: self-signed server TLS cert generation/loading.
-- `enrollment.rs`: enrollment JWT claim structures.
-- `revocation.rs`: in-memory revoked-serial cache.
-- `unregister.rs`: unregister workflow (revoke + DB delete + optional Redis purge).
+Certificate authority and PKI operations. The server acts as its own CA — it signs device certificates for cameras during enrollment and maintains a certificate revocation list (CRL).
 
-## Enrollment trust chain
-1. User requests enrollment token via API.
-2. Server signs enrollment JWT (ES256) using CA keypair.
-3. Camera submits token + CSR over enrollment connection.
-4. Server verifies JWT and signs CSR with instance CA.
-5. Camera receives `cert_refresh` payload and persists cert chain material.
+## Bootstrap
 
-## CA manager behavior (`ca.rs`)
-`CaManager` supports:
-- generation of a long-lived instance CA (`Ghostcam Instance CA`),
-- CSR signing with `ClientAuth` EKU and CN set to `device_id`,
-- ES256 JWT signing/verification for enrollment tokens,
-- verification that presented user cert chains to this CA.
+On first start, `bootstrap::bootstrap_pki` checks `GHOSTCAM_DATA_DIR` for an existing CA keypair and server certificate. If absent:
 
-## Bootstrap behavior (`bootstrap.rs`)
-On first run:
-- create PKI directory,
-- generate CA and server TLS cert/key files,
-- return `is_first_run = true`.
+1. Generates a CA keypair (`ca.key`, `ca.crt`) — self-signed, long-lived
+2. Signs a server TLS certificate (`server.key`, `server.crt`) from the CA
+3. Stores both on disk
 
-On subsequent runs:
-- load existing PEM files into runtime structs,
-- preserve certificate fingerprints across restarts.
+The CA certificate is distributed to cameras during enrollment and used for mTLS verification.
 
-## Revocation model
-- `RevocationCache` is an in-memory set checked during ingest accept.
-- `unregister_camera()` updates cache and DB, and optionally persists revocation to Redis (`redis::revocation::revoke_cert`).
-- Redis-driven refresh loops live under `server-core/src/redis/revocation.rs`.
+## Enrollment Flow
+
+```
+camera sends Alert::Enrollment { enrollment_token }
+    │
+    ▼
+pki::enrollment::sign_device_cert(ca, token, device_id)
+    ├── verify enrollment JWT (issued by server, time-limited)
+    ├── generate device keypair
+    ├── sign device cert with CA
+    └── return (device_cert_pem, device_key_pem)
+
+server sends signed cert back to camera via alerts stream
+camera stores cert, uses it for future mTLS connections
+```
+
+## Revocation
+
+`RevocationCache` maintains an in-memory set of revoked fingerprints loaded from the DB at startup and updated on camera delete. The QUIC accept loop checks every connecting camera's cert fingerprint against this cache before proceeding.
+
+## Files
+
+| File | Purpose |
+|------|---------|
+| `bootstrap.rs` | `bootstrap_pki` — CA and server cert generation on first start |
+| `ca.rs` | `CertificateAuthority` — signs device certificates |
+| `enrollment.rs` | `sign_device_cert` — validates enrollment JWT, issues signed camera cert |
+| `server_tls.rs` | Builds `rustls::ServerConfig` from the server cert for the QUIC endpoint |
+| `revocation.rs` | `RevocationCache` — in-memory fingerprint blocklist |
+| `unregister.rs` | Revoke a camera: add fingerprint to revocation list, delete DB record |

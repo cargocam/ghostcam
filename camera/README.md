@@ -1,112 +1,77 @@
 # camera
-`camera` is the device-side runtime. It owns enrollment, QUIC session management, media capture fanout, local fMP4 recording, command execution, and telemetry buffering.
 
-This README describes the runtime at the current `rewrite` branch shape.
+Ghostcam camera agent. Connects to the server over QUIC with mTLS, performs enrollment on first boot, then continuously streams H.264 video, Opus audio, and system telemetry. Records video locally to an fMP4 ring buffer for HLS playback.
 
-## What this process does
-At startup the camera binary:
-1. Resolves configuration (`CLI` → `/boot/ghostcam.conf` → `<data_dir>/server.addr` fallback).
-2. Loads or creates persistent device identity (`device.crt` + `device.key`).
-3. Optionally runs enrollment if no user association cert exists (`user.crt` + `user.key`).
-4. Starts capture sources and a telemetry loop.
-5. Connects to the server over QUIC and establishes a control/media session.
-6. Runs until shutdown, reconnecting with exponential backoff on disconnect.
+Two modes:
+- **Test source** (`--test-source`): loops a pre-recorded H.264 file with synthetic audio. No system dependencies beyond Rust. Used for development and Docker.
+- **Real capture** (default): `rpicam-vid`/`libcamera-vid` for video, `cpal` + Opus for audio, `/proc`/`/sys` + gpsd for telemetry. Requires Linux with a camera.
 
-## Runtime layout
-- `src/main.rs`: process orchestration and reconnect loop.
-- `src/session.rs`: one live QUIC session, command reader, stream writers, recording/upload workers.
-- `src/commands.rs`: server command handling (`start/stop`, uploads, network config, firmware, unregister).
-- `src/enrollment.rs`: JWT-driven enrollment flow (token + CSR + signed cert install).
-- `src/certs.rs`: cert/key load or generation helpers.
-- `src/quic.rs`: client endpoint + connect helpers.
-- `src/capture/`: capture sources (`video_test`, `audio_test`) and `CaptureMessage` definitions.
-- `src/recording/`: local segmenter/muxer, ring buffer, manifest generation, upload responders.
-- `src/telemetry/`: sensor reads + buffered datagram sender.
-- `src/network.rs`: `nmcli`-based Wi-Fi command handlers.
-- `src/firmware.rs`: update download/verify/swap/exit flow.
+Auto-reconnects to the server with exponential backoff (1s → 30s).
 
-Per-component docs:
-- `src/README.md`
-- `src/capture/README.md`
-- `src/stream/README.md`
-- `src/recording/README.md`
-- `src/telemetry/README.md`
+## System Requirements (Real Capture)
 
-## Data directory contract
-Default data root is `/var/ghostcam` (override with `--data-dir`).
+- `rpicam-vid` or `libcamera-vid` in PATH (Raspberry Pi OS or libcamera-enabled Linux)
+- `libopus-dev` (Linux) or `brew install opus` (macOS, cross-compilation)
+- Optional: `gpsd` on `localhost:2947` for GPS
 
-Important files:
-- `device.crt`, `device.key`: long-lived device identity.
-- `user.crt`, `user.key`: enrollment-issued user association cert/key.
-- `ca.crt`: server CA (optional, received during cert refresh / enrollment).
-- `server.addr`: remembered QUIC endpoint.
-- `server_fingerprint`: TOFU pin written during enrollment.
-- `telemetry.buf`: persisted telemetry backlog while offline.
-- `firmware/current`, `firmware/previous`, `firmware/healthy`: update + watchdog markers.
-- `segments/*.m4s` + generated init/manifest state via recording pipeline.
+## CLI Flags
 
-## CLI flags
-Implemented flags in `main.rs`:
-- `--server-addr <host:port>`
-- `--test-source`
-- `--test-video <path>`
-- `--segment-dir <path>`
-- `--no-audio`
-- `--no-gps`
-- `--data-dir <path>`
-- `--enrollment-jwt <jwt>`
-- `--no-tofu`
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--server-addr` | _(from enrollment / conf file)_ | Server QUIC address `host:port` |
+| `--test-source` | off | Use test H.264 file + synthetic audio |
+| `--test-video` | `test-data/test.h264` | H.264 file for `--test-source` |
+| `--data-dir` | `/var/ghostcam` | Device cert, config, and enrollment state |
+| `--segment-dir` | `/var/ghostcam/segments` | fMP4 ring buffer for HLS recording |
+| `--no-audio` | off | Disable audio capture |
+| `--no-gps` | off | Disable GPS via gpsd |
+| `--enrollment-jwt` | _(none)_ | JWT to skip QR-based enrollment |
+| `--no-tofu` | off | Disable TOFU server fingerprint verification (dev/testing) |
 
-Notes:
-- `--segment-dir` is parsed into config, but the active session path currently derives segments from `<data_dir>/segments`.
-- `--no-tofu` is currently parsed but not applied in the connect path.
+Server address resolution precedence: `--server-addr` CLI flag → `ghostcam.conf` → `/etc/ghostcam/server.addr` (written during enrollment) → hardcoded default.
 
-## Enrollment and identity model
-Enrollment path (`src/enrollment.rs`) is used when no `user.crt` exists:
-1. Parse enrollment JWT (without local signature validation).
-2. Connect with device cert only.
-3. Open control bidi stream and send `Alert::Enrollment { token }`.
-4. Send CSR (`Alert::Csr`).
-5. Receive `Command::CertRefresh`.
-6. Ack `cert_refresh`, then persist new cert chain artifacts.
+## How It Works
 
-After enrollment, reconnects include the user cert as the second certificate in the client chain.
+1. **Enrollment** — On first boot (no device cert), camera either scans a QR code or accepts an `--enrollment-jwt`. The server signs and returns a device certificate.
+2. **TOFU** — On first connection after enrollment, the server's TLS fingerprint is pinned. Subsequent connections verify against the pin (bypassed with `--no-tofu`).
+3. **Connect** — Opens a QUIC connection using the device cert for mTLS. Opens persistent streams: `Alerts` (bidirectional), `Video`, `Audio`.
+4. **Handshake** — Sends an `Alert::Handshake` with device ID, cert fingerprint, and capabilities.
+5. **Command loop** — Spawns a task reading `CameraCommand` messages from the server on the `Alerts` stream. Commands update `watch` channels that gate frame sending.
+6. **Capture** — Starts capture modules producing frames on an mpsc channel.
+7. **Recording** — Frames are also written to the local fMP4 ring buffer. Completed segments are announced via `Alert::RecordingSegment`; the server may request uploads.
+8. **Send loop** — Reads from capture channel, checks command-controlled gates, sends frames on their persistent QUIC stream.
+9. **Telemetry** — Independently polls system sensors every 2s, sends sparse diffs on a unidirectional upload stream.
 
-## Session model (camera ↔ server)
-For each connection (`Session::establish` / `Session::run`):
-- Open control stream and send `InboundStreamTag::Alerts` + `Alert::Handshake`.
-- Open persistent unidirectional media streams:
-  - `InboundStreamTag::Video`
-  - `InboundStreamTag::Audio`
-- Spawn concurrent workers:
-  - command reader
-  - video writer
-  - audio writer
-  - recording muxer
-  - segment event handler
-  - upload command handler
-- Upload any buffered telemetry backlog once at session establishment.
+## Module Map
 
-Server commands toggle atomic `video_enabled` / `audio_enabled` flags; local recording still continues even if live streaming is disabled.
-
-## Recording behavior
-The recording pipeline (`src/recording`) writes rolling fMP4 segments and emits events:
-- `SegmentEvent::InitReady`
-- `SegmentEvent::Finalized`
-- `SegmentEvent::ManifestUpdated`
-- storage / eviction events
-
-Upload commands from server (`UploadSegment`, `UploadInit`) are fulfilled from this local store.
-
-## Telemetry behavior
-Telemetry loop (`src/telemetry/mod.rs`):
-- polls sensors every `TELEMETRY_POLL_INTERVAL_SECS`,
-- sends on threshold changes or heartbeat interval,
-- writes to QUIC datagrams when connected,
-- otherwise appends to `TelemetryBuffer` with run-length deduplication,
-- flushes to disk on shutdown.
-
-## Current implementation notes
-- “Real capture” mode currently falls back to test audio/video sources (capture hardware pipeline is stubbed for future plans).
-- Stream writer helpers in `src/stream/` are maintained, but session currently inlines equivalent writer loops.
-- TOFU verification helpers exist in `src/tofu.rs`, but main session connect path does not currently invoke them.
+| Module | Purpose |
+|--------|---------|
+| `main` | CLI, reconnect loop, top-level task orchestration |
+| `config` | Config struct, resolution from CLI / conf file / enrollment |
+| `session` | Active QUIC session: alert stream, command stream, video/audio enabled atomics |
+| `enrollment` | JWT parsing, enrollment handshake with server PKI |
+| `tofu` | Server fingerprint pinning on first connect |
+| `certs` | Device certificate load/store |
+| `quic` | QUIC endpoint setup with mTLS |
+| `commands` | `CameraCommand` handler — updates watch channels |
+| `network` | Network interface monitoring (stub) |
+| `firmware` | OTA update handling (stub) |
+| `capture/mod` | `CaptureMessage` enum (VideoNal, AudioFrame) |
+| `capture/video_test` | Test video source: loops H.264 file at real-time pace |
+| `capture/audio_test` | Test audio source: synthetic Opus tone |
+| `stream/mod` | Frame sender coordination |
+| `stream/video` | Writes H.264 NAL units to the persistent Video QUIC stream |
+| `stream/audio` | Writes Opus frames to the persistent Audio QUIC stream |
+| `recording/mod` | Ring buffer coordinator |
+| `recording/muxer` | fMP4 muxer (init segment + media segments) |
+| `recording/ring_buffer` | Segment ring buffer with eviction |
+| `recording/segment` | Segment state machine |
+| `recording/manifest` | HLS playlist generation |
+| `recording/manifest_push` | Pushes manifest to server via QUIC upload stream |
+| `recording/uploads` | Uploads segments to server on demand |
+| `recording/storage` | Segment persistence on disk |
+| `recording/init` | fMP4 init segment generation |
+| `recording/recovery` | Recover ring buffer state after crash |
+| `telemetry/mod` | Telemetry task: poll → diff → encode → send |
+| `telemetry/sensors` | Platform readers (`/proc/stat`, `/sys/class/thermal`, gpsd, etc.) |
+| `telemetry/buffer` | Buffered telemetry for upload after reconnect |

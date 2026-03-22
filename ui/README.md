@@ -1,106 +1,93 @@
-# Ghostcam UI
-Svelte 5 single-page viewer for live and playback camera monitoring.
+# Ghostcam Viewer
 
-![Ghostcam viewer with 4 simulated cameras](assets/screenshot.png)
+Svelte 5 SPA for the Ghostcam surveillance system. Provides live WebRTC video viewing, HLS playback of recorded footage with a timeline scrubber, a GPS map, telemetry dashboards, and camera management.
 
 ## Setup
+
 ```bash
 bun install
-bun run dev      # http://localhost:5173
-bun run build
-bun run check
+bun run dev       # Dev server at http://localhost:5173
+bun run build     # Production build → dist/
+bun run check     # svelte-check type checking
 ```
 
-Equivalent `npm run ...` commands also work after `npm install`.
+The Vite dev server proxies `/api`, `/hls`, and `/events` to the server at `:3000`.
 
-## Dev-server integration
-`vite.config.ts` proxies these paths to backend port `3000`:
-- `/api`
-- `/events`
-- `/hls`
+## Tech Stack
 
-This matches the current `server-core` HTTP surface.
+- **Svelte 5** — runes reactivity (`$state`, `$derived`, `$effect`)
+- **Vite 6** — dev server and build
+- **Tailwind CSS 4** — OKLCH color tokens defined in `app.css`
+- **bits-ui 2** — headless component primitives (`components/ui/`)
+- **lucide-svelte** — icons
+- **Leaflet** — map integration
+- **hls.js** — HLS playback for recorded footage
 
-## Stack
-- Svelte 5 (runes-based state model)
-- Vite 6
-- Tailwind CSS 4
-- bits-ui + lucide-svelte
-- Leaflet (map view)
-- hls.js (playback path)
+## Features
 
-## High-level architecture
-The UI uses a **per-camera connection model**:
-- one `RTCPeerConnection` per online camera,
-- one `EventSource` for global online/offline events,
-- one central store (`transportStore`) coordinating auth/session lifecycle.
+- Password-protected login (session cookie)
+- Multi-camera grid — auto-fit and 1+5 featured layouts
+- Live WebRTC video + audio with per-camera mute (one camera at a time)
+- HLS playback mode — switches each camera card from WebRTC to HLS player
+- Timeline scrubber — global playhead for navigating recorded footage and historical telemetry
+- Telemetry history — fetch and display CPU, memory, temperature, GPS at any past point in time
+- GPS map with camera markers and playback trail overlay
+- Dashboard view with aggregate stats and sparkline charts
+- Camera online/offline status, display name overrides (localStorage)
+- Connection alerts (disconnect/reconnect notifications)
+- Dark/light/system theme, mobile responsive (sidebar + drawer nav)
 
-### Startup flow
-`App.svelte` calls `transportStore.initialize()`:
-1. check auth session by probing `/api/v1/cameras`,
-2. fetch initial camera list (`GET /api/v1/cameras`),
-3. start SSE (`GET /events`),
-4. create `ConnectionManager`,
-5. connect WebRTC for each currently-online camera.
+## Architecture
 
-### SSE flow
-`sse.ts` listens for:
-- `camera_online`
-- `camera_offline`
+### Transport Layer
 
-`transportStore` applies these to `cameraStore`, opens/closes per-camera connections, and pushes alert entries.
+Camera events and state arrive via **Server-Sent Events** (`/events`), not WebRTC data channel. Each camera's live video and audio arrive via a separate **WebRTC** `RTCPeerConnection` (`/api/v1/watch`). Historical telemetry is fetched on demand via the **REST API** (`/api/v1/telemetry/:id`).
 
-### WebRTC flow per camera
-`CameraConnection` (`webrtc.ts`) does:
-1. create peer connection (ICE-lite assumptions),
-2. add recv-only transceivers (video + audio),
-3. create `telemetry` and `commands` data channels,
-4. generate offer, strip `a=candidate` lines,
-5. call `POST /api/v1/watch` with `device_id` + `sdp_offer`,
-6. apply `sdp_answer`,
-7. stream tracks + telemetry updates into stores.
+`connection-manager.ts` ties these together: on SSE `camera_online`, a `WebRtcSession` is created for that camera. On `camera_offline`, the session is torn down.
 
-On disconnect, `ConnectionManager` retries after `RECONNECT_DELAY_MS` while camera remains online.
+### Stores
 
-## Client mode and server demand control
-The `commands` data channel is used to send:
-- `{"type":"client_mode","mode":"live|playback|map"}`
+| Store | File | Purpose |
+|-------|------|---------|
+| `transportStore` | `transport.svelte.ts` | SSE connection, WebRTC session map, authentication state |
+| `cameraStore` | `cameras.svelte.ts` | Camera registry, live streams, telemetry, online status, selection |
+| `scrubberStore` | `scrubber.svelte.ts` | Timeline mode (`live`/`playback`), playhead time, mode change callbacks |
+| `groupStore` | `groups.svelte.ts` | Group list and active group |
+| `settingsStore` | `settings.svelte.ts` | Theme, grid layout, view mode, mute state (localStorage) |
+| `alertStore` | `alerts.svelte.ts` | Disconnect/reconnect event log |
+| `cameraConfigStore` | `cameraConfig.svelte.ts` | Per-camera display name overrides (localStorage) |
+| `videoStatsStore` | `videoStats.svelte.ts` | Per-track WebRTC inbound-rtp stats |
+| `thumbnailStore` | `thumbnails.svelte.ts` | Canvas-captured frame thumbnails (data URLs) |
 
-`App.svelte` wires scrubber mode changes to:
-- broadcast mode updates to all cameras, or
-- in focused `1+5` layout, set playback mode only for the focused camera.
+### Key Library Files
 
-This aligns server ingest demand (`start/stop video/audio`) with viewer intent.
+| File | Purpose |
+|------|---------|
+| `auth.ts` | Login, logout, session check |
+| `sse.ts` | SSE client — parses events, drives cameraStore and transportStore |
+| `signaling.ts` | `watchCamera` / `unwatchCamera` — WebRTC SDP exchange with server; `fetchTelemetryRangeCached` |
+| `webrtc.ts` | `WebRtcSession` — `RTCPeerConnection` per camera, ICE candidate handling, `stripCandidates()` for Firefox mDNS compat |
+| `connection-manager.ts` | Orchestrates SSE events → WebRTC session lifecycle |
+| `playback.ts` | hls.js wrapper for HLS player |
+| `telemetry-history.ts` | Fetch telemetry time ranges from API with in-memory cache; `nearestTelemetryEntryWithin` |
 
-## Playback model
-Playback uses server HLS endpoints directly:
-- manifest: `/hls/<device_id>/playlist.m3u8`
-- init segment: `/hls/<device_id>/init.mp4`
-- segment objects: `/hls/<device_id>/<segment_id>`
+### Views
 
-`HlsPlayer.svelte`:
-- parses manifest window bounds from segment IDs,
-- supports seek updates from scrubber time,
-- attempts media-source recovery on certain append failures.
+| View | Description |
+|------|-------------|
+| `LiveView` | Camera grid — WebRTC or HLS per card depending on scrubber mode. Online cameras sorted first. |
+| `CameraView` | Single fullscreen camera — keyboard shortcuts F/M/S/P/Esc |
+| `MapView` | Leaflet map with camera markers at live or historical GPS positions; playback trail overlay |
+| `DashboardView` | Aggregate telemetry — stats panels and sparklines, historical data on scrub |
 
-`scrubberStore` provides global live/playback timeline state and playback ticking.
+### Firefox WebRTC Note
 
-## Telemetry model
-- Live telemetry arrives via WebRTC `telemetry` data channel.
-- Historical telemetry for dashboard/map playback modes comes from:
-  - `GET /api/v1/telemetry/:device_id?from=&to=&limit=`
-- `telemetry-history.ts` adds short-lived client caching + nearest-sample lookup helpers.
+Firefox obfuscates ICE candidates as mDNS hostnames (e.g. `a1b2c3.local`). `webrtc.ts` strips all `a=candidate` lines from the SDP offer before posting it to the server — safe because the server is ICE-lite and ignores browser candidates entirely. The server's `GHOSTCAM_PUBLIC_IP` must be a reachable LAN IP (not `127.0.0.1`) so Firefox can send STUN from its LAN-bound UDP socket.
 
-## State stores
-- `transportStore`: auth/session bootstrap + SSE + connection manager lifecycle.
-- `cameraStore`: camera list, stream refs, telemetry snapshots.
-- `settingsStore`: theme/layout/view/mute preferences.
-- `scrubberStore`: timeline mode + playhead.
-- `videoStatsStore`: inbound RTP-derived resolution/codec/bitrate/drops.
-- `alertsStore`: online/offline alert feed.
-- `cameraConfigStore`: local display-name overrides.
+## Conventions
 
-## Known compatibility stubs in current UI code
-- `signaling.ts::listGroups()` targets `/api/v1/groups`; server route is not currently present, and callers already treat it as optional.
-- `playback.ts` exposes legacy `/api/v1/cameras/:id/playback` helpers that are not used by current views (playback uses `/hls/...` paths).
-- `sendIceCandidate()` is defined for API completeness; current ICE-lite flow does not depend on active trickle exchange.
+- **Svelte 5 runes only** — no legacy `$:` reactivity
+- **Tailwind CSS 4** — OKLCH tokens in `app.css`, `cn()` for class merging
+- **localStorage** keys prefixed with `ghostcam-`
+- **bits-ui** primitives in `components/ui/`, domain components alongside views
+- Stores are exported object literals with `$state` fields — not class-based
