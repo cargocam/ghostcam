@@ -14,21 +14,13 @@
 	let editingId = $state<string | null>(null);
 	let editingName = $state('');
 
-	let groupedCameras = $derived(() => {
-		const sorted = [...cameraStore.cameras].sort((a, b) => {
-			if (a.connected !== b.connected) return a.connected ? -1 : 1;
-			const nameA = cameraConfigStore.getDisplayName(a.device_id);
-			const nameB = cameraConfigStore.getDisplayName(b.device_id);
+	let sortedCameras = $derived(() => {
+		return [...cameraStore.cameras].sort((a, b) => {
+			if (a.online !== b.online) return a.online ? -1 : 1;
+			const nameA = cameraConfigStore.getDisplayName(a.device_id, a.device_name);
+			const nameB = cameraConfigStore.getDisplayName(b.device_id, b.device_name);
 			return nameA.localeCompare(nameB);
 		});
-
-		const groups = new Map<string, typeof sorted>();
-		for (const cam of sorted) {
-			const gid = cam.group_id || 'ungrouped';
-			if (!groups.has(gid)) groups.set(gid, []);
-			groups.get(gid)!.push(cam);
-		}
-		return [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 	});
 
 	function selectCamera(id: string) {
@@ -59,16 +51,9 @@
 </script>
 
 <div class="py-1">
-	{#each groupedCameras() as [groupId, cameras] (groupId)}
-		{#if groupedCameras().length > 1}
-			<div class="px-3 pt-3 pb-1 first:pt-1">
-				<span class="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70">{groupId}</span>
-			</div>
-		{/if}
-
 		<div class="space-y-0.5">
-			{#each cameras as camera (camera.device_id)}
-				{@const displayName = cameraConfigStore.getDisplayName(camera.device_id)}
+			{#each sortedCameras() as camera (camera.device_id)}
+				{@const displayName = cameraConfigStore.getDisplayName(camera.device_id, camera.device_name)}
 				<div class="group/item relative">
 					{#if editingId === camera.device_id}
 						<div class="px-3 py-2 space-y-1.5">
@@ -76,7 +61,7 @@
 								<span
 									class={cn(
 										"h-2 w-2 rounded-full flex-shrink-0",
-										camera.connected ? "bg-primary" : "bg-destructive"
+										camera.online ? "bg-primary" : "bg-destructive"
 									)}
 								></span>
 								<input
@@ -109,7 +94,7 @@
 							<span
 								class={cn(
 									"h-2 w-2 rounded-full flex-shrink-0",
-									camera.connected ? "bg-primary" : "bg-destructive"
+									camera.online ? "bg-primary" : "bg-destructive"
 								)}
 							></span>
 
@@ -119,17 +104,17 @@
 								</div>
 								{#if camera.telemetry}
 									<div class="text-[10px] text-muted-foreground font-mono">
-										CPU {camera.telemetry.cpu_percent.toFixed(0)}%
-										&middot; {camera.telemetry.memory_mb.toFixed(0)}MB
+										CPU {(camera.telemetry.cpu_percent ?? 0).toFixed(0)}%
+										&middot; {(camera.telemetry.memory_mb ?? 0).toFixed(0)}MB
 									</div>
 								{/if}
 							</div>
 
 							<span class={cn(
 								"text-[10px] uppercase tracking-wider flex-shrink-0",
-								camera.connected ? "text-primary" : "text-muted-foreground"
+								camera.online ? "text-primary" : "text-muted-foreground"
 							)}>
-								{camera.connected ? 'Live' : 'Off'}
+								{camera.online ? 'Live' : 'Off'}
 							</span>
 						</button>
 
@@ -144,7 +129,6 @@
 				</div>
 			{/each}
 		</div>
-	{/each}
 
 	{#if cameraStore.cameras.length === 0}
 		<div class="px-3 py-8 text-center text-xs text-muted-foreground">

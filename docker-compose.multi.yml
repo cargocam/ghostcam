@@ -1,0 +1,42 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ghostcam
+      POSTGRES_USER: ghostcam
+      POSTGRES_PASSWORD: dev-password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  server-multi:
+    build:
+      context: .
+      target: server-multi
+    ports:
+      - "3000:3000"
+      - "4433:4433/udp"
+    depends_on: [postgres, redis]
+    environment:
+      - GHOSTCAM_PUBLIC_IP=127.0.0.1
+      - GHOSTCAM_DATABASE_URL=postgres://ghostcam:dev-password@postgres:5432/ghostcam
+      - GHOSTCAM_REDIS_URL=redis://redis:6379
+      - GHOSTCAM_API_KEY=dev-key
+      - GHOSTCAM_HMAC_KEY=dev-hmac-key
+    command: ["--public-ip", "127.0.0.1", "--static-dir", "/app/static"]
+
+  camera-1:
+    build:
+      context: .
+      target: camera
+    depends_on: [server-multi]
+    command: ["--test-source", "--device-id", "cam-01", "--server-addr", "server-multi:4433"]
+
+volumes:
+  pg-data:

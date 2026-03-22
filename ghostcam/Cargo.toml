@@ -6,13 +6,16 @@ edition = "2021"
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-bytes = { workspace = true }
-uuid = { workspace = true }
-anyhow = { workspace = true }
-quinn = { workspace = true }
-rustls = { workspace = true }
-rcgen = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
 rmp-serde = { workspace = true }
+rcgen = { workspace = true }
+rustls = { workspace = true }
 ring = { workspace = true }
+x509-parser = { workspace = true }
+pem = { workspace = true }
+tokio = { workspace = true }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }

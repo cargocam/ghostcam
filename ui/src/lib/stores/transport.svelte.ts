@@ -1,282 +1,164 @@
-import { SignalingClient } from '$lib/signaling.js';
-import { WebRtcSession } from '$lib/webrtc.js';
-import { handleDataChannelMessage } from '$lib/data-channel.js';
+import { checkSession, login as authLogin, logout as authLogout } from '$lib/auth.js';
+import { listCameras } from '$lib/signaling.js';
+import { connectSse, type SseEvent } from '$lib/sse.js';
+import { ConnectionManager } from '$lib/connection-manager.js';
 import { cameraStore } from '$lib/stores/cameras.svelte.js';
 import { groupStore } from '$lib/stores/groups.svelte.js';
-import { videoStatsStore } from '$lib/stores/videoStats.svelte.js';
 import { alertsStore } from '$lib/stores/alerts.svelte.js';
-
-const MAX_RETRIES = 10;
-const CONNECTION_TIMEOUT_MS = 10_000;
+import { cameraConfigStore } from '$lib/stores/cameraConfig.svelte.js';
 
 class TransportStore {
+	authenticated = $state(false);
+	sseConnected = $state(false);
 	connected = $state(false);
-	error = $state<string | null>(null);
-	connectionState = $state<string>('new');
 	connectedAt = $state<number | null>(null);
+	error = $state<string | null>(null);
 	reconnecting = $state(false);
 	reconnectAttempt = $state(0);
 
-	private signaling = new SignalingClient();
-	private session: WebRtcSession | null = null;
-	private connecting = false;
-	private statsInterval: ReturnType<typeof setInterval> | null = null;
-	private prevBytes = new Map<string, number>();
-	private prevTimestamp = new Map<string, number>();
-	private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-	private autoReconnectTimer: ReturnType<typeof setTimeout> | null = null;
-	private connectionTimeoutTimer: ReturnType<typeof setTimeout> | null = null;
+	get connectionState(): string {
+		if (this.connected) return 'connected';
+		if (this.reconnecting) return 'reconnecting';
+		if (this.authenticated) return 'disconnected';
+		return 'unauthenticated';
+	}
 
-	async connect(groupId?: string) {
-		if (this.connecting || this.session) return;
-		this.connecting = true;
+	private sse: EventSource | null = null;
+	private connManager: ConnectionManager | null = null;
 
-		const targetGroup = groupId ?? groupStore.activeGroupId ?? 'default';
+	async initialize() {
+		this.authenticated = await checkSession();
+		if (!this.authenticated) return;
 
 		try {
-			// Fetch groups first
-			const groups = await this.signaling.listGroups();
-			groupStore.setGroups(groups);
+			// Fetch initial camera list
+			const cameras = await listCameras();
+			cameraStore.setInitialList(cameras);
 
-			// Use first available group if target doesn't exist (skip check for __all__)
-			let connectGroup = targetGroup;
-			if (connectGroup !== '__all__' && groups.length > 0 && !groups.find(g => g.group_id === connectGroup)) {
-				connectGroup = groups[0].group_id;
+			// Start SSE
+			this.sse = connectSse(
+				(event) => this.handleSseEvent(event),
+				() => {
+					this.sseConnected = true;
+					this.connected = true;
+					this.connectedAt = Date.now();
+				},
+				() => {
+					this.sseConnected = false;
+				},
+			);
+
+			// Create connection manager
+			this.connManager = new ConnectionManager();
+
+			// Connect to all online cameras
+			for (const cam of cameras) {
+				if (cam.online) {
+					this.connManager.connectCamera(cam.device_id);
+				}
 			}
-			groupStore.setActiveGroup(connectGroup);
 
-			// Create WebRTC session
-			this.session = new WebRtcSession(this.signaling);
-
-			this.session.onTrack = (deviceId, stream) => {
-				cameraStore.setStream(deviceId, stream);
-			};
-
-			this.session.onAudioTrack = (deviceId, stream) => {
-				cameraStore.setAudioStream(deviceId, stream);
-			};
-
-			this.session.onTrackEnded = (deviceId) => {
-				cameraStore.removeStream(deviceId);
-			};
-
-			this.session.onData = (msg) => {
-				handleDataChannelMessage(msg);
-			};
-
-			this.session.onConnectionStateChange = (state) => {
-				this.connectionState = state;
-				this.connected = state === 'connected';
-
-				if (state === 'connected') {
-					this.clearConnectionTimeout();
-					if (this.reconnecting) {
-						alertsStore.addAlert('reconnect', '__session__', 'System', 'Connection restored');
-						this.reconnecting = false;
-						this.reconnectAttempt = 0;
-					}
-					if (!this.connectedAt) {
-						this.connectedAt = Date.now();
-					}
-				}
-
-				if (state === 'failed' || state === 'disconnected') {
-					this.error = `WebRTC ${state}`;
-					this.clearConnectionTimeout();
-					alertsStore.addAlert('disconnect', '__session__', 'System', `Connection ${state}`);
-					this.scheduleAutoReconnect();
-				}
-			};
-
-			// Start connection timeout
-			this.connectionTimeoutTimer = setTimeout(() => {
-				this.connectionTimeoutTimer = null;
-				if (this.connectionState === 'new' || this.connectionState === 'connecting') {
-					this.error = 'Connection timed out';
-					this.teardownSession();
-					this.scheduleAutoReconnect();
-				}
-			}, CONNECTION_TIMEOUT_MS);
-
-			await this.session.connect(connectGroup);
-			this.connected = true;
-			this.connectedAt = Date.now();
 			this.error = null;
-
-			this.startStatsPolling();
 		} catch (e) {
-			this.error = e instanceof Error ? e.message : 'Connection failed';
-			this.connected = false;
-			this.clearConnectionTimeout();
-			this.scheduleAutoReconnect();
-		} finally {
-			this.connecting = false;
+			this.error = e instanceof Error ? e.message : 'Initialization failed';
 		}
 	}
 
+	private handleSseEvent(event: SseEvent) {
+		switch (event.type) {
+			case 'camera_online': {
+				cameraStore.setOnline(event.device_id, true);
+				this.connManager?.connectCamera(event.device_id);
+				const cam = cameraStore.getCamera(event.device_id);
+				alertsStore.addAlert(
+					'reconnect',
+					event.device_id,
+					cameraConfigStore.getDisplayName(event.device_id, cam?.device_name),
+					'Camera came online',
+				);
+				break;
+			}
+
+			case 'camera_offline': {
+				const offCam = cameraStore.getCamera(event.device_id);
+				cameraStore.setOnline(event.device_id, false);
+				this.connManager?.disconnectCamera(event.device_id);
+				alertsStore.addAlert(
+					'disconnect',
+					event.device_id,
+					cameraConfigStore.getDisplayName(event.device_id, offCam?.device_name),
+					'Camera went offline',
+				);
+				break;
+			}
+		}
+	}
+
+	async login(password: string): Promise<boolean> {
+		const ok = await authLogin(password);
+		if (ok) {
+			this.authenticated = true;
+			await this.initialize();
+		}
+		return ok;
+	}
+
+	async logout() {
+		await authLogout();
+		this.authenticated = false;
+		this.sse?.close();
+		this.sse = null;
+		this.sseConnected = false;
+		await this.connManager?.disconnectAll();
+		this.connManager = null;
+		cameraStore.clear();
+		groupStore.clear();
+	}
+
+	/** Legacy: connect to a specific group (delegates to initialize for backward compat) */
+	async connect(groupId?: string) {
+		if (groupId) {
+			groupStore.setActiveGroup(groupId);
+		}
+		await this.initialize();
+	}
+
 	async disconnect() {
-		this.clearAutoReconnect();
-		this.clearConnectionTimeout();
-		if (this.reconnectTimer) {
-			clearTimeout(this.reconnectTimer);
-			this.reconnectTimer = null;
-		}
-		this.reconnecting = false;
-		this.reconnectAttempt = 0;
-		this.stopStatsPolling();
-		this.connecting = false;
-		if (this.session) {
-			await this.session.disconnect();
-			this.session = null;
-		}
-		this.connected = false;
-		this.connectedAt = null;
+		this.sse?.close();
+		this.sse = null;
+		this.sseConnected = false;
+		await this.connManager?.disconnectAll();
+		this.connManager = null;
 		cameraStore.clear();
 	}
 
 	async switchGroup(groupId: string) {
-		await this.disconnect();
-		await this.connect(groupId);
-	}
-
-	/** Tear down and rebuild the session to pick up new/removed tracks. */
-	async reconnect() {
-		if (this.reconnectTimer) return; // already scheduled
-		// Debounce: wait briefly so multiple camera_join events batch into one reconnect
-		this.reconnectTimer = setTimeout(async () => {
-			this.reconnectTimer = null;
-			const groupId = groupStore.activeGroupId;
-			if (!groupId) return;
-			await this.disconnect();
-			await this.connect(groupId);
-		}, 1000);
+		groupStore.setActiveGroup(groupId);
+		// In per-camera model, group switching filters the view
+		// but doesn't tear down connections
 	}
 
 	async refreshGroups() {
 		try {
-			const groups = await this.signaling.listGroups();
+			const { listGroups } = await import('$lib/signaling.js');
+			const groups = await listGroups();
 			groupStore.setGroups(groups);
 		} catch {}
 	}
 
-	private scheduleAutoReconnect() {
-		if (this.autoReconnectTimer) return;
-		if (this.reconnectAttempt >= MAX_RETRIES) {
-			this.error = 'Max reconnection attempts reached';
-			this.reconnecting = false;
-			return;
-		}
-
-		this.reconnecting = true;
-		const delay = Math.min(1000 * Math.pow(2, this.reconnectAttempt), 30_000);
-
-		this.autoReconnectTimer = setTimeout(async () => {
-			this.autoReconnectTimer = null;
-			this.reconnectAttempt++;
-
-			// Tear down session without clearing camera store
-			this.teardownSession();
-
-			const groupId = groupStore.activeGroupId;
-			if (groupId) {
-				await this.connect(groupId);
-			}
-		}, delay);
+	/** Broadcast client_mode to all connected cameras. */
+	broadcastClientMode(mode: import('$lib/webrtc.js').ClientMode) {
+		this.connManager?.broadcastClientMode(mode);
 	}
 
-	private clearAutoReconnect() {
-		if (this.autoReconnectTimer) {
-			clearTimeout(this.autoReconnectTimer);
-			this.autoReconnectTimer = null;
-		}
+	/** Send client_mode to one camera. */
+	sendClientMode(deviceId: string, mode: import('$lib/webrtc.js').ClientMode) {
+		this.connManager?.sendClientMode(deviceId, mode);
 	}
 
-	private clearConnectionTimeout() {
-		if (this.connectionTimeoutTimer) {
-			clearTimeout(this.connectionTimeoutTimer);
-			this.connectionTimeoutTimer = null;
-		}
-	}
-
-	/** Tear down session state without clearing camera store or reconnection state. */
-	private teardownSession() {
-		this.stopStatsPolling();
-		this.connecting = false;
-		if (this.session) {
-			this.session.disconnect();
-			this.session = null;
-		}
-		this.connected = false;
-		this.connectedAt = null;
-	}
-
-	private startStatsPolling() {
-		this.stopStatsPolling();
-		this.statsInterval = setInterval(() => this.pollStats(), 2000);
-	}
-
-	private stopStatsPolling() {
-		if (this.statsInterval) {
-			clearInterval(this.statsInterval);
-			this.statsInterval = null;
-		}
-		this.prevBytes.clear();
-		this.prevTimestamp.clear();
-	}
-
-	private async pollStats() {
-		if (!this.session) return;
-		const statsPromise = this.session.getStats();
-		if (!statsPromise) return;
-
-		const report = await statsPromise;
-		const trackMap = this.session.getTrackDeviceMap();
-
-		// Build mid → codec lookup from codec reports
-		const codecMap = new Map<string, string>();
-		report.forEach((stat) => {
-			if (stat.type === 'codec') {
-				codecMap.set(stat.id, stat.mimeType?.split('/')[1] ?? '');
-			}
-		});
-
-		// Process inbound-rtp reports for video
-		report.forEach((stat) => {
-			if (stat.type !== 'inbound-rtp' || stat.kind !== 'video') return;
-
-			const mid = String(stat.mid ?? '');
-			const deviceId = trackMap.get(mid);
-			if (!deviceId) return;
-
-			const now = stat.timestamp;
-			const bytesReceived = stat.bytesReceived ?? 0;
-
-			// Calculate bitrate from delta
-			let bitrateKbps = 0;
-			const prevB = this.prevBytes.get(deviceId);
-			const prevT = this.prevTimestamp.get(deviceId);
-			if (prevB !== undefined && prevT !== undefined && now > prevT) {
-				const deltaSec = (now - prevT) / 1000;
-				bitrateKbps = ((bytesReceived - prevB) * 8) / 1000 / deltaSec;
-			}
-			this.prevBytes.set(deviceId, bytesReceived);
-			this.prevTimestamp.set(deviceId, now);
-
-			// Resolve codec name
-			let codec = '';
-			if (stat.codecId) {
-				codec = codecMap.get(stat.codecId) ?? '';
-			}
-
-			videoStatsStore.update(deviceId, {
-				width: stat.frameWidth ?? 0,
-				height: stat.frameHeight ?? 0,
-				codec,
-				framesDecoded: stat.framesDecoded ?? 0,
-				framesDropped: stat.framesDropped ?? 0,
-				bitrateKbps,
-			});
-		});
+	destroy() {
+		this.sse?.close();
+		this.connManager?.disconnectAll();
 	}
 }
 

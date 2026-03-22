@@ -15,7 +15,7 @@
 	} = $props();
 
 	let camera = $derived(cameraStore.cameras.find((c) => c.device_id === deviceId));
-	let videoStream = $derived(camera?.stream);
+	let videoStream = $derived(camera?.videoStream);
 	let audioStream = $derived(camera?.audioStream);
 
 	// Combine video + audio tracks into a single MediaStream
@@ -38,6 +38,7 @@
 		if (newIds !== currentTrackIds) {
 			videoElement.srcObject = combinedStream;
 			currentTrackIds = newIds;
+			videoElement.play().catch(() => {});
 		}
 	});
 

@@ -2,58 +2,107 @@ import type { GroupInfo, CameraInfo } from '$lib/types.js';
 
 const API_BASE = '/api/v1';
 
-export class SignalingClient {
-	private apiKey: string;
+export interface WatchResponse {
+	session_id: string;
+	sdp_answer: string;
+}
 
-	constructor(apiKey: string = 'dev-key') {
-		this.apiKey = apiKey;
-	}
+export interface TelemetryEntry {
+	ts: number;
+	server_ts: number;
+	sig?: number;
+	temp?: number;
+	fps?: number;
+	kbps?: number;
+	cpu?: number;
+	mem?: number;
+	uptime?: number;
+	lat?: number;
+	lon?: number;
+	alt?: number;
+	gps_fix?: number;
+}
 
-	private headers(): HeadersInit {
-		return {
-			'Content-Type': 'application/json',
-			Authorization: `Bearer ${this.apiKey}`,
-		};
-	}
+export interface TelemetryPage {
+	entries: TelemetryEntry[];
+	next_cursor?: string;
+}
 
-	async watch(groupId: string, sdpOffer: string): Promise<{ session_id: string; sdp_answer: string }> {
-		const res = await fetch(`${API_BASE}/watch/${encodeURIComponent(groupId)}`, {
-			method: 'POST',
-			headers: this.headers(),
-			body: JSON.stringify({ sdp_offer: sdpOffer }),
-		});
-		if (!res.ok) throw new Error(`watch failed: ${res.status}`);
-		return res.json();
-	}
+function headers(): HeadersInit {
+	return {
+		'Content-Type': 'application/json',
+	};
+}
 
-	async endSession(sessionId: string): Promise<void> {
-		await fetch(`${API_BASE}/session/${sessionId}`, {
-			method: 'DELETE',
-			headers: this.headers(),
-		});
+export async function watchCamera(
+	deviceId: string,
+	sdpOffer: string,
+): Promise<WatchResponse> {
+	const res = await fetch(`${API_BASE}/watch`, {
+		method: 'POST',
+		headers: headers(),
+		body: JSON.stringify({ device_id: deviceId, sdp_offer: sdpOffer }),
+		credentials: 'include',
+	});
+	if (!res.ok) {
+		throw new Error(`Watch failed: ${res.status} ${await res.text()}`);
 	}
+	return res.json();
+}
 
-	async trickleIce(sessionId: string, candidate: string): Promise<void> {
-		await fetch(`${API_BASE}/session/${sessionId}/ice`, {
-			method: 'POST',
-			headers: this.headers(),
-			body: JSON.stringify({ candidate }),
-		});
-	}
+export async function unwatchCamera(sessionId: string): Promise<void> {
+	await fetch(`${API_BASE}/session/${sessionId}`, {
+		method: 'DELETE',
+		headers: headers(),
+		credentials: 'include',
+	});
+}
 
-	async listGroups(): Promise<GroupInfo[]> {
-		const res = await fetch(`${API_BASE}/groups`, {
-			headers: this.headers(),
-		});
-		if (!res.ok) throw new Error(`listGroups failed: ${res.status}`);
-		return res.json();
-	}
+export async function sendIceCandidate(
+	sessionId: string,
+	candidate: RTCIceCandidateInit,
+): Promise<void> {
+	await fetch(`${API_BASE}/session/${sessionId}/ice`, {
+		method: 'POST',
+		headers: headers(),
+		body: JSON.stringify(candidate),
+		credentials: 'include',
+	});
+}
 
-	async listCamerasInGroup(groupId: string): Promise<CameraInfo[]> {
-		const res = await fetch(`${API_BASE}/groups/${encodeURIComponent(groupId)}/cameras`, {
-			headers: this.headers(),
-		});
-		if (!res.ok) throw new Error(`listCameras failed: ${res.status}`);
-		return res.json();
-	}
+export async function listCameras(): Promise<CameraInfo[]> {
+	const res = await fetch(`${API_BASE}/cameras`, {
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`listCameras failed: ${res.status}`);
+	return res.json();
+}
+
+export async function listGroups(): Promise<GroupInfo[]> {
+	const res = await fetch(`${API_BASE}/groups`, {
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`listGroups failed: ${res.status}`);
+	return res.json();
+}
+
+export async function fetchTelemetryRange(
+	deviceId: string,
+	fromMs: number,
+	toMs: number,
+	limit = 600,
+): Promise<TelemetryPage> {
+	const from = Math.max(0, Math.floor(fromMs));
+	const to = Math.max(from, Math.floor(toMs));
+	const params = new URLSearchParams({
+		from: String(from),
+		to: String(to),
+		limit: String(limit),
+	});
+	const res = await fetch(
+		`${API_BASE}/telemetry/${encodeURIComponent(deviceId)}?${params.toString()}`,
+		{ credentials: 'include' },
+	);
+	if (!res.ok) throw new Error(`fetchTelemetryRange failed: ${res.status}`);
+	return res.json();
 }

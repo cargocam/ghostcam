@@ -47,7 +47,7 @@
 			</ToggleGroupItem>
 			<ToggleGroupItem value="dashboard">
 				<Activity class="h-3.5 w-3.5 mr-1" />
-				<span class="text-xs hidden sm:inline">DASH</span>
+				<span class="text-xs hidden sm:inline">STATS</span>
 			</ToggleGroupItem>
 		</ToggleGroup>
 

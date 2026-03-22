@@ -33,26 +33,39 @@ ffmpeg -f lavfi -i testsrc2=duration=10:size=640x480:rate=30 \
   -f h264 test-data/test.h264
 
 # Build all Rust crates
-cargo build
+cargo build --release
 
 # Run tests
 cargo test
+```
 
-# Run server (terminal 1)
-cargo run -p server -- --public-ip 127.0.0.1
+### Local dev (3 terminals)
 
-# Run test camera (terminal 2) — test source mode
-cargo run -p camera -- --test-source --device-id cam-01 --group-id default
+```bash
+# Terminal 1 — server
+# GHOSTCAM_PUBLIC_IP must be your LAN IP (not 127.0.0.1) so Firefox can connect via WebRTC.
+# Find it with: ipconfig getifaddr en0   (macOS) or  hostname -I | awk '{print $1}'  (Linux)
+GHOSTCAM_DATA_DIR=/tmp/ghostcam-server \
+GHOSTCAM_REDIS_URL=redis://127.0.0.1:6379 \
+GHOSTCAM_PUBLIC_IP=<your-lan-ip> \
+./target/release/server-solo
 
-# Run real camera (Linux with rpicam-vid)
-cargo run -p camera -- --device-id cam-01 --group-id default
+# Terminal 2 — test cameras (3 in parallel)
+for i in 1 2 3; do
+  mkdir -p /tmp/ghostcam-cam0$i/segments
+  ./target/release/camera \
+    --test-source --server-addr 127.0.0.1:4433 \
+    --data-dir /tmp/ghostcam-cam0$i \
+    --segment-dir /tmp/ghostcam-cam0$i/segments \
+    --no-tofu &
+done
 
-# Launch N cameras at once
-./camera/launch-cameras.sh 4 default
-
-# Viewer dev server (terminal 3)
+# Terminal 3 — viewer dev server
 cd ui && bun install && bun run dev
+# Open http://localhost:5173
+```
 
+```bash
 # Build viewer for production
 cd ui && bun run build
 
@@ -85,11 +98,11 @@ Multi-stage Dockerfile: `chef` → `planner` → `builder` (Rust), `ui-builder` 
 ## Logging
 
 ```bash
-RUST_LOG=server=debug,str0m=warn cargo run -p server -- --public-ip 127.0.0.1
-RUST_LOG=camera=debug cargo run -p camera
+RUST_LOG=server-solo=debug,str0m=warn ./target/release/server-solo
+RUST_LOG=camera=debug ./target/release/camera --test-source ...
 ```
 
-Default filter: `server=info,str0m=warn` (server), `camera=info` (camera).
+Default filter: `info` for all crates, `str0m=warn` suppressed.
 
 ## Architecture
 

@@ -1,9 +1,13 @@
 import type { CameraInfo, TelemetryData } from '$lib/types.js';
 
-export interface CameraState extends CameraInfo {
-	telemetry?: TelemetryData;
-	stream?: MediaStream;
-	audioStream?: MediaStream;
+export interface CameraState {
+	device_id: string;
+	device_name: string;
+	online: boolean;
+	videoStream: MediaStream | null;
+	audioStream: MediaStream | null;
+	telemetry: TelemetryData | null;
+	lastTelemetryAt: number | null;
 }
 
 class CameraStore {
@@ -14,37 +18,71 @@ class CameraStore {
 		this.selectedId ? this.cameras.find((c) => c.device_id === this.selectedId) ?? null : null
 	);
 
-	onlineCount = $derived(this.cameras.filter((c) => c.connected).length);
+	onlineCount = $derived(this.cameras.filter((c) => c.online).length);
 
-	setCameras(list: CameraInfo[]) {
-		this.cameras = list.map((cam) => {
-			const existing = this.cameras.find((c) => c.device_id === cam.device_id);
-			return { ...cam, connected: true, telemetry: existing?.telemetry, stream: existing?.stream, audioStream: existing?.audioStream };
-		});
+	get list(): CameraState[] {
+		return this.cameras;
 	}
 
-	addCamera(camera: CameraInfo) {
-		const idx = this.cameras.findIndex((c) => c.device_id === camera.device_id);
+	get onlineList(): CameraState[] {
+		return this.cameras.filter((c) => c.online);
+	}
+
+	getCamera(deviceId: string): CameraState | undefined {
+		return this.cameras.find((c) => c.device_id === deviceId);
+	}
+
+	isOnline(deviceId: string): boolean {
+		return this.cameras.find((c) => c.device_id === deviceId)?.online ?? false;
+	}
+
+	setInitialList(list: CameraInfo[]) {
+		this.cameras = list.map((c) => ({
+			device_id: c.device_id,
+			device_name: c.display_name,
+			online: c.online,
+			videoStream: null,
+			audioStream: null,
+			telemetry: null,
+			lastTelemetryAt: null,
+		}));
+	}
+
+	setOnline(deviceId: string, online: boolean) {
+		const idx = this.cameras.findIndex((c) => c.device_id === deviceId);
 		if (idx >= 0) {
-			this.cameras[idx] = { ...this.cameras[idx], ...camera, connected: true };
+			this.cameras[idx].online = online;
+			if (!online) {
+				this.cameras[idx].videoStream = null;
+				this.cameras[idx].audioStream = null;
+			}
 		} else {
-			this.cameras = [...this.cameras, { ...camera, connected: true }];
+			this.cameras = [
+				...this.cameras,
+				{
+					device_id: deviceId,
+					device_name: deviceId,
+					online,
+					videoStream: null,
+					audioStream: null,
+					telemetry: null,
+					lastTelemetryAt: null,
+				},
+			];
 		}
 	}
 
-	removeCamera(deviceId: string) {
+	setName(deviceId: string, name: string) {
 		const idx = this.cameras.findIndex((c) => c.device_id === deviceId);
 		if (idx >= 0) {
-			this.cameras[idx].connected = false;
-			this.cameras[idx].stream = undefined;
-			this.cameras[idx].audioStream = undefined;
+			this.cameras[idx].device_name = name;
 		}
 	}
 
-	setStream(deviceId: string, stream: MediaStream) {
+	setVideoStream(deviceId: string, stream: MediaStream) {
 		const idx = this.cameras.findIndex((c) => c.device_id === deviceId);
 		if (idx >= 0) {
-			this.cameras[idx].stream = stream;
+			this.cameras[idx].videoStream = stream;
 		}
 	}
 
@@ -55,18 +93,19 @@ class CameraStore {
 		}
 	}
 
-	removeStream(deviceId: string) {
+	setTelemetry(deviceId: string, data: TelemetryData) {
 		const idx = this.cameras.findIndex((c) => c.device_id === deviceId);
 		if (idx >= 0) {
-			this.cameras[idx].stream = undefined;
-			this.cameras[idx].audioStream = undefined;
+			this.cameras[idx].telemetry = data;
+			this.cameras[idx].lastTelemetryAt = Date.now();
 		}
 	}
 
-	updateTelemetry(data: TelemetryData) {
-		const idx = this.cameras.findIndex((c) => c.device_id === data.device_id);
+	clearStreams(deviceId: string) {
+		const idx = this.cameras.findIndex((c) => c.device_id === deviceId);
 		if (idx >= 0) {
-			this.cameras[idx].telemetry = data;
+			this.cameras[idx].videoStream = null;
+			this.cameras[idx].audioStream = null;
 		}
 	}
 

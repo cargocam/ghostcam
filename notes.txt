@@ -1,0 +1,22 @@
+commands
+- start/stop video+audio (always send telemetry)
+- network config
+
+store last 30 days of telemetry
+
+always store last 24 (or 72) hours of video on camera
+
+
+
+how does registration/setup/configuration work?
+
+how to OTA updates work?
+
+
+
+
+camera <-[QUIC+mTLS]-> server ->[WebRTC]-> client
+        -> video                -> video              
+        -> audio                -> audio
+        -> telemetry            -> telemetry
+        <- commands      <-[WebRTC]-> 

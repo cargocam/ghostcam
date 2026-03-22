@@ -17,8 +17,8 @@
 	// Track history as telemetry updates
 	$effect(() => {
 		if (!telemetry) return;
-		const cpu = telemetry.cpu_percent;
-		const mem = telemetry.memory_mb;
+		const cpu = telemetry.cpu_percent ?? 0;
+		const mem = telemetry.memory_mb ?? 0;
 		untrack(() => {
 			cpuHistory = [...cpuHistory.slice(-(MAX_HISTORY - 1)), cpu];
 			memHistory = [...memHistory.slice(-(MAX_HISTORY - 1)), mem];
@@ -48,8 +48,8 @@
 		<div class="flex items-center gap-2">
 			<span class="text-[10px] uppercase tracking-wider text-muted-foreground w-8 shrink-0">CPU</span>
 			<Sparkline data={cpuHistory} height={18} class="flex-1" />
-			<span class={cn("text-xs font-mono font-medium shrink-0", statusColor(telemetry.cpu_percent, 70, 90))}>
-				{telemetry.cpu_percent.toFixed(1)}%
+			<span class={cn("text-xs font-mono font-medium shrink-0", statusColor(telemetry.cpu_percent ?? 0, 70, 90))}>
+				{(telemetry.cpu_percent ?? 0).toFixed(1)}%
 			</span>
 		</div>
 
@@ -58,24 +58,24 @@
 			<span class="text-[10px] uppercase tracking-wider text-muted-foreground w-8 shrink-0">MEM</span>
 			<Sparkline data={memHistory} height={18} class="flex-1" />
 			<span class="text-xs font-mono font-medium shrink-0">
-				{telemetry.memory_mb.toFixed(0)} MB
+				{(telemetry.memory_mb ?? 0).toFixed(0)} MB
 			</span>
 		</div>
 
 		<!-- Stats grid -->
 		<div class="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-			{#if telemetry.temp_celsius > 0}
+			{#if (telemetry.temp_celsius ?? 0) > 0}
 				<div class="flex justify-between">
 					<span class="text-muted-foreground">Temp</span>
-					<span class={cn("font-mono", statusColor(telemetry.temp_celsius, 70, 85))}>
-						{telemetry.temp_celsius.toFixed(1)}&deg;C
+					<span class={cn("font-mono", statusColor(telemetry.temp_celsius ?? 0, 70, 85))}>
+						{(telemetry.temp_celsius ?? 0).toFixed(1)}&deg;C
 					</span>
 				</div>
 			{/if}
 
 			<div class="flex justify-between">
 				<span class="text-muted-foreground">Uptime</span>
-				<span class="font-mono">{formatUptime(telemetry.uptime_secs)}</span>
+				<span class="font-mono">{formatUptime(telemetry.uptime_secs ?? 0)}</span>
 			</div>
 		</div>
 	</div>

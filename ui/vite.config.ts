@@ -20,6 +20,12 @@ export default defineConfig({
       '/api': {
         target: 'http://localhost:3000',
       },
+      '/events': {
+        target: 'http://localhost:3000',
+      },
+      '/hls': {
+        target: 'http://localhost:3000',
+      },
     },
   },
 });

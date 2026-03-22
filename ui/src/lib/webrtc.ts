@@ -1,115 +1,136 @@
-import { SignalingClient } from '$lib/signaling.js';
-import type { DataChannelMessage } from '$lib/types.js';
+import { watchCamera, unwatchCamera } from '$lib/signaling.js';
+import type { TelemetryData } from '$lib/types.js';
 
-export type OnTrackCallback = (deviceId: string, stream: MediaStream) => void;
-export type OnAudioTrackCallback = (deviceId: string, stream: MediaStream) => void;
-export type OnDataCallback = (msg: DataChannelMessage) => void;
+/**
+ * Remove all a=candidate lines from an SDP before sending to the server.
+ * The server is ICE-lite and never initiates connectivity checks against the
+ * browser's candidates — it only responds to STUN binding requests it
+ * receives. Stripping candidates prevents failures when Firefox uses
+ * mDNS-obfuscated addresses (e.g. "a1b2c3d4.local") that str0m can't parse.
+ */
+function stripCandidates(sdp: string): string {
+	return sdp
+		.split('\r\n')
+		.filter((line) => !line.startsWith('a=candidate:'))
+		.join('\r\n');
+}
 
-export class WebRtcSession {
-	private pc: RTCPeerConnection | null = null;
-	private signaling: SignalingClient;
-	private sessionId: string | null = null;
-	private dataChannel: RTCDataChannel | null = null;
-	/** Track mid → device_id mapping received from data channel */
-	private trackDeviceMap = new Map<string, string>();
-	/** Video streams received before track_map, keyed by mid */
-	private pendingStreams = new Map<string, MediaStream>();
-	/** Audio streams received before track_map, keyed by mid */
-	private pendingAudioStreams = new Map<string, MediaStream>();
+export interface CameraCallbacks {
+	onVideoTrack: (stream: MediaStream) => void;
+	onAudioTrack: (stream: MediaStream) => void;
+	onTelemetry: (data: TelemetryData) => void;
+	onDisconnect: () => void;
+}
 
-	onTrack: OnTrackCallback | null = null;
-	onAudioTrack: OnAudioTrackCallback | null = null;
-	onData: OnDataCallback | null = null;
-	onConnectionStateChange: ((state: RTCPeerConnectionState) => void) | null = null;
-	onTrackEnded: ((deviceId: string) => void) | null = null;
+export type ClientMode = 'live' | 'playback' | 'map';
 
-	constructor(signaling: SignalingClient) {
-		this.signaling = signaling;
+/**
+ * Per-camera WebRTC connection. Each camera gets its own RTCPeerConnection.
+ */
+export class CameraConnection {
+	readonly deviceId: string;
+	readonly pc: RTCPeerConnection;
+	sessionId: string | null = null;
+
+	private callbacks: CameraCallbacks;
+	private commandsChannel: RTCDataChannel | null = null;
+
+	constructor(deviceId: string, callbacks: CameraCallbacks) {
+		this.deviceId = deviceId;
+		this.callbacks = callbacks;
+
+		this.pc = new RTCPeerConnection({
+			iceServers: [], // ICE-lite, no STUN/TURN needed
+		});
+
+		this.setupTrackHandler();
+		this.setupDataChannels();
+		this.setupConnectionStateHandler();
 	}
 
-	async connect(groupId: string): Promise<void> {
-		// Get camera count so we can create the right number of transceivers
-		const cameras = await this.signaling.listCamerasInGroup(groupId);
-		const cameraCount = Math.max(cameras.length, 1);
-
-		// No iceServers needed — bridge uses ICE-lite
-		this.pc = new RTCPeerConnection({ iceServers: [] });
-
-		this.pc.ontrack = (event) => {
-			const transceiver = event.transceiver;
-			const mid = transceiver.mid;
-			const track = event.track;
-			if (!mid || !track) return;
-
-			const stream = new MediaStream([track]);
-			const deviceId = this.trackDeviceMap.get(mid);
-
-			// Handle track ended — resolve device from mid at event time
-			track.onended = () => {
-				const dev = this.trackDeviceMap.get(mid!);
-				if (dev && track.kind === 'video' && this.onTrackEnded) {
-					this.onTrackEnded(dev);
-				}
-			};
-			track.onmute = () => {
-				const dev = this.trackDeviceMap.get(mid!);
-				if (dev && track.kind === 'video' && this.onTrackEnded) {
-					this.onTrackEnded(dev);
-				}
-			};
-
-			if (track.kind === 'video') {
-				if (deviceId && this.onTrack) {
-					this.onTrack(deviceId, stream);
-				} else {
-					this.pendingStreams.set(mid, stream);
-				}
-			} else if (track.kind === 'audio') {
-				if (deviceId && this.onAudioTrack) {
-					this.onAudioTrack(deviceId, stream);
-				} else {
-					this.pendingAudioStreams.set(mid, stream);
-				}
-			}
-		};
-
-		this.pc.ondatachannel = (event) => {
-			this.setupDataChannel(event.channel);
-		};
-
-		this.pc.onconnectionstatechange = () => {
-			if (this.pc && this.onConnectionStateChange) {
-				this.onConnectionStateChange(this.pc.connectionState);
-			}
-		};
-
-		// Create a data channel — must be in the offer for the bridge to respond
-		const dc = this.pc.createDataChannel('telemetry');
-		this.setupDataChannel(dc);
-
-		// Add recv-only transceivers: one video + one audio per camera
-		for (let i = 0; i < cameraCount; i++) {
-			this.pc.addTransceiver('video', { direction: 'recvonly' });
-			this.pc.addTransceiver('audio', { direction: 'recvonly' });
+	/** Send a client_mode command on the reliable commands data channel. */
+	sendClientMode(mode: ClientMode) {
+		if (this.commandsChannel?.readyState === 'open') {
+			this.commandsChannel.send(JSON.stringify({ type: 'client_mode', mode }));
 		}
+	}
+
+	private setupTrackHandler() {
+		this.pc.ontrack = (event) => {
+			const stream = event.streams[0] ?? new MediaStream([event.track]);
+
+			if (event.track.kind === 'video') {
+				this.callbacks.onVideoTrack(stream);
+			} else if (event.track.kind === 'audio') {
+				this.callbacks.onAudioTrack(stream);
+			}
+		};
+	}
+
+	private setupDataChannels() {
+		this.pc.ondatachannel = (event) => {
+			const channel = event.channel;
+
+			if (channel.label === 'telemetry') {
+				channel.onmessage = (msg) => {
+					try {
+						const raw = JSON.parse(msg.data);
+						// Map server TelemetryDatagram fields to UI TelemetryData
+						const data: TelemetryData = {
+							device_id: this.deviceId,
+							cpu_percent: raw.cpu ?? undefined,
+							temp_celsius: raw.temp ?? undefined,
+							memory_mb: raw.mem ?? undefined,
+							uptime_secs: raw.uptime ?? undefined,
+							gps: raw.lat != null && raw.lon != null
+								? { latitude: raw.lat, longitude: raw.lon, alt: raw.alt }
+								: undefined,
+						};
+						this.callbacks.onTelemetry(data);
+					} catch {
+						// Ignore malformed telemetry
+					}
+				};
+			}
+		};
+	}
+
+	private setupConnectionStateHandler() {
+		this.pc.onconnectionstatechange = () => {
+			if (
+				this.pc.connectionState === 'failed' ||
+				this.pc.connectionState === 'closed'
+			) {
+				this.callbacks.onDisconnect();
+			}
+		};
+	}
+
+	async connect(): Promise<void> {
+		// Add transceivers for receiving
+		this.pc.addTransceiver('video', { direction: 'recvonly' });
+		this.pc.addTransceiver('audio', { direction: 'recvonly' });
+
+		// Create data channels in the offer
+		this.pc.createDataChannel('telemetry');
+		this.commandsChannel = this.pc.createDataChannel('commands', {
+			ordered: true, // reliable, ordered for client_mode commands
+		});
+		// Send initial client_mode on open
+		this.commandsChannel.onopen = () => {
+			this.sendClientMode('live');
+		};
 
 		const offer = await this.pc.createOffer();
 		await this.pc.setLocalDescription(offer);
 
-		// Wait for ICE gathering to complete (or timeout)
+		// Wait for ICE gathering
 		await this.waitForIceGathering();
 
-		const { session_id, sdp_answer } = await this.signaling.watch(
-			groupId,
-			this.pc.localDescription!.sdp
-		);
-		this.sessionId = session_id;
+		const response = await watchCamera(this.deviceId, stripCandidates(this.pc.localDescription!.sdp));
+		this.sessionId = response.session_id;
 
-		// If the bridge advertises 127.0.0.1 ICE candidates but the browser has
-		// non-loopback candidates (e.g. 10.x.x.x), rewrite the answer to use the
-		// browser's local IP. The bridge socket is on 0.0.0.0 so it accepts on any
-		// interface — only the advertised address is wrong for cross-interface ICE.
-		const fixedSdp = this.rewriteLoopbackCandidates(sdp_answer);
+		const fixedSdp = this.rewriteLoopbackCandidates(response.sdp_answer);
 
 		await this.pc.setRemoteDescription({
 			type: 'answer',
@@ -117,79 +138,27 @@ export class WebRtcSession {
 		});
 	}
 
-	/** Called when track_map data channel message arrives */
-	handleTrackMap(tracks: { mid: string; device_id: string; kind: string }[]) {
-		for (const t of tracks) {
-			this.trackDeviceMap.set(t.mid, t.device_id);
+	async disconnect(): Promise<void> {
+		if (this.sessionId) {
+			await unwatchCamera(this.sessionId).catch(() => {});
+			this.sessionId = null;
 		}
-		// Flush any pending video streams
-		for (const [mid, stream] of this.pendingStreams) {
-			const deviceId = this.trackDeviceMap.get(mid);
-			if (deviceId && this.onTrack) {
-				this.onTrack(deviceId, stream);
-			}
-		}
-		this.pendingStreams.clear();
-		// Flush any pending audio streams
-		for (const [mid, stream] of this.pendingAudioStreams) {
-			const deviceId = this.trackDeviceMap.get(mid);
-			if (deviceId && this.onAudioTrack) {
-				this.onAudioTrack(deviceId, stream);
-			}
-		}
-		this.pendingAudioStreams.clear();
+		this.pc.close();
 	}
 
-	private setupDataChannel(channel: RTCDataChannel) {
-		this.dataChannel = channel;
-		channel.onmessage = (e) => {
-			try {
-				const msg: DataChannelMessage = JSON.parse(e.data);
-				// Intercept track_map to update internal mapping
-				if (msg.type === 'track_map') {
-					this.handleTrackMap(msg.tracks);
-				}
-				// Intercept renegotiate — handle SDP offer/answer internally
-				if (msg.type === 'renegotiate') {
-					this.handleRenegotiate(msg.sdp_offer);
-					return; // Don't propagate to data handler
-				}
-				if (this.onData) {
-					this.onData(msg);
-				}
-			} catch {}
-		};
+	getStats(): Promise<RTCStatsReport> | null {
+		return this.pc?.getStats() ?? null;
 	}
 
-	/** Handle a server-initiated renegotiation offer (new/removed tracks). */
-	private async handleRenegotiate(sdpOffer: string): Promise<void> {
-		if (!this.pc || !this.dataChannel || this.dataChannel.readyState !== 'open') return;
-
-		try {
-			await this.pc.setRemoteDescription({ type: 'offer', sdp: sdpOffer });
-			const answer = await this.pc.createAnswer();
-			await this.pc.setLocalDescription(answer);
-
-			const msg = JSON.stringify({
-				type: 'sdp_answer',
-				sdp_answer: this.pc.localDescription!.sdp,
-			});
-			this.dataChannel.send(msg);
-		} catch (err) {
-			console.error('Renegotiation failed:', err);
-		}
+	get connectionState(): RTCPeerConnectionState {
+		return this.pc.connectionState;
 	}
 
-	/**
-	 * Replace 127.0.0.1 in the answer's ICE candidates with the browser's
-	 * local IP extracted from the offer. The bridge binds 0.0.0.0 so it
-	 * accepts on any interface — only the advertised address is wrong.
-	 */
 	private rewriteLoopbackCandidates(answerSdp: string): string {
 		if (!answerSdp.includes('127.0.0.1')) return answerSdp;
 
-		// Extract a non-loopback IP from our local candidates
 		const localSdp = this.pc?.localDescription?.sdp ?? '';
+		// Match standard IPv4 candidates
 		const candidateRe = /a=candidate:\S+ \d+ udp \d+ ([\d.]+) /gi;
 		let localIp: string | null = null;
 		let match: RegExpExecArray | null;
@@ -201,9 +170,17 @@ export class WebRtcSession {
 			}
 		}
 
+		// Firefox uses mDNS candidates (e.g. "a1b2c3.local") instead of real IPs.
+		// Fall back to the page's hostname if it's a routable address (not localhost).
+		if (!localIp && typeof window !== 'undefined') {
+			const host = window.location.hostname;
+			if (host && host !== 'localhost' && host !== '127.0.0.1' && host !== '::1') {
+				localIp = host;
+			}
+		}
+
 		if (!localIp) return answerSdp;
 
-		// Replace 127.0.0.1 only in a=candidate lines
 		return answerSdp
 			.split('\r\n')
 			.map((line) => {
@@ -217,7 +194,6 @@ export class WebRtcSession {
 
 	private waitForIceGathering(): Promise<void> {
 		return new Promise((resolve) => {
-			if (!this.pc) return resolve();
 			if (this.pc.iceGatheringState === 'complete') return resolve();
 
 			const timeout = setTimeout(resolve, 2000);
@@ -228,35 +204,5 @@ export class WebRtcSession {
 				}
 			};
 		});
-	}
-
-	async disconnect(): Promise<void> {
-		if (this.sessionId) {
-			try {
-				await this.signaling.endSession(this.sessionId);
-			} catch {}
-			this.sessionId = null;
-		}
-		if (this.pc) {
-			this.pc.close();
-			this.pc = null;
-		}
-		this.dataChannel = null;
-		this.trackDeviceMap.clear();
-		this.pendingStreams.clear();
-		this.pendingAudioStreams.clear();
-	}
-
-	getStats(): Promise<RTCStatsReport> | null {
-		return this.pc?.getStats() ?? null;
-	}
-
-	/** Expose track mid → device_id map for stats correlation */
-	getTrackDeviceMap(): Map<string, string> {
-		return this.trackDeviceMap;
-	}
-
-	get connectionState(): RTCPeerConnectionState | null {
-		return this.pc?.connectionState ?? null;
 	}
 }

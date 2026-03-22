@@ -2,8 +2,11 @@
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { cameraConfigStore } from '$lib/stores/cameraConfig.svelte.js';
 	import { transportStore } from '$lib/stores/transport.svelte.js';
+	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 	import { videoStatsStore } from '$lib/stores/videoStats.svelte.js';
 	import { alertsStore } from '$lib/stores/alerts.svelte.js';
+	import { type TelemetryEntry } from '$lib/signaling.js';
+	import { fetchTelemetryRangeCached, nearestTelemetryEntryWithin } from '$lib/telemetry-history.js';
 	import Sparkline from '$lib/components/ui/Sparkline.svelte';
 	import { cn } from '$lib/utils.js';
 
@@ -14,6 +17,10 @@
 	// Connection uptime
 	let uptimeStr = $state('--');
 	let uptimeInterval: ReturnType<typeof setInterval> | null = null;
+	let historicalTelemetryByDevice = $state<Record<string, TelemetryEntry | null>>({});
+	let historicalFetchTimer: ReturnType<typeof setTimeout> | null = null;
+	const MAX_DASH_STALENESS_MS = 20 * 60 * 1000;
+	let cameras = $derived(cameraStore.cameras);
 
 	$effect(() => {
 		// Update bitrate history every 2s
@@ -22,6 +29,67 @@
 			bitrateHistory = [...bitrateHistory.slice(-(MAX_HISTORY - 1)), kbps];
 		}, 2000);
 		return () => clearInterval(iv);
+	});
+
+	$effect(() => {
+		const mode = scrubberStore.mode;
+		const playheadTime = Math.floor(scrubberStore.playheadTime);
+		const deviceIds = cameras.map((c) => c.device_id);
+
+		if (mode !== 'playback' || deviceIds.length === 0) {
+			historicalTelemetryByDevice = {};
+			if (historicalFetchTimer) {
+				clearTimeout(historicalFetchTimer);
+				historicalFetchTimer = null;
+			}
+			return;
+		}
+
+		if (historicalFetchTimer) return;
+		historicalFetchTimer = setTimeout(async () => {
+			const targetMs = Math.floor(scrubberStore.playheadTime * 1000);
+			const fromMs = Math.max(0, targetMs - 3 * 60 * 1000);
+			const toMs = targetMs + 3 * 60 * 1000;
+			const fallbackFromMs = Math.max(0, targetMs - 20 * 60 * 1000);
+			const fallbackToMs = targetMs + 20 * 60 * 1000;
+			const nextByDevice: Record<string, TelemetryEntry | null> = {};
+
+			await Promise.all(
+				deviceIds.map(async (deviceId) => {
+					try {
+						const entries = await fetchTelemetryRangeCached(deviceId, fromMs, toMs, 480);
+						let nearest = nearestTelemetryEntryWithin(
+							entries,
+							targetMs,
+							MAX_DASH_STALENESS_MS,
+						);
+						if (!nearest) {
+							const fallbackEntries = await fetchTelemetryRangeCached(
+								deviceId,
+								fallbackFromMs,
+								fallbackToMs,
+								1200,
+							);
+							nearest = nearestTelemetryEntryWithin(
+								fallbackEntries,
+								targetMs,
+								MAX_DASH_STALENESS_MS,
+							);
+						}
+						if (!nearest) {
+							nextByDevice[deviceId] = null;
+							return;
+						}
+						nextByDevice[deviceId] = nearest;
+					} catch {
+						nextByDevice[deviceId] = null;
+					}
+				}),
+			);
+
+			historicalTelemetryByDevice = nextByDevice;
+			historicalFetchTimer = null;
+		}, 260);
 	});
 
 	$effect(() => {
@@ -41,7 +109,6 @@
 		return () => { if (uptimeInterval) clearInterval(uptimeInterval); };
 	});
 
-	let cameras = $derived(cameraStore.cameras);
 	let onlineCount = $derived(cameraStore.onlineCount);
 	let totalBitrate = $derived(videoStatsStore.totalBitrateKbps);
 	let totalDecoded = $derived(videoStatsStore.totalFramesDecoded);
@@ -58,9 +125,26 @@
 		if (value >= warn) return 'text-warning';
 		return 'text-primary';
 	}
+
+	function getTelemetryForCamera(deviceId: string, fallback: typeof cameras[number]['telemetry']) {
+		if (scrubberStore.mode !== 'playback') return fallback;
+		const historical = historicalTelemetryByDevice[deviceId];
+		if (!historical) return null;
+		return {
+			cpu_percent: historical.cpu,
+			memory_mb: historical.mem,
+			temp_celsius: historical.temp,
+			uptime_secs: historical.uptime,
+		};
+	}
 </script>
 
 <div class="h-full overflow-y-auto p-4 space-y-4">
+	{#if scrubberStore.mode === 'playback'}
+		<div class="text-xs text-sky-400 font-mono">
+			Playback snapshot at {new Date(scrubberStore.playheadTime * 1000).toLocaleTimeString()}
+		</div>
+	{/if}
 	<!-- Top stat cards -->
 	<div class="grid grid-cols-2 lg:grid-cols-4 gap-3">
 		<div class="rounded-lg border bg-card p-4">
@@ -155,19 +239,19 @@
 					<tbody>
 						{#each cameras as camera (camera.device_id)}
 							{@const stats = videoStatsStore.get(camera.device_id)}
-							{@const t = camera.telemetry}
+							{@const t = getTelemetryForCamera(camera.device_id, camera.telemetry)}
 							<tr class="border-b last:border-0 hover:bg-muted/30 transition-colors">
 								<td class="px-4 py-2.5 font-medium">
 									{cameraConfigStore.getDisplayName(camera.device_id)}
 								</td>
 								<td class="px-4 py-2.5">
 									<span class={cn("inline-flex items-center gap-1.5",
-										camera.connected ? 'text-green-500' : 'text-red-500'
+										camera.online ? 'text-green-500' : 'text-red-500'
 									)}>
 										<span class={cn("h-1.5 w-1.5 rounded-full",
-											camera.connected ? 'bg-green-500' : 'bg-red-500'
+											camera.online ? 'bg-green-500' : 'bg-red-500'
 										)}></span>
-										{camera.connected ? 'Online' : 'Offline'}
+										{camera.online ? 'Online' : 'Offline'}
 									</span>
 								</td>
 								<td class="px-4 py-2.5 font-mono text-muted-foreground">
@@ -187,7 +271,7 @@
 									{stats?.framesDropped ?? '--'}
 								</td>
 								<td class="px-4 py-2.5 font-mono text-right">
-									{#if t}
+									{#if t && t.cpu_percent != null}
 										<span class={statusColor(t.cpu_percent, 70, 90)}>
 											{t.cpu_percent.toFixed(1)}%
 										</span>
@@ -196,14 +280,14 @@
 									{/if}
 								</td>
 								<td class="px-4 py-2.5 font-mono text-right">
-									{#if t}
+									{#if t && t.memory_mb != null}
 										{t.memory_mb.toFixed(0)} MB
 									{:else}
 										<span class="text-muted-foreground">--</span>
 									{/if}
 								</td>
 								<td class="px-4 py-2.5 font-mono text-right">
-									{#if t && t.temp_celsius > 0}
+									{#if t && t.temp_celsius != null}
 										<span class={statusColor(t.temp_celsius, 70, 85)}>
 											{t.temp_celsius.toFixed(0)}&deg;C
 										</span>

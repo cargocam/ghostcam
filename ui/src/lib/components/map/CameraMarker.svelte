@@ -9,12 +9,14 @@
 		map,
 		leaflet,
 		camera,
+		gpsOverride = undefined,
 		selected = false,
 		onMarkerClick,
 	}: {
 		map: L.Map;
 		leaflet: typeof L;
 		camera: CameraState;
+		gpsOverride?: { latitude: number; longitude: number } | undefined;
 		selected?: boolean;
 		onMarkerClick?: (deviceId: string) => void;
 	} = $props();
@@ -23,17 +25,17 @@
 	let videoEl: HTMLVideoElement | null = null;
 	let lastPipKey = '';
 
-	let gps = $derived(camera.telemetry?.gps);
-	let displayName = $derived(cameraConfigStore.getDisplayName(camera.device_id));
+	let gps = $derived(gpsOverride ?? camera.telemetry?.gps);
+	let displayName = $derived(cameraConfigStore.getDisplayName(camera.device_id, camera.device_name));
 	let markerMode = $derived(settingsStore.markerMode);
 
 	function pipKey(): string {
-		return `${selected}|${camera.connected}|${displayName}`;
+		return `${selected}|${camera.online}|${displayName}`;
 	}
 
 	function createIcon(): L.DivIcon {
 		const t = camera.telemetry;
-		const online = camera.connected;
+		const online = camera.online;
 		const ring = selected ? 'box-shadow:0 0 0 3px #22c55e,0 1px 3px rgba(0,0,0,0.3)' : 'box-shadow:0 1px 3px rgba(0,0,0,0.3)';
 
 		if (markerMode === 'dot') {
@@ -98,7 +100,7 @@
 
 	function injectVideo() {
 		if (!marker || markerMode !== 'pip') return;
-		const stream = camera.stream;
+		const stream = camera.videoStream;
 		const container = marker.getElement()?.querySelector('.pip-video-slot') as HTMLElement | null;
 		if (!container) return;
 
@@ -123,7 +125,7 @@
 
 		// Track dependencies for non-pip icon rebuilds
 		void selected;
-		const stream = camera.stream;
+		const stream = camera.videoStream;
 
 		if (!marker) {
 			marker = leaflet.marker([gps.latitude, gps.longitude], {
