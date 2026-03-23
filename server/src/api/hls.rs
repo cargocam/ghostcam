@@ -144,10 +144,10 @@ pub async fn get_init(
         None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
 
-    // Check if init segment is already cached
+    // Check if init segment is already available
     {
-        let init = slot.init_segment.read().await;
-        if let Some(data) = init.as_ref() {
+        let current = slot.init_segment.borrow();
+        if let Some(data) = current.as_ref() {
             return init_response(data.clone());
         }
     }
@@ -159,18 +159,23 @@ pub async fn get_init(
         })
         .await;
 
-    // Wait for init segment to arrive (with timeout)
-    let deadline = Duration::from_secs(10);
-    let start = tokio::time::Instant::now();
-    loop {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let init = slot.init_segment.read().await;
-        if let Some(data) = init.as_ref() {
-            return init_response(data.clone());
+    // Wait for init segment to arrive via watch notification (no polling)
+    let mut rx = slot.init_segment.subscribe();
+    match tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if rx.changed().await.is_err() {
+                return None;
+            }
+            let val = rx.borrow_and_update();
+            if let Some(data) = val.as_ref() {
+                return Some(data.clone());
+            }
         }
-        if start.elapsed() > deadline {
-            return StatusCode::GATEWAY_TIMEOUT.into_response();
-        }
+    })
+    .await
+    {
+        Ok(Some(data)) => init_response(data),
+        _ => StatusCode::GATEWAY_TIMEOUT.into_response(),
     }
 }
 

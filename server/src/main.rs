@@ -173,6 +173,20 @@ async fn main() -> anyhow::Result<()> {
             .await
     });
 
+    // --- SSE channel cleanup ---
+    let sse_cleanup_bus = sse_bus.clone();
+    let sse_cleanup_cancel = cancel.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = sse_cleanup_cancel.cancelled() => break,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
+                    sse_cleanup_bus.cleanup_stale().await;
+                }
+            }
+        }
+    });
+
     // --- Shutdown ---
     tokio::signal::ctrl_c().await?;
     tracing::info!("shutting down");

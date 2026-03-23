@@ -99,6 +99,36 @@ RUST_LOG=server=debug,str0m=warn ./target/release/server
 RUST_LOG=camera=debug ./target/release/camera --test-source ...
 ```
 
+## Scaling Configuration
+
+The server enforces several concurrency limits to prevent resource exhaustion at scale:
+
+| Setting | Default | Env Var | Description |
+|---------|---------|---------|-------------|
+| DB pool size | 20 | `GHOSTCAM_DB_POOL_SIZE` | PostgreSQL connection pool max connections |
+| QUIC connection limit | 256 | — | Max concurrent camera connection handshakes (semaphore) |
+| Sessions per user | 50 | — | Max concurrent WebRTC sessions per user (HTTP 429) |
+| Viewers per camera | 20 | — | Max concurrent WebRTC viewers per camera (HTTP 429) |
+
+**Server internals:**
+- Telemetry writes to Redis use a bounded channel (capacity 64) per camera instead of unbounded task spawning.
+- HLS init segment requests use a `watch` channel for notification instead of polling.
+- Expired segment cache entries are cleaned up every 30 seconds per slot.
+- Stale SSE channels (zero receivers) are cleaned up every 60 seconds.
+
+**Camera internals:**
+- Telemetry buffer truncates to cap (100,000) on load to prevent OOM from large on-disk buffers.
+- Muxer uses `try_send` for segment events to avoid backpressure stalling the frame pipeline.
+- Broadcast channels sized at 2048 frames (~68 seconds at 30fps).
+
+**Client internals:**
+- WebRTC connections are batched (6 at a time) on login instead of all-at-once.
+- Stats polling is staggered (6 cameras per interval) to spread CPU load.
+- Thumbnail capture skips cameras not in the viewport or when the tab is hidden.
+- HLS players use `enableWorker: false` to avoid hitting browser worker limits.
+- Scrubber playhead updates at ~10fps instead of 60fps.
+- Telemetry cache is pruned on each fetch and capped at 500 entries.
+
 ## Architecture
 
 The server is a protocol translator, not an SFU. It forwards encoded frames from camera ingest slots to viewer egress handles without transcoding or mixing.

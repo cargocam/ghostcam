@@ -8,7 +8,7 @@ class ScrubberStore {
 	availableWindow = $state<{ start: number; end: number } | null>(null);
 	cameraCoverage = $state<Map<string, { start: number; end: number }[]>>(new Map());
 
-	private animationFrame: number | null = null;
+	private tickTimer: number | null = null;
 	private lastFrameTime: number | null = null;
 	private modeChangeCallbacks: ModeChangeCallback[] = [];
 
@@ -94,15 +94,17 @@ class ScrubberStore {
 		this.cameraCoverage = new Map(this.cameraCoverage).set(deviceId, merged);
 	}
 
+	private static readonly TICK_INTERVAL_MS = 100; // ~10fps — sufficient for timeline UI
+
 	private startLiveTick() {
 		this.stopTick();
 		const tick = () => {
 			if (this.mode === 'live') {
 				this.playheadTime = Date.now() / 1000;
-				this.animationFrame = requestAnimationFrame(tick);
 			}
 		};
-		this.animationFrame = requestAnimationFrame(tick);
+		tick();
+		this.tickTimer = window.setInterval(tick, ScrubberStore.TICK_INTERVAL_MS);
 	}
 
 	private startPlaybackTick() {
@@ -120,15 +122,14 @@ class ScrubberStore {
 				this.stopTick();
 				return;
 			}
-			this.animationFrame = requestAnimationFrame(tick);
 		};
-		this.animationFrame = requestAnimationFrame(tick);
+		this.tickTimer = window.setInterval(tick, ScrubberStore.TICK_INTERVAL_MS);
 	}
 
 	private stopTick() {
-		if (this.animationFrame != null) {
-			cancelAnimationFrame(this.animationFrame);
-			this.animationFrame = null;
+		if (this.tickTimer != null) {
+			clearInterval(this.tickTimer);
+			this.tickTimer = null;
 		}
 		this.lastFrameTime = null;
 	}

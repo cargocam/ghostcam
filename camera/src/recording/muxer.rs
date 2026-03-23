@@ -67,12 +67,14 @@ impl Muxer {
                             size_bytes: meta.size_bytes,
                             path: meta.path,
                         });
-                        let _ = self.event_tx.send(SegmentEvent::Finalized {
+                        if self.event_tx.try_send(SegmentEvent::Finalized {
                             segment_id: meta.segment_id,
                             start_ts: meta.start_ts,
                             end_ts: meta.end_ts,
                             size_bytes: meta.size_bytes,
-                        }).await;
+                        }).is_err() {
+                            tracing::warn!("segment event channel full, dropping finalized event");
+                        }
                     }
                     return Ok(());
                 }
@@ -81,7 +83,7 @@ impl Muxer {
                     let nal = match result {
                         Ok(data) => data,
                         Err(broadcast::error::RecvError::Lagged(n)) => {
-                            tracing::debug!("muxer video lagged by {n}");
+                            tracing::warn!("muxer video lagged by {n} frames — recording may have gaps");
                             continue;
                         }
                         Err(broadcast::error::RecvError::Closed) => break,
@@ -103,9 +105,9 @@ impl Muxer {
                         if let (Some(sps), Some(pps)) = (&sps_buf, &pps_buf) {
                             match generate_init_segment(sps, pps) {
                                 Ok(init_data) => {
-                                    let _ = self.event_tx.send(SegmentEvent::InitReady {
+                                    let _ = self.event_tx.try_send(SegmentEvent::InitReady {
                                         data: init_data,
-                                    }).await;
+                                    });
                                     self.init_generated = true;
                                 }
                                 Err(e) => {
@@ -138,9 +140,9 @@ impl Muxer {
 
                                 // Update and emit manifest
                                 let manifest = generate_manifest(self.ring_buffer.read().await.segments());
-                                let _ = self.event_tx.send(SegmentEvent::ManifestUpdated {
+                                let _ = self.event_tx.try_send(SegmentEvent::ManifestUpdated {
                                     manifest,
-                                }).await;
+                                });
                             }
                         }
                     }

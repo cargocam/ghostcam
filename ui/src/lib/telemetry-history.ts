@@ -7,7 +7,26 @@ type CacheEntry = {
 
 const CACHE_TTL_MS = 3000;
 const BUCKET_MS = 15000;
+const MAX_CACHE_ENTRIES = 500;
 const cache = new Map<string, CacheEntry>();
+
+/** Remove expired entries and enforce max cache size. */
+function pruneCache(): void {
+	const now = Date.now();
+	for (const [key, entry] of cache) {
+		if (entry.expiresAt <= now) {
+			cache.delete(key);
+		}
+	}
+	// If still over limit, evict oldest entries
+	if (cache.size > MAX_CACHE_ENTRIES) {
+		const entries = [...cache.entries()].sort((a, b) => a[1].expiresAt - b[1].expiresAt);
+		const toRemove = entries.slice(0, cache.size - MAX_CACHE_ENTRIES);
+		for (const [key] of toRemove) {
+			cache.delete(key);
+		}
+	}
+}
 
 function bucket(tsMs: number): number {
 	return Math.floor(tsMs / BUCKET_MS) * BUCKET_MS;
@@ -31,6 +50,7 @@ export async function fetchTelemetryRangeCached(
 	}
 
 	const page = await fetchTelemetryRange(deviceId, fromMs, toMs, limit);
+	pruneCache();
 	cache.set(key, {
 		expiresAt: now + CACHE_TTL_MS,
 		entries: page.entries,

@@ -124,8 +124,8 @@ impl Session {
 
         // Broadcast channels: video NALs and audio frames are sent to both
         // the QUIC stream writers and the local muxer.
-        let (video_broadcast_tx, _) = broadcast::channel::<Bytes>(512);
-        let (audio_broadcast_tx, _) = broadcast::channel::<Bytes>(512);
+        let (video_broadcast_tx, _) = broadcast::channel::<Bytes>(2048);
+        let (audio_broadcast_tx, _) = broadcast::channel::<Bytes>(2048);
 
         let muxer_video_rx = video_broadcast_tx.subscribe();
         let muxer_audio_rx = audio_broadcast_tx.subscribe();

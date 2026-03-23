@@ -50,5 +50,20 @@ pub const RECONNECT_BACKOFF_INITIAL_SECS: u64 = 1;
 /// Maximum reconnect backoff.
 pub const RECONNECT_BACKOFF_MAX_SECS: u64 = 30;
 
+/// Maximum concurrent QUIC connection handshakes.
+pub const MAX_CONCURRENT_CONNECTIONS: usize = 256;
+
+/// Default PostgreSQL connection pool size.
+pub const DEFAULT_DB_POOL_SIZE: u32 = 20;
+
+/// Maximum concurrent WebRTC sessions per user.
+pub const MAX_SESSIONS_PER_USER: usize = 50;
+
+/// Maximum concurrent WebRTC viewers per camera.
+pub const MAX_VIEWERS_PER_CAMERA: usize = 20;
+
+/// Segment cache cleanup interval.
+pub const SEGMENT_CLEANUP_INTERVAL_SECS: u64 = 30;
+
 /// Wire protocol version.
 pub const PROTOCOL_VERSION: u32 = 1;

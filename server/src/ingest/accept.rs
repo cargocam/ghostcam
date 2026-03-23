@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use anyhow::Result;
+use ghostcam::config::MAX_CONCURRENT_CONNECTIONS;
 use ghostcam::wire::alert::Alert;
 use ghostcam::wire::framing;
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use super::enrollment::handle_enrollment;
@@ -16,6 +18,7 @@ use crate::redis::connection::RedisManager;
 use crate::sse::SseEventBus;
 
 /// Run the QUIC accept loop, spawning a handler task per connection.
+/// Uses a semaphore to bound the number of concurrent connection handlers.
 pub async fn run_accept_loop(
     endpoint: quinn::Endpoint,
     registry: Arc<RoutingRegistry>,
@@ -26,6 +29,8 @@ pub async fn run_accept_loop(
     sse_bus: Arc<SseEventBus>,
     cancel: CancellationToken,
 ) -> Result<()> {
+    let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_CONNECTIONS));
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
@@ -37,7 +42,12 @@ pub async fn run_accept_loop(
                 let revocation_cache = revocation_cache.clone();
                 let redis = redis.clone();
                 let sse_bus = sse_bus.clone();
+                let sem = semaphore.clone();
                 tokio::spawn(async move {
+                    let _permit = match sem.acquire().await {
+                        Ok(permit) => permit,
+                        Err(_) => return, // Semaphore closed
+                    };
                     if let Err(e) = handle_connection(incoming, registry, db, ca, revocation_cache, redis, sse_bus).await {
                         tracing::warn!("connection failed: {e}");
                     }

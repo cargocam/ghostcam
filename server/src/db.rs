@@ -23,8 +23,13 @@ pub struct PostgresDatabase {
 
 impl PostgresDatabase {
     pub async fn connect(url: &str) -> Result<Self> {
+        let max_connections = std::env::var("GHOSTCAM_DB_POOL_SIZE")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(ghostcam::config::DEFAULT_DB_POOL_SIZE);
+
         let pool = PgPoolOptions::new()
-            .max_connections(5)
+            .max_connections(max_connections)
             .connect(url)
             .await
             .context("failed to connect to PostgreSQL")?;

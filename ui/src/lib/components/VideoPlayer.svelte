@@ -49,10 +49,25 @@
 		}
 	});
 
-	// Thumbnail capture every 2s
+	// Thumbnail capture every 2s — only when tab is visible and element is in viewport
+	let isInViewport = $state(true);
+
+	$effect(() => {
+		if (!videoElement) return;
+		const observer = new IntersectionObserver(
+			([entry]) => {
+				isInViewport = entry.isIntersecting;
+			},
+			{ threshold: 0 },
+		);
+		observer.observe(videoElement);
+		return () => observer.disconnect();
+	});
+
 	$effect(() => {
 		if (!videoElement || !active) return;
 		const interval = setInterval(() => {
+			if (!isInViewport || document.hidden) return;
 			if (videoElement && videoElement.videoWidth > 0) {
 				const canvas = document.createElement('canvas');
 				canvas.width = 160;

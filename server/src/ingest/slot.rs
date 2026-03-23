@@ -10,7 +10,7 @@ use ghostcam::types::{DeviceId, UserId};
 use ghostcam::wire::alert::StreamKind;
 use ghostcam::wire::command::Command;
 use ghostcam::wire::framing;
-use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
+use tokio::sync::{broadcast, mpsc, oneshot, watch, RwLock};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -46,8 +46,9 @@ pub struct IngestSlot {
     /// Latest HLS manifest (pushed by camera)
     pub manifest: Arc<RwLock<Option<String>>>,
 
-    /// Latest init segment (pushed by camera)
-    pub init_segment: Arc<RwLock<Option<Bytes>>>,
+    /// Latest init segment (pushed by camera). Watch channel allows waiters
+    /// to be notified without polling.
+    pub init_segment: watch::Sender<Option<Bytes>>,
 
     /// Send commands to the camera
     pub commands_tx: mpsc::Sender<Command>,
@@ -100,7 +101,7 @@ impl IngestSlot {
             audio_tx: audio_tx.clone(),
             telemetry_tx: telemetry_tx.clone(),
             manifest: Arc::new(RwLock::new(None)),
-            init_segment: Arc::new(RwLock::new(None)),
+            init_segment: watch::Sender::new(None),
             commands_tx,
             video_subscribers: Arc::new(AtomicUsize::new(0)),
             audio_subscribers: Arc::new(AtomicUsize::new(0)),
@@ -141,6 +142,27 @@ impl IngestSlot {
                 conn.clone(),
                 cancel.clone(),
             ));
+            // Periodic cleanup of expired segment cache entries
+            let segments_ref = slot_clone.segments.clone();
+            let cleanup_cancel = cancel.clone();
+            let cleanup_task = tokio::spawn(async move {
+                let interval = std::time::Duration::from_secs(
+                    ghostcam::config::SEGMENT_CLEANUP_INTERVAL_SECS,
+                );
+                loop {
+                    tokio::select! {
+                        _ = cleanup_cancel.cancelled() => break,
+                        _ = tokio::time::sleep(interval) => {
+                            let now = Instant::now();
+                            let mut segs = segments_ref.write().await;
+                            segs.retain(|_, state| match state {
+                                SegmentState::Buffered { expires_at, .. } => *expires_at > now,
+                                SegmentState::Uploading { .. } => true,
+                            });
+                        }
+                    }
+                }
+            });
 
             // Wait for any task to complete or cancellation
             tokio::select! {
@@ -149,6 +171,7 @@ impl IngestSlot {
                 r = telemetry_task => { tracing::debug!(device_id = %slot_clone.device_id, "telemetry reader finished: {:?}", r); }
                 r = command_task => { tracing::debug!(device_id = %slot_clone.device_id, "command writer finished: {:?}", r); }
                 r = stream_task => { tracing::debug!(device_id = %slot_clone.device_id, "stream acceptor finished: {:?}", r); }
+                _ = cleanup_task => {}
             }
 
             // Cancel all remaining tasks
@@ -264,6 +287,19 @@ impl IngestSlot {
         redis: Option<Arc<RedisManager>>,
         cancel: CancellationToken,
     ) {
+        // Bounded channel for Redis writes — avoids unbounded task spawning.
+        let (redis_tx, redis_rx) = mpsc::channel::<(DeviceId, TelemetryDatagram)>(64);
+
+        // Spawn a single dedicated writer task for Redis persistence
+        let redis_writer = if let Some(ref redis) = redis {
+            let r = redis.clone();
+            let c = cancel.clone();
+            Some(tokio::spawn(Self::telemetry_redis_writer(r, redis_rx, c)))
+        } else {
+            drop(redis_rx);
+            None
+        };
+
         loop {
             tokio::select! {
                 _ = cancel.cancelled() => break,
@@ -272,14 +308,9 @@ impl IngestSlot {
                         Ok(data) => {
                             match rmp_serde::from_slice::<TelemetryDatagram>(&data) {
                                 Ok(datagram) => {
-                                    // Write to Redis concurrently (non-blocking)
-                                    if let Some(ref redis) = redis {
-                                        let r = redis.clone();
-                                        let d = device_id.clone();
-                                        let dg = datagram.clone();
-                                        tokio::spawn(async move {
-                                            crate::redis::telemetry::write_telemetry(&r, &d, &dg).await;
-                                        });
+                                    // Queue for Redis write (drop on backpressure)
+                                    if redis.is_some() {
+                                        let _ = redis_tx.try_send((device_id.clone(), datagram.clone()));
                                     }
                                     let _ = tx.send(datagram);
                                 }
@@ -292,6 +323,32 @@ impl IngestSlot {
                             tracing::debug!("telemetry datagram read ended: {e}");
                             break;
                         }
+                    }
+                }
+            }
+        }
+
+        drop(redis_tx);
+        if let Some(handle) = redis_writer {
+            let _ = handle.await;
+        }
+    }
+
+    /// Dedicated task that drains the telemetry write queue into Redis.
+    async fn telemetry_redis_writer(
+        redis: Arc<RedisManager>,
+        mut rx: mpsc::Receiver<(DeviceId, TelemetryDatagram)>,
+        cancel: CancellationToken,
+    ) {
+        loop {
+            tokio::select! {
+                _ = cancel.cancelled() => break,
+                item = rx.recv() => {
+                    match item {
+                        Some((device_id, datagram)) => {
+                            crate::redis::telemetry::write_telemetry(&redis, &device_id, &datagram).await;
+                        }
+                        None => break,
                     }
                 }
             }
@@ -408,7 +465,7 @@ pub fn test_slot(device_id: &str, user_id: &str) -> Arc<IngestSlot> {
         audio_tx,
         telemetry_tx,
         manifest: Arc::new(RwLock::new(None)),
-        init_segment: Arc::new(RwLock::new(None)),
+        init_segment: watch::Sender::new(None),
         commands_tx,
         video_subscribers: Arc::new(AtomicUsize::new(0)),
         audio_subscribers: Arc::new(AtomicUsize::new(0)),
@@ -438,7 +495,7 @@ pub fn test_slot_with_commands(
         audio_tx,
         telemetry_tx,
         manifest: Arc::new(RwLock::new(None)),
-        init_segment: Arc::new(RwLock::new(None)),
+        init_segment: watch::Sender::new(None),
         commands_tx,
         video_subscribers: Arc::new(AtomicUsize::new(0)),
         audio_subscribers: Arc::new(AtomicUsize::new(0)),

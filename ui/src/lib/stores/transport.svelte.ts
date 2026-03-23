@@ -52,11 +52,16 @@ class TransportStore {
 			// Create connection manager
 			this.connManager = new ConnectionManager();
 
-			// Connect to all online cameras and fetch coverage for all cameras in parallel
-			await Promise.all([
-				...cameras.filter((c) => c.online).map((c) => this.connManager!.connectCamera(c.device_id)),
-				...cameras.map((c) => this.refreshCoverage(c.device_id)),
-			]);
+			// Fetch coverage for all cameras in parallel
+			await Promise.all(cameras.map((c) => this.refreshCoverage(c.device_id)));
+
+			// Connect to online cameras in batches to avoid overwhelming the browser
+			const BATCH_SIZE = 6;
+			const onlineCameras = cameras.filter((c) => c.online);
+			for (let i = 0; i < onlineCameras.length; i += BATCH_SIZE) {
+				const batch = onlineCameras.slice(i, i + BATCH_SIZE);
+				await Promise.all(batch.map((c) => this.connManager!.connectCamera(c.device_id)));
+			}
 
 			this.error = null;
 		} catch (e) {

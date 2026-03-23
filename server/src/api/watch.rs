@@ -42,6 +42,14 @@ pub async fn create_session(
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 
+    // Enforce session limits
+    if !state.sessions.can_create_for_user(&user.user_id).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many sessions for user").into_response();
+    }
+    if !state.sessions.can_create_for_device(&device_id).await {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many viewers for camera").into_response();
+    }
+
     // Look up slot
     let slot = match state.registry.get_slot(&device_id).await {
         Some(s) => s,

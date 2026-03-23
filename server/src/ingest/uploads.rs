@@ -82,7 +82,7 @@ async fn handle_init_upload(slot: &Arc<IngestSlot>, mut stream: quinn::RecvStrea
         "init segment upload received"
     );
 
-    *slot.init_segment.write().await = Some(Bytes::from(data));
+    let _ = slot.init_segment.send(Some(Bytes::from(data)));
     Ok(())
 }
 

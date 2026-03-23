@@ -50,6 +50,12 @@ impl SseEventBus {
             let _ = tx.send(event.clone());
         }
     }
+
+    /// Remove channels with no active receivers to prevent unbounded growth.
+    pub async fn cleanup_stale(&self) {
+        let mut channels = self.channels.write().await;
+        channels.retain(|_, tx| tx.receiver_count() > 0);
+    }
 }
 
 impl Default for SseEventBus {

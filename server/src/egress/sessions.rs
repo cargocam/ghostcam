@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use ghostcam::config::{MAX_SESSIONS_PER_USER, MAX_VIEWERS_PER_CAMERA};
 use ghostcam::types::{DeviceId, UserId};
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
@@ -114,6 +115,20 @@ impl SessionManager {
     /// Count active sessions.
     pub async fn count(&self) -> usize {
         self.sessions.read().await.len()
+    }
+
+    /// Check if a user can create another session (under the per-user limit).
+    pub async fn can_create_for_user(&self, user_id: &UserId) -> bool {
+        let sessions = self.sessions.read().await;
+        let user_count = sessions.values().filter(|e| &e.user_id == user_id).count();
+        user_count < MAX_SESSIONS_PER_USER
+    }
+
+    /// Check if a camera can accept another viewer (under the per-camera limit).
+    pub async fn can_create_for_device(&self, device_id: &DeviceId) -> bool {
+        let sessions = self.sessions.read().await;
+        let device_count = sessions.values().filter(|e| &e.device_id == device_id).count();
+        device_count < MAX_VIEWERS_PER_CAMERA
     }
 }
 

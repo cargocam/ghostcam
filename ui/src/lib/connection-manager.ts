@@ -120,8 +120,22 @@ export class ConnectionManager {
 		}
 	}
 
+	private pollIndex = 0;
+	private static readonly STATS_BATCH_SIZE = 6;
+
 	private async pollStats() {
-		for (const [deviceId, conn] of this.connections) {
+		// Stagger: poll a subset of connections each interval to spread CPU load
+		const entries = [...this.connections.entries()];
+		if (entries.length === 0) return;
+
+		const start = this.pollIndex % entries.length;
+		const batch = [];
+		for (let i = 0; i < ConnectionManager.STATS_BATCH_SIZE && i < entries.length; i++) {
+			batch.push(entries[(start + i) % entries.length]);
+		}
+		this.pollIndex = (start + ConnectionManager.STATS_BATCH_SIZE) % Math.max(entries.length, 1);
+
+		for (const [deviceId, conn] of batch) {
 			const statsPromise = conn.getStats();
 			if (!statsPromise) continue;
 

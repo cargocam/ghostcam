@@ -14,8 +14,9 @@ pub struct TelemetryBuffer {
 
 impl TelemetryBuffer {
     /// Load the buffer from disk (or create empty if file doesn't exist).
+    /// Truncates to `TELEMETRY_BUFFER_CAP` to prevent OOM from large on-disk buffers.
     pub fn load(path: &Path) -> Result<Self> {
-        let entries = if path.exists() {
+        let mut entries = if path.exists() {
             let data = std::fs::read(path)?;
             if data.is_empty() {
                 Vec::new()
@@ -25,6 +26,17 @@ impl TelemetryBuffer {
         } else {
             Vec::new()
         };
+
+        // Enforce cap on load to prevent OOM from large on-disk buffers
+        if entries.len() > TELEMETRY_BUFFER_CAP {
+            let overflow = entries.len() - TELEMETRY_BUFFER_CAP;
+            tracing::warn!(
+                total = entries.len(),
+                dropping = overflow,
+                "telemetry buffer exceeds cap on load, truncating"
+            );
+            entries.drain(..overflow);
+        }
 
         tracing::debug!(count = entries.len(), "telemetry buffer loaded");
 

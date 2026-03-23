@@ -73,7 +73,9 @@
 			};
 			const attachHls = (startPosition?: number) => {
 				if (disposed) return;
-				const instance = new Hls({ enableWorker: true, autoStartLoad: false });
+				// Disable Web Workers to avoid hitting browser limits with many concurrent
+				// HLS players (browsers typically cap at 10-20 workers).
+				const instance = new Hls({ enableWorker: false, autoStartLoad: false });
 				hls = instance;
 				instance.loadSource(src);
 				instance.attachMedia(mediaEl);
