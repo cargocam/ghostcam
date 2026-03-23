@@ -48,20 +48,12 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build and push server-solo
+      - name: Build and push server
         uses: docker/build-push-action@v5
         with:
           push: true
-          target: server-solo
-          tags: ${{ env.IMAGE_PREFIX }}-server-solo:${{ github.ref_name }},${{ env.IMAGE_PREFIX }}-server-solo:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-      - name: Build and push server-multi
-        uses: docker/build-push-action@v5
-        with:
-          push: true
-          target: server-multi
-          tags: ${{ env.IMAGE_PREFIX }}-server-multi:${{ github.ref_name }},${{ env.IMAGE_PREFIX }}-server-multi:latest
+          target: server
+          tags: ${{ env.IMAGE_PREFIX }}-server:${{ github.ref_name }},${{ env.IMAGE_PREFIX }}-server:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
 

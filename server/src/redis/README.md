@@ -20,6 +20,6 @@ XADD telemetry:cam-01 * cpu 42.1 temp 58.3 mem 312.0 ...
 | `telemetry.rs` | `write_telemetry` — XADD a `TelemetryDatagram` to the camera's stream |
 | `telemetry_query.rs` | `query_range` — XRANGE/XREVRANGE with time bounds and limit; `query_latest` — XREVRANGE count 1 |
 | `telemetry_api.rs` | Axum handlers: `handle_range` (query params → JSON array), `handle_latest` (single entry) |
-| `segments.rs` | Upload segment data to Redis for cross-process HLS serving (optional) |
+| `manifest.rs` | Store and serve HLS manifests via Redis for cross-node HLS serving |
 | `revocation.rs` | Redis-backed revocation list for multi-node deployments |
 | `purge.rs` | `purge_old_telemetry` — XTRIM streams older than retention window (called on a background interval) |
