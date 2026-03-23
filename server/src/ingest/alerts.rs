@@ -5,7 +5,6 @@ use ghostcam::wire::alert::{Alert, UploadFailReason};
 use tokio::time::Instant;
 
 use super::slot::{IngestSlot, SegmentState};
-use crate::redis::segments;
 use ghostcam::config::SEGMENT_BUFFER_TTL_SECS;
 
 /// Dispatch an alert from a camera to the appropriate handler.
@@ -33,23 +32,9 @@ pub async fn handle_alert(slot: &Arc<IngestSlot>, alert: Alert) {
                 size_bytes,
                 "recording segment"
             );
-            if let Some(ref redis) = slot.redis {
-                segments::upsert_segment(
-                    redis,
-                    &slot.device_id,
-                    &segment_id,
-                    start_ts,
-                    end_ts,
-                    size_bytes,
-                )
-                .await;
-            }
         }
         Alert::SegmentEvicted { segment_id } => {
             tracing::info!(device_id = %slot.device_id, segment_id, "segment evicted");
-            if let Some(ref redis) = slot.redis {
-                segments::delete_segment(redis, &slot.device_id, &segment_id).await;
-            }
         }
         Alert::SegmentUploaded { segment_id, .. } => {
             handle_segment_uploaded(slot, &segment_id).await;

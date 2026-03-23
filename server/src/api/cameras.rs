@@ -64,7 +64,7 @@ pub async fn enroll(
     Json(body): Json<EnrollRequest>,
 ) -> Response {
     let claims = crate::pki::enrollment::EnrollmentClaims::new(
-        &state.public_addr.to_string(),
+        &state.enrollment_addr,
         body.display_name,
         body.wifi.map(|w| {
             w.into_iter()

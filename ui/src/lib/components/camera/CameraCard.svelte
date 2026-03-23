@@ -33,9 +33,13 @@
 		return deviceId === focusedLayoutTargetId;
 	});
 
-	// HLS manifest URL — the server serves the camera's manifest directly
-	let hlsSrc = $derived(isPlaybackMode ? `/hls/${encodeURIComponent(deviceId)}/playlist.m3u8` : '');
+	// HLS manifest URL — used for both playback scrubbing and live fallback
+	let hlsSrc = $derived(`/hls/${encodeURIComponent(deviceId)}/playlist.m3u8`);
 	let playbackSeekTime = $derived(isPlaybackMode ? scrubberStore.playheadTime : undefined);
+
+	// Use HLS live view when there's no WebRTC stream (e.g. Docker Desktop on Mac,
+	// where UDP port forwarding from host → container is broken).
+	let hasWebRtcStream = $derived(!!camera?.videoStream);
 
 	let isSelected = $derived(cameraStore.selectedId === deviceId);
 	let camera = $derived(cameraStore.cameras.find((c) => c.device_id === deviceId));
@@ -104,10 +108,14 @@
 	onclick={() => cameraStore.select(deviceId)}
 	ondblclick={() => settingsStore.openCameraView(deviceId)}
 >
-	<!-- Live video feed (WebRTC) -->
-	{#if !isPlaybackMode}
+	<!-- Live video feed: WebRTC if connected, HLS live fallback otherwise -->
+	{#if !isPlaybackMode && connected}
 		<div class="absolute inset-0">
-			<VideoPlayer {deviceId} bind:videoElement active={isVisible} muted={isMuted} />
+			{#if hasWebRtcStream}
+				<VideoPlayer {deviceId} bind:videoElement active={isVisible} muted={isMuted} />
+			{:else}
+				<HlsPlayer src={hlsSrc} muted={isMuted} />
+			{/if}
 		</div>
 	{/if}
 
@@ -121,6 +129,8 @@
 				onManifestParsed={(details) => {
 					hlsLastError = null;
 					playbackWindow = { start: details.startTime, end: details.endTime };
+					// Only expand the available window — don't overwrite per-segment coverage
+					// bars which are already populated from the coverage API with gap-aware data.
 					const currentWindow = scrubberStore.availableWindow;
 					scrubberStore.setAvailableWindow(
 						currentWindow
@@ -130,9 +140,6 @@
 								}
 							: { start: details.startTime, end: details.endTime },
 					);
-					scrubberStore.setCameraCoverage(deviceId, [
-						{ start: details.startTime, end: details.endTime },
-					]);
 				}}
 				onError={(err) => {
 					hlsLastError = err;

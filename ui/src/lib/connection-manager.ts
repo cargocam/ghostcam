@@ -63,8 +63,12 @@ export class ConnectionManager {
 	}
 
 	private handleDisconnect(deviceId: string) {
+		const conn = this.connections.get(deviceId);
 		this.connections.delete(deviceId);
 		cameraStore.clearStreams(deviceId);
+		// Tear down the session on the server so the EgressHandle is cleaned up.
+		// Don't await — fire and forget, reconnect can proceed in parallel.
+		conn?.disconnect().catch(() => {});
 		this.scheduleReconnect(deviceId);
 	}
 

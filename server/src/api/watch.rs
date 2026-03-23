@@ -1,7 +1,8 @@
+use std::net::IpAddr;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use axum::Json;
@@ -29,6 +30,7 @@ pub struct WatchResponse {
 pub async fn create_session(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
+    headers: HeaderMap,
     Json(body): Json<WatchRequest>,
 ) -> Response {
     let device_id = DeviceId(body.device_id);
@@ -48,6 +50,10 @@ pub async fn create_session(
         }
     };
 
+    // Determine the ICE candidate IP.
+    let ice_ip = resolve_ice_ip(state.public_ip_override, &headers);
+    tracing::info!(ip = %ice_ip, "ICE candidate IP for session");
+
     // Create egress handle
     let session_id = uuid::Uuid::new_v4().to_string();
     let cancel = CancellationToken::new();
@@ -56,7 +62,8 @@ pub async fn create_session(
         session_id.clone(),
         &slot,
         &body.sdp_offer,
-        state.public_addr,
+        state.webrtc_socket.clone(),
+        ice_ip,
         cancel.clone(),
     )
     .await
@@ -119,4 +126,48 @@ pub async fn ice_candidate(
     Path(_session_id): Path<String>,
 ) -> Response {
     StatusCode::OK.into_response()
+}
+
+/// Determine the IP address to advertise in ICE candidates.
+///
+/// Priority:
+/// 1. Explicit override (`GHOSTCAM_PUBLIC_IP`) — always wins.
+/// 2. HTTP `Host` header hostname — the browser reached us at this address,
+///    so UDP port-mapped on the same host will be reachable too.
+/// 3. `127.0.0.1` fallback.
+fn resolve_ice_ip(public_ip_override: Option<IpAddr>, headers: &HeaderMap) -> IpAddr {
+    // 1. Explicit override
+    if let Some(ip) = public_ip_override {
+        return ip;
+    }
+
+    // 2. Derive from Host header
+    if let Some(host_val) = headers.get("host").and_then(|v| v.to_str().ok()) {
+        // Strip port: "localhost:5173" → "localhost", "[::1]:3000" → "::1"
+        let hostname = if host_val.starts_with('[') {
+            // IPv6 literal: [::1]:port
+            host_val
+                .find(']')
+                .map(|i| &host_val[1..i])
+                .unwrap_or(host_val)
+        } else {
+            host_val.split(':').next().unwrap_or(host_val)
+        };
+
+        // Try parsing as IP literal first
+        if let Ok(ip) = hostname.parse::<IpAddr>() {
+            return ip;
+        }
+
+        // Resolve hostname → IP
+        use std::net::ToSocketAddrs;
+        if let Ok(mut addrs) = (hostname, 0u16).to_socket_addrs() {
+            if let Some(addr) = addrs.find(|a| a.ip().is_ipv4()) {
+                return addr.ip();
+            }
+        }
+    }
+
+    // 3. Fallback
+    IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
 }

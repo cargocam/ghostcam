@@ -14,7 +14,7 @@ Ghostcam is a camera surveillance system. Cameras stream H.264 video + Opus audi
 ghostcam/
 ├── ghostcam/        Shared library: wire protocol types, config constants, telemetry, PKI primitives
 ├── camera/          Camera agent: QUIC/mTLS, enrollment, capture, recording, telemetry
-├── server/          Server binary: QUIC ingest, WebRTC egress, HTTP API, Redis telemetry, SQLite
+├── server/          Server binary: QUIC ingest, WebRTC egress, HTTP API, Redis telemetry, PostgreSQL
 ├── ui/              Svelte 5 SPA: live WebRTC view, HLS playback, timeline scrubber, GPS map
 ├── Dockerfile       Multi-stage: server + camera targets
 ├── docker-compose.yml
@@ -52,6 +52,7 @@ cargo test --workspace
 # Chrome works either way (it also generates a 127.0.0.1 candidate).
 # macOS: ipconfig getifaddr en0  |  Linux: hostname -I | awk '{print $1}'
 GHOSTCAM_DATA_DIR=/tmp/ghostcam-server \
+GHOSTCAM_DATABASE_URL=postgres://ghostcam:dev-password@localhost:5432/ghostcam \
 GHOSTCAM_REDIS_URL=redis://127.0.0.1:6379 \
 GHOSTCAM_PUBLIC_IP=<your-lan-ip> \
 ./target/release/server
@@ -162,7 +163,7 @@ telemetry/       sensors.rs (/proc, /sys, gpsd), buffer.rs (batch upload)
 ```
 main.rs       Env-var config, PKI bootstrap, task spawning, Axum bind
 db_trait.rs   Database trait + record types (CameraRecord, SessionRecord, ApiTokenRecord, ...)
-db.rs         SqliteDatabase — sqlx SQLite implementation
+db.rs         PostgresDatabase — sqlx PostgreSQL implementation
 auth.rs       Token hashing, HMAC, session validation
 audit.rs      AuditLogger — HMAC-SHA256 signed audit trail
 sse.rs        SseEventBus — per-user broadcast for Server-Sent Events
@@ -181,7 +182,6 @@ sse.ts                 SSE client — camera_online/offline events drive WebRTC 
 connection-manager.ts  SSE event → WebRTC session orchestration
 signaling.ts           watchCamera/unwatchCamera (WebRTC SDP), fetchTelemetryRangeCached
 webrtc.ts              RTCPeerConnection per camera; stripCandidates() strips mDNS for Firefox
-playback.ts            hls.js wrapper for HLS player
 telemetry-history.ts   Time-range fetch + cache; nearestTelemetryEntryWithin
 stores/
   transport.svelte.ts  SSE connection, WebRTC session map, auth state
@@ -308,7 +308,7 @@ GET    /readyz                             200 when ready (no auth)
 | `axum` | 0.7 | HTTP framework |
 | `rustls` | 0.23 | TLS for QUIC |
 | `rcgen` | 0.13 | Cert generation. `KeyPair::generate()`, `CertificateParams::self_signed(&kp)` |
-| `sqlx` | 0.8 | SQLite async |
+| `sqlx` | 0.8 | PostgreSQL async |
 | `redis` | 0.27 | Redis Streams for telemetry |
 | `argon2` | 0.5 | Password hashing |
 | `rmp-serde` | 1 | MessagePack for telemetry wire format |

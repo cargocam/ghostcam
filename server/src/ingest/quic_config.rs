@@ -89,6 +89,9 @@ pub fn build_server_endpoint(
             .try_into()
             .unwrap(),
     ));
+    // Enable QUIC datagram support (RFC 9221) so cameras can send telemetry datagrams.
+    // Without this, max_datagram_frame_size is not advertised and send_datagram() fails.
+    transport.datagram_receive_buffer_size(Some(65536));
 
     let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(
         quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)

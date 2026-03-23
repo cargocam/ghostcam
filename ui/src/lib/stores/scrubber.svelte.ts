@@ -78,7 +78,20 @@ class ScrubberStore {
 	}
 
 	setCameraCoverage(deviceId: string, segments: { start: number; end: number }[]) {
-		this.cameraCoverage = new Map(this.cameraCoverage).set(deviceId, segments);
+		// Merge segments that are within 30 seconds of each other to avoid a
+		// sea of tiny bars from back-to-back HLS segments.
+		const GAP_THRESHOLD_MS = 30_000;
+		const sorted = [...segments].sort((a, b) => a.start - b.start);
+		const merged: { start: number; end: number }[] = [];
+		for (const seg of sorted) {
+			const last = merged[merged.length - 1];
+			if (last && seg.start - last.end <= GAP_THRESHOLD_MS) {
+				last.end = Math.max(last.end, seg.end);
+			} else {
+				merged.push({ ...seg });
+			}
+		}
+		this.cameraCoverage = new Map(this.cameraCoverage).set(deviceId, merged);
 	}
 
 	private startLiveTick() {

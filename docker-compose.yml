@@ -1,32 +1,92 @@
 services:
-  server-solo:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ghostcam
+      POSTGRES_USER: ghostcam
+      POSTGRES_PASSWORD: dev-password
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  server:
     build:
       context: .
-      target: server-solo
+      target: server
+    restart: unless-stopped
     ports:
       - "3000:3000"
       - "4433:4433/udp"
-    volumes:
-      - solo-data:/var/lib/ghostcam
+      - "3478:3478/udp"
+    depends_on: [postgres, redis]
     environment:
-      - GHOSTCAM_PUBLIC_IP=127.0.0.1
-      - GHOSTCAM_API_KEY=dev-key
-      - GHOSTCAM_HMAC_KEY=dev-hmac-key
-    command: ["--public-ip", "127.0.0.1", "--static-dir", "/app/static"]
+      - GHOSTCAM_PUBLIC_IP=${GHOSTCAM_PUBLIC_IP:-}
+      - GHOSTCAM_WEBRTC_PORT=3478
+      - GHOSTCAM_DATABASE_URL=postgres://ghostcam:dev-password@postgres:5432/ghostcam
+      - GHOSTCAM_REDIS_URL=redis://redis:6379
+      - GHOSTCAM_DATA_DIR=/var/ghostcam
+      - GHOSTCAM_ADMIN_PASSWORD=dev-password
+      - GHOSTCAM_ENROLLMENT_ADDR=server:4433
+      - RUST_LOG=server=info
+    volumes:
+      - server-data:/var/ghostcam
 
   camera-1:
     build:
       context: .
       target: camera
-    depends_on: [server-solo]
-    command: ["--test-source", "--device-id", "cam-01", "--server-addr", "server-solo:4433"]
+    restart: unless-stopped
+    depends_on: [server]
+    environment:
+      - GHOSTCAM_ADMIN_PASSWORD=dev-password
+      - GHOSTCAM_CAMERA_NAME=Camera 1
+      - GHOSTCAM_DATA_DIR=/var/ghostcam
+      - GHOSTCAM_SERVER_HTTP=http://server:3000
+      - RUST_LOG=camera=info
+    volumes:
+      - camera-1-data:/var/ghostcam
+    command: ["--test-source", "--server-addr", "server:4433", "--no-tofu"]
 
   camera-2:
     build:
       context: .
       target: camera
-    depends_on: [server-solo]
-    command: ["--test-source", "--device-id", "cam-02", "--server-addr", "server-solo:4433"]
+    restart: unless-stopped
+    depends_on: [server]
+    environment:
+      - GHOSTCAM_ADMIN_PASSWORD=dev-password
+      - GHOSTCAM_CAMERA_NAME=Camera 2
+      - GHOSTCAM_DATA_DIR=/var/ghostcam
+      - GHOSTCAM_SERVER_HTTP=http://server:3000
+      - RUST_LOG=camera=info
+    volumes:
+      - camera-2-data:/var/ghostcam
+    command: ["--test-source", "--server-addr", "server:4433", "--no-tofu"]
+
+  ui:
+    build:
+      context: .
+      target: ui-dev
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    depends_on: [server]
+    environment:
+      - VITE_API_URL=http://server:3000
 
 volumes:
-  solo-data:
+  pg-data:
+  redis-data:
+  server-data:
+  camera-1-data:
+  camera-2-data:

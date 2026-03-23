@@ -35,7 +35,7 @@ axum-extra = { workspace = true }
 tower = { workspace = true }
 tower-http = { workspace = true }
 str0m = { workspace = true }
-sqlx = { workspace = true, features = ["sqlite"] }
+sqlx = { workspace = true, features = ["postgres"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

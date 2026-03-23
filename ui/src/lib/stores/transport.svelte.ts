@@ -1,11 +1,12 @@
 import { checkSession, login as authLogin, logout as authLogout } from '$lib/auth.js';
-import { listCameras } from '$lib/signaling.js';
+import { listCameras, fetchCoverage } from '$lib/signaling.js';
 import { connectSse, type SseEvent } from '$lib/sse.js';
 import { ConnectionManager } from '$lib/connection-manager.js';
 import { cameraStore } from '$lib/stores/cameras.svelte.js';
 import { groupStore } from '$lib/stores/groups.svelte.js';
 import { alertsStore } from '$lib/stores/alerts.svelte.js';
 import { cameraConfigStore } from '$lib/stores/cameraConfig.svelte.js';
+import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 
 class TransportStore {
 	authenticated = $state(false);
@@ -51,16 +52,43 @@ class TransportStore {
 			// Create connection manager
 			this.connManager = new ConnectionManager();
 
-			// Connect to all online cameras
-			for (const cam of cameras) {
-				if (cam.online) {
-					this.connManager.connectCamera(cam.device_id);
-				}
-			}
+			// Connect to all online cameras and fetch coverage for all cameras in parallel
+			await Promise.all([
+				...cameras.filter((c) => c.online).map((c) => this.connManager!.connectCamera(c.device_id)),
+				...cameras.map((c) => this.refreshCoverage(c.device_id)),
+			]);
 
 			this.error = null;
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : 'Initialization failed';
+		}
+	}
+
+	/** Fetch coverage for one camera and update the scrubber. */
+	async refreshCoverage(deviceId: string): Promise<void> {
+		try {
+			const coverage = await fetchCoverage(deviceId);
+			const segments = coverage.segments.map((s) => ({
+				start: s.start_ms / 1000,
+				end: s.end_ms / 1000,
+			}));
+			scrubberStore.setCameraCoverage(deviceId, segments);
+			this.updateAvailableWindow();
+		} catch {
+			// Coverage unavailable for this camera — not fatal
+		}
+	}
+
+	/** Recompute the scrubber's available window from all camera coverage. */
+	private updateAvailableWindow(): void {
+		let minStart = Infinity;
+		for (const [, segs] of scrubberStore.cameraCoverage) {
+			for (const seg of segs) {
+				if (seg.start < minStart) minStart = seg.start;
+			}
+		}
+		if (minStart < Infinity) {
+			scrubberStore.setAvailableWindow({ start: minStart, end: Date.now() / 1000 });
 		}
 	}
 
@@ -69,6 +97,7 @@ class TransportStore {
 			case 'camera_online': {
 				cameraStore.setOnline(event.device_id, true);
 				this.connManager?.connectCamera(event.device_id);
+				this.refreshCoverage(event.device_id);
 				const cam = cameraStore.getCamera(event.device_id);
 				alertsStore.addAlert(
 					'reconnect',
@@ -83,6 +112,8 @@ class TransportStore {
 				const offCam = cameraStore.getCamera(event.device_id);
 				cameraStore.setOnline(event.device_id, false);
 				this.connManager?.disconnectCamera(event.device_id);
+				// Refresh coverage after offline — camera may have pushed a final manifest
+				setTimeout(() => this.refreshCoverage(event.device_id), 1000);
 				alertsStore.addAlert(
 					'disconnect',
 					event.device_id,

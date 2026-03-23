@@ -10,13 +10,13 @@ use str0m::channel::ChannelId;
 use str0m::media::{Frequency, MediaTime, Mid};
 use str0m::net::{Protocol, Receive};
 use str0m::{Candidate, Event, Input, Output, Rtc};
-use tokio::net::UdpSocket;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use super::data_channel::ClientMessage;
 use super::rtp::NalAccumulator;
+use super::udp::{SharedWebRtcSocket, UdpPacket};
 use crate::frames::{AudioFrame, VideoFrame};
 use crate::ingest::demand::{update_subscriber_demand, ClientMode};
 use crate::ingest::slot::IngestSlot;
@@ -43,8 +43,12 @@ pub struct EgressHandle {
     slot: Arc<IngestSlot>,
     /// Current client mode
     client_mode: ClientMode,
-    /// UDP socket for WebRTC
-    udp_socket: UdpSocket,
+    /// Shared WebRTC UDP socket (all sessions share one port)
+    shared_socket: Arc<SharedWebRtcSocket>,
+    /// Incoming packets routed to this session by the dispatch loop
+    udp_rx: mpsc::UnboundedReceiver<UdpPacket>,
+    /// Local ICE ufrag (used to unregister from the shared socket on drop)
+    local_ufrag: String,
     /// The advertised local candidate address (for Receive destination matching)
     local_candidate_addr: SocketAddr,
     /// NAL accumulator for building access units
@@ -63,14 +67,15 @@ impl EgressHandle {
         session_id: String,
         slot: &Arc<IngestSlot>,
         sdp_offer: &str,
-        public_addr: SocketAddr,
+        shared_socket: Arc<SharedWebRtcSocket>,
+        public_ip: std::net::IpAddr,
         cancel: CancellationToken,
     ) -> Result<(Self, String)> {
-        // 1. Bind UDP socket
-        let udp_socket = UdpSocket::bind("0.0.0.0:0").await?;
-        let local_addr = udp_socket.local_addr()?;
+        // 1. Build candidate address: use GHOSTCAM_PUBLIC_IP with the shared socket's port.
+        //    shared_socket.local_addr.ip() is 0.0.0.0 (unspecified); str0m rejects that.
+        let candidate_addr = SocketAddr::new(public_ip, shared_socket.local_addr.port());
 
-        // 2. Create str0m Rtc with ICE-lite, H.264 + Opus only
+        // 2. Create str0m Rtc with ICE-lite, H.264 + Opus only.
         let mut rtc = Rtc::builder()
             .set_ice_lite(true)
             .clear_codecs()
@@ -78,8 +83,7 @@ impl EgressHandle {
             .enable_opus(true)
             .build();
 
-        // 3. Add local candidate
-        let candidate_addr = SocketAddr::new(public_addr.ip(), local_addr.port());
+        // 3. Add local candidate using the shared socket's address.
         let candidate = Candidate::host(candidate_addr, Protocol::Udp)?;
         rtc.add_local_candidate(candidate);
 
@@ -90,11 +94,19 @@ impl EgressHandle {
         let answer: SdpAnswer = rtc.sdp_api().accept_offer(offer)?;
         let answer_str = answer.to_sdp_string();
 
-        // 5. Find the video and audio mids from the answer SDP
+        // 5. Extract the local ICE ufrag from the SDP answer so we can register
+        //    with the shared socket.
+        let local_ufrag = parse_local_ufrag(&answer_str)
+            .ok_or_else(|| anyhow::anyhow!("no ice-ufrag in SDP answer"))?;
+
+        // 6. Register with the shared socket — get a receiver for incoming packets.
+        let udp_rx = shared_socket.register(local_ufrag.clone()).await;
+
+        // 7. Find the video and audio mids from the answer SDP.
         let (video_mid, audio_mid, telemetry_channel) =
             Self::parse_mids_from_sdp(&answer_str, &mut rtc)?;
 
-        // 8. Subscribe to IngestSlot broadcast channels
+        // 8. Subscribe to IngestSlot broadcast channels.
         let video_rx = slot.video_tx.subscribe();
         let audio_rx = slot.audio_tx.subscribe();
         let telemetry_rx = slot.telemetry_tx.subscribe();
@@ -111,7 +123,9 @@ impl EgressHandle {
             telemetry_rx,
             slot: slot.clone(),
             client_mode: ClientMode::Live,
-            udp_socket,
+            shared_socket,
+            udp_rx,
+            local_ufrag,
             local_candidate_addr: candidate_addr,
             nal_acc: NalAccumulator::new(),
             rtp_start: std::time::Instant::now(),
@@ -123,10 +137,9 @@ impl EgressHandle {
 
     /// Run the WebRTC event loop. Blocks until session ends.
     pub async fn run(mut self) -> Result<()> {
-        // Start in live mode — increment subscriber counts
+        // Start in live mode — increment subscriber counts.
         let _ = update_subscriber_demand(&self.slot, None, ClientMode::Live).await;
 
-        let mut buf = vec![0u8; 2000];
         let mut next_timeout = Instant::now() + Duration::from_secs(30);
         let mut polls_since_yield: u32 = 0;
 
@@ -141,7 +154,12 @@ impl EgressHandle {
                     }
                     Ok(Output::Transmit(transmit)) => {
                         let dest = transmit.destination;
-                        let _ = self.udp_socket.send_to(&transmit.contents, dest).await;
+                        let _ = self.shared_socket.send_to(&transmit.contents, dest).await;
+                        // Register the destination as a fast-path source for future
+                        // packets arriving from that address.
+                        self.shared_socket
+                            .connect(dest, self.local_ufrag.clone())
+                            .await;
                         polls_since_yield += 1;
                         if polls_since_yield >= 64 {
                             polls_since_yield = 0;
@@ -173,14 +191,14 @@ impl EgressHandle {
                     }
                 }
 
-                result = self.udp_socket.recv_from(&mut buf) => {
-                    match result {
-                        Ok((len, addr)) => {
+                packet = self.udp_rx.recv() => {
+                    match packet {
+                        Some((src, data)) => {
                             let receive = Receive {
                                 proto: Protocol::Udp,
-                                source: addr,
+                                source: src,
                                 destination: self.local_candidate_addr,
-                                contents: buf[..len].try_into().unwrap(),
+                                contents: data.as_slice().try_into().unwrap(),
                             };
                             if let Err(e) = self.rtc.handle_input(Input::Receive(
                                 std::time::Instant::now(),
@@ -189,8 +207,8 @@ impl EgressHandle {
                                 tracing::debug!(session = %self.session_id, "receive error: {e}");
                             }
                         }
-                        Err(e) => {
-                            tracing::warn!(session = %self.session_id, "udp recv error: {e}");
+                        None => {
+                            // Shared socket dispatch loop exited — shut down.
                             break;
                         }
                     }
@@ -231,7 +249,10 @@ impl EgressHandle {
             }
         }
 
-        // Decrement subscriber counts on exit
+        // Unregister from the shared socket.
+        self.shared_socket.unregister(&self.local_ufrag).await;
+
+        // Decrement subscriber counts on exit.
         let _ = update_subscriber_demand(&self.slot, Some(self.client_mode), ClientMode::Map).await;
 
         Ok(())
@@ -312,8 +333,17 @@ impl EgressHandle {
         let Ok(data) = serde_json::to_vec(datagram) else {
             return;
         };
-        if let Some(mut channel) = self.rtc.channel(self.telemetry_channel) {
-            let _ = channel.write(false, &data);
+        match self.rtc.channel(self.telemetry_channel) {
+            Some(mut channel) => {
+                if let Err(e) = channel.write(false, &data) {
+                    tracing::debug!(session = %self.session_id, "telemetry channel write error: {e}");
+                } else {
+                    tracing::trace!(session = %self.session_id, bytes = data.len(), "telemetry sent");
+                }
+            }
+            None => {
+                tracing::debug!(session = %self.session_id, "telemetry channel not yet open, dropping datagram");
+            }
         }
     }
 
@@ -347,11 +377,14 @@ impl EgressHandle {
         let audio_mid =
             audio_mid.ok_or_else(|| anyhow::anyhow!("no audio mid found in SDP answer"))?;
 
-        // Create data channel via direct API since accept_offer handles the SCTP m-line
+        // Pre-negotiated data channel (stream ID 1) — browser uses `negotiated: true, id: 1`
+        // so no DATA_CHANNEL_OPEN/ACK exchange is needed. str0m marks it Open immediately
+        // after SCTP is established, avoiding the DCEP round trip.
         let telemetry_channel = rtc
             .direct_api()
             .create_data_channel(str0m::channel::ChannelConfig {
                 label: "telemetry".to_string(),
+                negotiated: Some(1),
                 ..Default::default()
             });
 
@@ -361,7 +394,13 @@ impl EgressHandle {
     async fn handle_event(&mut self, event: Event) {
         match event {
             Event::Connected => {
-                tracing::info!(session = %self.session_id, "webrtc connected");
+                tracing::info!(session = %self.session_id, "webrtc connected (dtls established)");
+            }
+            Event::ChannelOpen(id, label) => {
+                tracing::info!(session = %self.session_id, ?id, label = %label, "data channel open");
+            }
+            Event::ChannelClose(id) => {
+                tracing::debug!(session = %self.session_id, ?id, "data channel closed");
             }
             Event::ChannelData(cd) => {
                 // Parse as ClientMessage
@@ -388,4 +427,14 @@ impl EgressHandle {
             _ => {}
         }
     }
+}
+
+/// Extract the local ICE ufrag from an SDP string (`a=ice-ufrag:<value>`).
+fn parse_local_ufrag(sdp: &str) -> Option<String> {
+    for line in sdp.split("\r\n") {
+        if let Some(ufrag) = line.strip_prefix("a=ice-ufrag:") {
+            return Some(ufrag.trim().to_owned());
+        }
+    }
+    None
 }

@@ -10,14 +10,16 @@ mod pki;
 mod redis;
 mod sse;
 
+use anyhow::Context;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::api::routes::build_router;
 use crate::api::state::AppState;
-use crate::db::SqliteDatabase;
+use crate::db::PostgresDatabase;
 use crate::db_trait::Database;
 use crate::egress::sessions::SessionManager;
+use crate::egress::udp::SharedWebRtcSocket;
 use crate::ingest::accept::run_accept_loop;
 use crate::ingest::quic_config::build_server_endpoint;
 use crate::ingest::registry::RoutingRegistry;
@@ -38,7 +40,6 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("GHOSTCAM_DATA_DIR").unwrap_or_else(|_| "/var/ghostcam".to_string());
     std::fs::create_dir_all(&data_dir)?;
 
-    let public_ip = std::env::var("GHOSTCAM_PUBLIC_IP").unwrap_or_else(|_| "127.0.0.1".into());
     let http_port: u16 = std::env::var("GHOSTCAM_HTTP_PORT")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -48,25 +49,45 @@ async fn main() -> anyhow::Result<()> {
         .and_then(|v| v.parse().ok())
         .unwrap_or(ghostcam::config::QUIC_PORT);
     let redis_url = std::env::var("GHOSTCAM_REDIS_URL").ok().filter(|s| !s.is_empty());
-    let public_addr: SocketAddr = format!("{public_ip}:{quic_port}").parse()?;
+    let public_ip_override = parse_public_ip_env();
+    if let Some(ip) = public_ip_override {
+        tracing::info!(ip = %ip, "explicit public IP override");
+    } else {
+        tracing::info!("no GHOSTCAM_PUBLIC_IP set; ICE candidate IP will be derived from HTTP Host header");
+    }
+    // enrollment_addr is embedded in enrollment JWTs. Defaults to
+    // <public_ip_override>:<quic_port> but can be overridden when cameras and
+    // viewers use different network paths (e.g. Docker: cameras reach the
+    // server via service DNS, not the LAN IP).
+    let enrollment_addr = std::env::var("GHOSTCAM_ENROLLMENT_ADDR")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| {
+            let ip = public_ip_override.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+            format!("{ip}:{quic_port}")
+        });
 
     // --- Database ---
-    let db_path = format!("{data_dir}/ghostcam.db");
-    let db = SqliteDatabase::open(&db_path).await?;
-    if let Some(initial_password) = db.initialize().await? {
+    let database_url = std::env::var("GHOSTCAM_DATABASE_URL")
+        .context("GHOSTCAM_DATABASE_URL is required")?;
+    let db = PostgresDatabase::connect(&database_url).await?;
+    let preset_password = std::env::var("GHOSTCAM_ADMIN_PASSWORD").ok().filter(|s| !s.is_empty());
+    if let Some(initial_password) = db.initialize(preset_password.as_deref()).await? {
         println!("============================================================");
         println!("Ghostcam server first run");
         println!();
         println!("Initial operator password: {initial_password}");
         println!();
-        println!("Log in and change this password.");
-        println!();
+        if preset_password.is_none() {
+            println!("Log in and change this password.");
+            println!();
+        }
         println!("IMPORTANT: Back up {data_dir}/ca.key");
         println!("Losing this file requires re-enrolling all cameras.");
         println!("============================================================");
     }
     let db: Arc<dyn Database> = Arc::new(db);
-    tracing::info!("database initialized at {db_path}");
+    tracing::info!("database connected");
 
     // --- PKI ---
     let pki = bootstrap_pki(std::path::Path::new(&data_dir)).await?;
@@ -85,6 +106,15 @@ async fn main() -> anyhow::Result<()> {
         None
     };
 
+    // --- Shared WebRTC UDP socket ---
+    let webrtc_port: u16 = std::env::var("GHOSTCAM_WEBRTC_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3478);
+    let webrtc_socket = SharedWebRtcSocket::bind(webrtc_port).await?;
+    webrtc_socket.clone().spawn_dispatch();
+    tracing::info!(port = webrtc_port, "WebRTC UDP listening");
+
     // --- Shared state ---
     let hmac_secret = db.get_hmac_secret().await?;
     let registry = Arc::new(RoutingRegistry::new());
@@ -101,7 +131,9 @@ async fn main() -> anyhow::Result<()> {
         ca: ca.clone(),
         revocation_cache: revocation_cache.clone(),
         hmac_secret,
-        public_addr,
+        public_ip_override,
+        enrollment_addr,
+        webrtc_socket,
     });
 
     // --- QUIC listener ---
@@ -149,4 +181,25 @@ async fn main() -> anyhow::Result<()> {
     let _ = tokio::join!(quic_handle, http_handle);
     tracing::info!("goodbye");
     Ok(())
+}
+
+/// Parse the public IP from environment variables, if available.
+///
+/// Priority:
+/// 1. `GHOSTCAM_PUBLIC_IP` — explicit override, always wins.
+/// 2. `FLY_PUBLIC_IP` — automatically set by Fly.io on each machine.
+///
+/// Returns `None` when neither is set, letting the watch handler derive the
+/// ICE candidate IP from the HTTP request's `Host` header instead.
+fn parse_public_ip_env() -> Option<std::net::IpAddr> {
+    for var in ["GHOSTCAM_PUBLIC_IP", "FLY_PUBLIC_IP"] {
+        if let Some(ip) = std::env::var(var)
+            .ok()
+            .filter(|s| !s.is_empty())
+            .and_then(|s| s.parse::<std::net::IpAddr>().ok())
+        {
+            return Some(ip);
+        }
+    }
+    None
 }

@@ -68,7 +68,6 @@ Camera events and state arrive via **Server-Sent Events** (`/events`), not WebRT
 | `signaling.ts` | `watchCamera` / `unwatchCamera` — WebRTC SDP exchange with server; `fetchTelemetryRangeCached` |
 | `webrtc.ts` | `WebRtcSession` — `RTCPeerConnection` per camera, ICE candidate handling, `stripCandidates()` for Firefox mDNS compat |
 | `connection-manager.ts` | Orchestrates SSE events → WebRTC session lifecycle |
-| `playback.ts` | hls.js wrapper for HLS player |
 | `telemetry-history.ts` | Fetch telemetry time ranges from API with in-memory cache; `nearestTelemetryEntryWithin` |
 
 ### Views

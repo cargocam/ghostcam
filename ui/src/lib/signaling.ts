@@ -1,5 +1,16 @@
 import type { GroupInfo, CameraInfo } from '$lib/types.js';
 
+export interface CoverageSegment {
+	id: string;
+	start_ms: number;
+	end_ms: number;
+}
+
+export interface CoverageResponse {
+	online: boolean;
+	segments: CoverageSegment[];
+}
+
 const API_BASE = '/api/v1';
 
 export interface WatchResponse {
@@ -83,6 +94,14 @@ export async function listGroups(): Promise<GroupInfo[]> {
 		credentials: 'include',
 	});
 	if (!res.ok) throw new Error(`listGroups failed: ${res.status}`);
+	return res.json();
+}
+
+export async function fetchCoverage(deviceId: string): Promise<CoverageResponse> {
+	const res = await fetch(`/hls/${encodeURIComponent(deviceId)}/coverage`, {
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`fetchCoverage failed: ${res.status}`);
 	return res.json();
 }
 

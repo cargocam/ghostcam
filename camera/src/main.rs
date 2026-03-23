@@ -298,52 +298,41 @@ async fn try_connect_and_run(
     // Mark healthy for watchdog
     firmware::mark_healthy(std::path::Path::new(&config.data_dir)).await;
 
-    // Bridge the persistent capture channels into per-session channels
+    // Bridge the persistent capture channels into per-session channels.
     let (vid_tx, vid_rx) = mpsc::channel(256);
     let (aud_tx, aud_rx) = mpsc::channel(256);
 
-    let bridge_cancel = cancel.child_token();
+    let mut sess_handle = tokio::spawn(async move { sess.run(vid_rx, aud_rx).await });
 
-    // These tasks forward messages from the persistent channels to the session channels.
-    // When the session ends (bridge_cancel fires), they stop and we reclaim the persistent receivers.
-    let bc = bridge_cancel.clone();
-    tokio::spawn(async move {
-        // This task doesn't own video_rx; the caller retains it.
-        // We need a different approach.
-        bc.cancelled().await;
-    });
-
-    // Actually, the simplest approach: pass the session the per-session receivers,
-    // and drain from the persistent channels into them in the main task.
-    let sess_handle = tokio::spawn(async move { sess.run(vid_rx, aud_rx).await });
-
-    // Drain loop: forward from persistent channels to session channels
-    loop {
+    // Drain loop: forward frames into the session's channels.
+    // Exits when the session finishes (success or error) or when the global cancel fires.
+    let result = loop {
         tokio::select! {
-            _ = bridge_cancel.cancelled() => break,
+            _ = cancel.cancelled() => break Ok(()),
+            result = &mut sess_handle => {
+                break match result {
+                    Ok(Ok(_)) => Ok(()),
+                    Ok(Err(e)) => Err(e),
+                    Err(e) => Err(anyhow::anyhow!("session task panicked: {e}")),
+                };
+            }
             msg = video_rx.recv() => {
                 if let Some(m) = msg {
                     let _ = vid_tx.send(m).await;
                 } else {
-                    break;
+                    break Ok(());
                 }
             }
             msg = audio_rx.recv() => {
                 if let Some(m) = msg {
                     let _ = aud_tx.send(m).await;
                 } else {
-                    break;
+                    break Ok(());
                 }
             }
         }
-    }
-
-    // Wait for session to finish
-    match sess_handle.await {
-        Ok(Ok(_signal)) => Ok(()),
-        Ok(Err(e)) => Err(e),
-        Err(e) => Err(anyhow::anyhow!("session task panicked: {e}")),
-    }
+    };
+    result
 }
 
 /// Fan out capture messages to separate video and audio channels.

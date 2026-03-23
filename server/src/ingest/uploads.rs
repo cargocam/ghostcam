@@ -97,7 +97,12 @@ async fn handle_manifest_push(slot: &Arc<IngestSlot>, mut stream: quinn::RecvStr
         "manifest push received"
     );
 
-    *slot.manifest.write().await = Some(manifest);
+    *slot.manifest.write().await = Some(manifest.clone());
+
+    if let Some(ref redis) = slot.redis {
+        crate::redis::manifest::store_manifest(redis, &slot.device_id, &manifest).await;
+    }
+
     Ok(())
 }
 

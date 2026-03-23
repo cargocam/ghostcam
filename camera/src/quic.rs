@@ -43,13 +43,21 @@ pub fn build_client_endpoint(
 }
 
 /// Connect to the server. Returns the QUIC connection.
+/// `server_addr` may be an IP:port or hostname:port — hostname is resolved via DNS.
 pub async fn connect(
     endpoint: &quinn::Endpoint,
     server_addr: &str,
 ) -> Result<quinn::Connection> {
-    let addr = server_addr
-        .parse()
-        .context("invalid server address")?;
+    // Try direct SocketAddr parse first (IP:port), then fall back to DNS resolution.
+    let addr = if let Ok(a) = server_addr.parse() {
+        a
+    } else {
+        tokio::net::lookup_host(server_addr)
+            .await
+            .context("invalid server address")?
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("could not resolve server address: {server_addr}"))?
+    };
 
     let connection = endpoint
         .connect(addr, "ghostcam")

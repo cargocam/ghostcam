@@ -8,7 +8,7 @@ Real-time camera surveillance system. Cameras stream H.264 video and Opus audio 
 ghostcam/
 ├── ghostcam/     Shared library — wire protocol, types, telemetry, PKI primitives
 ├── camera/       Camera agent — QUIC/mTLS, capture, recording, enrollment, telemetry
-├── server/       Server binary — QUIC ingest, WebRTC egress, HTTP API, Redis telemetry, SQLite
+├── server/       Server binary — QUIC ingest, WebRTC egress, HTTP API, Redis telemetry, PostgreSQL
 └── ui/           Svelte 5 SPA — live WebRTC view, HLS playback, timeline scrubber, GPS map
 ```
 
@@ -32,11 +32,11 @@ The server is a protocol translator, not an SFU. It does not transcode or mix me
 │  Camera     │──────────────>│  │ broadcast::Sender<AudioFrame>          │  │
 └─────────────┘               │  │ HLS ring buffer                        │  │
                               │  └───────────────┬────────────────────────┘  │
-                              │                  │ fan-out                    │
+                              │                  │ fan-out                   │
                               │       ┌──────────┼──────────┐                │
                               │       ▼          ▼          ▼                │
-                              │   EgressHandle  Handle    Handle              │
-                              │   (str0m Rtc)                                 │
+                              │   EgressHandle  Handle    Handle             │
+                              │   (str0m Rtc)                                │
                               └───────┼──────────┼──────────┼────────────────┘
                                       │ RTP/UDP  │          │
                                       ▼          ▼          ▼
@@ -64,11 +64,11 @@ The server is ICE-lite — it only responds to STUN binding requests, never init
 
 ### State and Recovery
 
-The server holds no durable session state. If it restarts, cameras reconnect and re-register their slots; viewers re-request their feeds via SSE + WebRTC. Persistent state (camera enrollment, API tokens, operator accounts) lives in SQLite. Telemetry history lives in Redis.
+The server holds no durable session state. If it restarts, cameras reconnect and re-register their slots; viewers re-request their feeds via SSE + WebRTC. Persistent state (camera enrollment, API tokens, operator accounts) lives in PostgreSQL. Telemetry history lives in Redis.
 
 | State | Storage | On restart |
 |-------|---------|------------|
-| Camera enrollment, tokens | SQLite | Persists |
+| Camera enrollment, tokens | PostgreSQL | Persists |
 | Telemetry history | Redis Streams | Persists |
 | Active QUIC connections | Memory | Cameras reconnect |
 | WebRTC sessions | Memory | Viewers re-request |
@@ -79,7 +79,8 @@ The server holds no durable session state. If it restarts, cameras reconnect and
 ### Prerequisites
 
 - Rust toolchain ([rustup](https://rustup.rs/))
-- [Bun](https://bun.sh/)
+- [Bun](https://bun.sh/))
+- PostgreSQL 16+
 - Redis (optional — for telemetry history)
 - FFmpeg (for test video generation)
 
@@ -105,6 +106,7 @@ ffmpeg -f lavfi -i testsrc2=duration=10:size=640x480:rate=30 \
 # Find your LAN IP:  ipconfig getifaddr en0  (macOS)  |  hostname -I | awk '{print $1}'  (Linux)
 
 GHOSTCAM_DATA_DIR=/tmp/ghostcam-server \
+GHOSTCAM_DATABASE_URL=postgres://ghostcam:dev-password@localhost:5432/ghostcam \
 GHOSTCAM_REDIS_URL=redis://127.0.0.1:6379 \
 GHOSTCAM_PUBLIC_IP=<your-lan-ip> \
 ./target/release/server
@@ -112,7 +114,7 @@ GHOSTCAM_PUBLIC_IP=<your-lan-ip> \
 
 > **`GHOSTCAM_PUBLIC_IP` must be a LAN IP, not `127.0.0.1`.** Firefox obfuscates its ICE candidates as mDNS hostnames and cannot route UDP from its LAN-bound socket to loopback. Chrome is unaffected (it also generates a `127.0.0.1` candidate and uses it).
 
-On first start the server creates the data directory, generates a CA keypair, and prints an initial password for the `admin` account.
+On first start the server runs migrations, generates a CA keypair, and prints an initial password for the `admin` account.
 
 ### Start test cameras
 
@@ -154,12 +156,12 @@ Camera CLI flags — see [`camera/README.md`](camera/README.md).
 
 ```bash
 docker compose build
-docker compose up        # server + 2 test cameras
+docker compose up        # postgres + redis + server + 2 test cameras
 ```
 
 ```bash
 # Cross-compile for ARM64 (Raspberry Pi)
-docker buildx build --platform linux/arm64 --target agent -t ghostcam-camera .
+docker buildx build --platform linux/arm64 --target camera -t ghostcam-camera .
 ```
 
 ## CI
@@ -208,7 +210,7 @@ See [`ghostcam/src/wire/README.md`](ghostcam/src/wire/README.md) for full protoc
 | `axum` 0.7 | HTTP framework |
 | `rustls` 0.23 | TLS |
 | `rcgen` 0.13 | Certificate generation |
-| `sqlx` 0.8 | SQLite async |
+| `sqlx` 0.8 | PostgreSQL async |
 | `redis` 0.27 | Redis Streams for telemetry |
 | `argon2` 0.5 | Password hashing |
 | `rmp-serde` 1 | MessagePack for telemetry wire format |

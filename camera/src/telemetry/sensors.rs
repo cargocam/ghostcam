@@ -3,6 +3,9 @@ use ghostcam::telemetry::TelemetryDatagram;
 use crate::config::CameraConfig;
 
 /// Read all available sensor values.
+///
+/// In test-source mode, falls back to synthetic values for any sensor that
+/// returns `None` (e.g. no thermal zone or GPS in Docker containers).
 pub async fn read_sensors(config: &CameraConfig) -> TelemetryDatagram {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -12,16 +15,21 @@ pub async fn read_sensors(config: &CameraConfig) -> TelemetryDatagram {
     let (lat, lon, alt, gps_fix) = if config.no_gps {
         (None, None, None, None)
     } else {
-        read_gps()
+        let real = read_gps();
+        if config.test_source && real.0.is_none() {
+            synthetic_gps()
+        } else {
+            real
+        }
     };
 
     TelemetryDatagram {
         ts,
         cpu: read_cpu(),
         mem: read_memory(),
-        temp: read_temperature(),
+        temp: read_temperature().or_else(|| config.test_source.then_some(45)),
         uptime: read_uptime(),
-        sig: read_wifi_signal(),
+        sig: read_wifi_signal().or_else(|| config.test_source.then_some(-55)),
         lat,
         lon,
         alt,
@@ -140,33 +148,52 @@ fn read_gps() -> (Option<f64>, Option<f64>, Option<f32>, Option<u8>) {
     (None, None, None, None)
 }
 
-// Non-Linux: synthetic GPS coordinates for development.
-// Each camera process gets a unique offset based on PID, and drifts slowly over time.
 #[cfg(not(target_os = "linux"))]
 fn read_gps() -> (Option<f64>, Option<f64>, Option<f32>, Option<u8>) {
+    synthetic_gps()
+}
+
+/// Synthetic GPS coordinates for test-source cameras.
+/// Each camera gets a unique offset based on a hash seed derived from the
+/// hostname (Docker container ID) + PID, so containers that all run as PID 1
+/// still get distinct positions.
+fn synthetic_gps() -> (Option<f64>, Option<f64>, Option<f32>, Option<u8>) {
     // Base: San Francisco (37.7749, -122.4194)
-    // ~1 square mile ≈ 0.015° lat, 0.018° lon
-    let pid = std::process::id() as f64;
+    let seed = gps_seed();
     let t = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_secs_f64();
 
-    // Use PID to seed a unique starting offset within the square mile
-    let pid_hash = (pid * 2654435761.0) % 1.0; // Knuth multiplicative hash → [0,1)
-    let pid_hash2 = ((pid + 1.0) * 2654435761.0) % 1.0;
-    let base_lat_offset = pid_hash * 0.012 - 0.006; // ±0.006° (~670m)
-    let base_lon_offset = pid_hash2 * 0.015 - 0.0075; // ±0.0075° (~670m)
+    let hash1 = (seed * 2654435761.0) % 1.0;
+    let hash2 = ((seed + 1.0) * 2654435761.0) % 1.0;
+    let base_lat_offset = hash1 * 0.012 - 0.006; // ±0.006° (~670m)
+    let base_lon_offset = hash2 * 0.015 - 0.0075; // ±0.0075° (~670m)
 
     // Slow sinusoidal drift: different frequencies per axis, ~200m amplitude
-    let drift_lat = 0.002 * (t / 120.0 + pid).sin(); // 2min period
-    let drift_lon = 0.002 * (t / 90.0 + pid * 1.7).cos(); // 1.5min period
+    let drift_lat = 0.002 * (t / 120.0 + seed).sin(); // 2min period
+    let drift_lon = 0.002 * (t / 90.0 + seed * 1.7).cos(); // 1.5min period
 
     let lat = 37.7749 + base_lat_offset + drift_lat;
     let lon = -122.4194 + base_lon_offset + drift_lon;
-    let alt = 10.0 + (5.0 * (t / 60.0 + pid).sin()) as f32;
+    let alt = 10.0 + (5.0 * (t / 60.0 + seed).sin()) as f32;
 
     (Some(lat), Some(lon), Some(alt), Some(2))
+}
+
+/// Produce a per-process seed from hostname + PID.
+/// Hostname differentiates Docker containers (all PID 1); PID differentiates
+/// multiple cameras on the same host.
+fn gps_seed() -> f64 {
+    let mut h: u64 = std::process::id() as u64;
+    // HOSTNAME is set by Docker; fall back to /etc/hostname on bare metal.
+    let name = std::env::var("HOSTNAME")
+        .or_else(|_| std::fs::read_to_string("/etc/hostname"))
+        .unwrap_or_default();
+    for b in name.bytes() {
+        h = h.wrapping_mul(31).wrapping_add(b as u64);
+    }
+    (h % 100_000) as f64
 }
 
 #[cfg(test)]

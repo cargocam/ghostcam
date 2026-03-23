@@ -3,11 +3,10 @@ primary_region = "ord"
 
 [build]
   dockerfile = "Dockerfile"
-  target = "server-multi"
+  target = "server"
 
 [env]
-  GHOSTCAM_PUBLIC_IP = "0.0.0.0"
-  RUST_LOG = "server_multi=info,server_core=info,str0m=warn"
+  RUST_LOG = "server=info,str0m=warn"
 
 [http_service]
   internal_port = 3000
@@ -16,11 +15,19 @@ primary_region = "ord"
   auto_start_machines = true
   min_machines_running = 1
 
+# QUIC (camera → server)
 [[services]]
   protocol = "udp"
   internal_port = 4433
   [[services.ports]]
     port = 4433
+
+# WebRTC (browser → server)
+[[services]]
+  protocol = "udp"
+  internal_port = 3478
+  [[services.ports]]
+    port = 3478
 
 [checks]
   [checks.health]

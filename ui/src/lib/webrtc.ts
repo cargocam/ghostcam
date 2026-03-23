@@ -34,6 +34,7 @@ export class CameraConnection {
 
 	private callbacks: CameraCallbacks;
 	private commandsChannel: RTCDataChannel | null = null;
+	private disconnectFired = false;
 
 	constructor(deviceId: string, callbacks: CameraCallbacks) {
 		this.deviceId = deviceId;
@@ -44,7 +45,6 @@ export class CameraConnection {
 		});
 
 		this.setupTrackHandler();
-		this.setupDataChannels();
 		this.setupConnectionStateHandler();
 	}
 
@@ -67,41 +67,50 @@ export class CameraConnection {
 		};
 	}
 
-	private setupDataChannels() {
-		this.pc.ondatachannel = (event) => {
-			const channel = event.channel;
-
-			if (channel.label === 'telemetry') {
-				channel.onmessage = (msg) => {
-					try {
-						const raw = JSON.parse(msg.data);
-						// Map server TelemetryDatagram fields to UI TelemetryData
-						const data: TelemetryData = {
-							device_id: this.deviceId,
-							cpu_percent: raw.cpu ?? undefined,
-							temp_celsius: raw.temp ?? undefined,
-							memory_mb: raw.mem ?? undefined,
-							uptime_secs: raw.uptime ?? undefined,
-							gps: raw.lat != null && raw.lon != null
-								? { latitude: raw.lat, longitude: raw.lon, alt: raw.alt }
-								: undefined,
-						};
-						this.callbacks.onTelemetry(data);
-					} catch {
-						// Ignore malformed telemetry
-					}
+	private setupTelemetryChannel() {
+		// Pre-negotiated data channel (negotiated: true, id: 1) — both browser and server
+		// agree on stream ID 1 without DCEP. This avoids the DATA_CHANNEL_OPEN/ACK round
+		// trip, so the channel is open as soon as SCTP connects.
+		const ch = this.pc.createDataChannel('telemetry', { negotiated: true, id: 1 });
+		ch.onmessage = (msg) => {
+			try {
+				const raw = JSON.parse(msg.data);
+				const data: TelemetryData = {
+					device_id: this.deviceId,
+					cpu_percent: raw.cpu ?? undefined,
+					temp_celsius: raw.temp ?? undefined,
+					memory_mb: raw.mem ?? undefined,
+					uptime_secs: raw.uptime ?? undefined,
+					gps: raw.lat != null && raw.lon != null
+						? { latitude: raw.lat, longitude: raw.lon, alt: raw.alt }
+						: undefined,
 				};
+				this.callbacks.onTelemetry(data);
+			} catch {
+				// Ignore malformed telemetry
 			}
 		};
 	}
 
 	private setupConnectionStateHandler() {
+		const notifyDisconnect = () => {
+			if (this.disconnectFired) return;
+			this.disconnectFired = true;
+			this.callbacks.onDisconnect();
+		};
 		this.pc.onconnectionstatechange = () => {
 			if (
 				this.pc.connectionState === 'failed' ||
 				this.pc.connectionState === 'closed'
 			) {
-				this.callbacks.onDisconnect();
+				notifyDisconnect();
+			}
+		};
+		// Firefox may report iceConnectionState='failed' without transitioning
+		// connectionState to 'failed'. Watch both to be safe.
+		this.pc.oniceconnectionstatechange = () => {
+			if (this.pc.iceConnectionState === 'failed') {
+				notifyDisconnect();
 			}
 		};
 	}
@@ -111,15 +120,14 @@ export class CameraConnection {
 		this.pc.addTransceiver('video', { direction: 'recvonly' });
 		this.pc.addTransceiver('audio', { direction: 'recvonly' });
 
-		// Create data channels in the offer
-		this.pc.createDataChannel('telemetry');
-		this.commandsChannel = this.pc.createDataChannel('commands', {
-			ordered: true, // reliable, ordered for client_mode commands
-		});
-		// Send initial client_mode on open
+		// 'commands': reliable ordered channel for client_mode messages.
+		this.commandsChannel = this.pc.createDataChannel('commands', { ordered: true });
 		this.commandsChannel.onopen = () => {
 			this.sendClientMode('live');
 		};
+
+		// 'telemetry': pre-negotiated channel (stream ID 1 agreed with server out-of-band).
+		this.setupTelemetryChannel();
 
 		const offer = await this.pc.createOffer();
 		await this.pc.setLocalDescription(offer);
@@ -179,7 +187,18 @@ export class CameraConnection {
 			}
 		}
 
-		if (!localIp) return answerSdp;
+		if (!localIp) {
+			// Firefox uses mDNS candidates; we can't extract the real LAN IP.
+			// When GHOSTCAM_PUBLIC_IP is 127.0.0.1, STUN responses will come from
+			// the server's LAN IP (not loopback), causing ICE check failures.
+			// Fix: set GHOSTCAM_PUBLIC_IP to the server's LAN IP, or access the
+			// UI via the LAN IP (e.g. http://10.0.0.x:5173) instead of localhost.
+			console.warn(
+				'[webrtc] Cannot rewrite loopback candidate for this browser. ' +
+				'If using Firefox, set GHOSTCAM_PUBLIC_IP to your LAN IP.',
+			);
+			return answerSdp;
+		}
 
 		return answerSdp
 			.split('\r\n')
