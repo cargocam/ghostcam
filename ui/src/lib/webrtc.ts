@@ -15,7 +15,7 @@ function stripCandidates(sdp: string): string {
 		.join('\r\n');
 }
 
-export interface CameraCallbacks {
+interface CameraCallbacks {
 	onVideoTrack: (stream: MediaStream) => void;
 	onAudioTrack: (stream: MediaStream) => void;
 	onTelemetry: (data: TelemetryData) => void;

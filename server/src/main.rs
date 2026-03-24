@@ -99,6 +99,7 @@ async fn main() -> anyhow::Result<()> {
     let redis = if let Some(url) = &redis_url {
         let mgr = Arc::new(RedisManager::new(url).await);
         mgr.spawn_reconnect_loop(cancel.clone());
+        crate::redis::purge::spawn_telemetry_purge(mgr.clone(), cancel.clone());
         tracing::info!("redis connected");
         Some(mgr)
     } else {

@@ -37,16 +37,6 @@ impl RedisManager {
         manager
     }
 
-    /// Create a manager that is permanently disconnected (for testing).
-    pub fn disconnected() -> Self {
-        Self {
-            conn: RwLock::new(None),
-            url: String::new(),
-            write_errors: AtomicU64::new(0),
-            connected: AtomicBool::new(false),
-        }
-    }
-
     /// Get a connection clone. Returns None if Redis is unavailable.
     pub async fn get_conn(&self) -> Option<redis::aio::MultiplexedConnection> {
         self.conn.read().await.clone()
@@ -55,11 +45,6 @@ impl RedisManager {
     /// Check if Redis is currently connected.
     pub fn is_connected(&self) -> bool {
         self.connected.load(Ordering::SeqCst)
-    }
-
-    /// Get the write error count.
-    pub fn write_error_count(&self) -> u64 {
-        self.write_errors.load(Ordering::SeqCst)
     }
 
     /// Increment the write error counter.
@@ -137,15 +122,4 @@ mod tests {
         assert!(manager.get_conn().await.is_none());
     }
 
-    #[tokio::test]
-    async fn get_conn_when_disconnected() {
-        let manager = RedisManager::disconnected();
-        assert!(manager.get_conn().await.is_none());
-    }
-
-    #[test]
-    fn write_error_counter_starts_zero() {
-        let manager = RedisManager::disconnected();
-        assert_eq!(manager.write_error_count(), 0);
-    }
 }

@@ -76,11 +76,6 @@ impl TelemetryBuffer {
         self.entries.read().await.is_empty()
     }
 
-    /// Entry count.
-    pub async fn len(&self) -> usize {
-        self.entries.read().await.len()
-    }
-
     /// Flush in-memory buffer to disk.
     pub async fn flush_to_disk(&self) -> Result<()> {
         let entries = self.entries.read().await;
@@ -220,7 +215,7 @@ mod tests {
             buf.push(make_datagram(i, i as u32)).await;
         }
 
-        assert_eq!(buf.len().await, 10);
+        assert_eq!(buf.drain().await.len(), 10);
     }
 
     #[tokio::test]
@@ -243,7 +238,7 @@ mod tests {
         }
 
         let buf = TelemetryBuffer::load(&path).unwrap();
-        assert_eq!(buf.len().await, 2);
+        assert_eq!(buf.drain().await.len(), 2);
     }
 
     #[tokio::test]

@@ -82,20 +82,6 @@ class SettingsStore {
 		this.markerMode = mode;
 	}
 
-	toggleSidebar() {
-		this.sidebarOpen = !this.sidebarOpen;
-	}
-
-	toggleGlobalMute() {
-		this.globalMuted = !this.globalMuted;
-		if (this.globalMuted) {
-			this.unmutedCameraId = null;
-		}
-		if (typeof window !== 'undefined') {
-			localStorage.setItem('ghostcam-muted', String(this.globalMuted));
-		}
-	}
-
 	toggleCameraMute(deviceId: string) {
 		if (this.globalMuted) {
 			// Unmute globally and unmute this camera

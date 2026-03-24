@@ -26,11 +26,6 @@ impl RevocationCache {
         self.revoked.read().await.contains(serial)
     }
 
-    /// Replace the entire cache contents (called by the refresh loop in Plan 5).
-    pub async fn replace(&self, serials: HashSet<String>) {
-        *self.revoked.write().await = serials;
-    }
-
     /// Add a single serial number (called on unregistration).
     pub async fn add(&self, serial: String) {
         self.revoked.write().await.insert(serial);
@@ -61,14 +56,6 @@ mod tests {
         assert!(!cache.is_revoked("def").await);
     }
 
-    #[tokio::test]
-    async fn replace_clears_old() {
-        let cache = RevocationCache::new();
-        cache.add("abc".to_string()).await;
-        cache.replace(HashSet::from(["def".to_string()])).await;
-        assert!(!cache.is_revoked("abc").await);
-        assert!(cache.is_revoked("def").await);
-    }
 
     #[tokio::test]
     async fn concurrent_reads() {

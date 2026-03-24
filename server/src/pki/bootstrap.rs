@@ -9,10 +9,9 @@ use super::server_tls::{self, ServerTlsCert};
 pub struct BootstrapResult {
     pub ca: CaManager,
     pub server_tls: ServerTlsCert,
-    pub is_first_run: bool,
 }
 
-/// Bootstrap the PKI for server-solo.
+/// Bootstrap the server PKI.
 ///
 /// On first run: generates Instance CA + server TLS cert, writes PEM files.
 /// On subsequent runs: loads existing PEM files.
@@ -22,9 +21,7 @@ pub async fn bootstrap_pki(data_dir: &Path) -> Result<BootstrapResult> {
     let server_cert_path = data_dir.join("server.crt");
     let server_key_path = data_dir.join("server.key");
 
-    let is_first_run = !ca_cert_path.exists();
-
-    if is_first_run {
+    if !ca_cert_path.exists() {
         // Ensure data directory exists
         tokio::fs::create_dir_all(data_dir)
             .await
@@ -63,7 +60,6 @@ pub async fn bootstrap_pki(data_dir: &Path) -> Result<BootstrapResult> {
         Ok(BootstrapResult {
             ca,
             server_tls,
-            is_first_run,
         })
     } else {
         // Load existing PKI material
@@ -88,7 +84,6 @@ pub async fn bootstrap_pki(data_dir: &Path) -> Result<BootstrapResult> {
         Ok(BootstrapResult {
             ca,
             server_tls,
-            is_first_run,
         })
     }
 }
@@ -100,9 +95,8 @@ mod tests {
     #[tokio::test]
     async fn first_run_generates_files() {
         let dir = tempfile::tempdir().unwrap();
-        let result = bootstrap_pki(dir.path()).await.unwrap();
+        let _result = bootstrap_pki(dir.path()).await.unwrap();
 
-        assert!(result.is_first_run);
         assert!(dir.path().join("ca.crt").exists());
         assert!(dir.path().join("ca.key").exists());
         assert!(dir.path().join("server.crt").exists());
@@ -110,18 +104,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn first_run_is_first_run() {
-        let dir = tempfile::tempdir().unwrap();
-        let result = bootstrap_pki(dir.path()).await.unwrap();
-        assert!(result.is_first_run);
-    }
-
-    #[tokio::test]
     async fn second_run_loads_existing() {
         let dir = tempfile::tempdir().unwrap();
         let _ = bootstrap_pki(dir.path()).await.unwrap();
-        let result = bootstrap_pki(dir.path()).await.unwrap();
-        assert!(!result.is_first_run);
+        let _result = bootstrap_pki(dir.path()).await.unwrap();
     }
 
     #[tokio::test]

@@ -1,9 +1,4 @@
-use anyhow::Result;
-use ghostcam::types::UserId;
 use serde::{Deserialize, Serialize};
-
-use super::ca::CaManager;
-use crate::db_trait::{Database, NewEnrollmentToken};
 
 /// JWT claims for an enrollment token.
 #[derive(Debug, Serialize, Deserialize)]
@@ -46,28 +41,6 @@ impl EnrollmentClaims {
             wifi,
         }
     }
-}
-
-/// Generate a signed enrollment JWT and record the token in the database.
-pub async fn create_enrollment_token(
-    ca: &CaManager,
-    db: &dyn Database,
-    user_id: &UserId,
-    server_addr: &str,
-    display_name: Option<String>,
-    wifi: Option<Vec<WifiCredential>>,
-) -> Result<String> {
-    let claims = EnrollmentClaims::new(server_addr, display_name, wifi);
-
-    db.create_enrollment_token(&NewEnrollmentToken {
-        jti: claims.jti.clone(),
-        user_id: user_id.clone(),
-        expires_at: claims.exp,
-    })
-    .await?;
-
-    let token = ca.sign_enrollment_jwt(&claims)?;
-    Ok(token)
 }
 
 #[cfg(test)]

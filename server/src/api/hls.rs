@@ -1,13 +1,13 @@
 use std::sync::Arc;
 
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use bytes::Bytes;
 use ghostcam::types::DeviceId;
 use ghostcam::wire::command::Command;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::sync::oneshot;
 use tokio::time::{timeout, Duration};
 
@@ -181,13 +181,6 @@ fn init_response(data: Bytes) -> Response {
         .header("cache-control", "no-store, no-cache, must-revalidate")
         .body(axum::body::Body::from(data))
         .unwrap()
-}
-
-#[derive(Deserialize)]
-pub struct SegmentPath {
-    device_id: String,
-    #[serde(rename = "segment_id")]
-    segment_id: String,
 }
 
 /// GET /hls/:device_id/:segment_id

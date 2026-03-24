@@ -40,4 +40,4 @@ On disconnect: slot is removed from registry, `SseEvent::CameraOffline` emitted.
 | `demand.rs` | `ClientMode` enum (Live/Playback) and subscriber demand tracking — cameras pause streaming when no viewers are watching |
 | `enrollment.rs` | Handles `Alert::Enrollment` — verifies JWT, issues signed device cert, writes camera record to DB |
 | `uploads.rs` | Accepts one-shot QUIC upload streams (fMP4 segments, init segments, manifests, telemetry buffers); buffers in slot |
-| `quic_config.rs` | `build_server_endpoint` — configures Quinn QUIC endpoint with mTLS using server-solo's CA |
+| `quic_config.rs` | `build_server_endpoint` — configures Quinn QUIC endpoint with mTLS using the server's CA |

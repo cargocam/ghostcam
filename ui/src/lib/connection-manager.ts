@@ -183,7 +183,4 @@ export class ConnectionManager {
 		}
 	}
 
-	get connectionCount(): number {
-		return this.connections.size;
-	}
 }

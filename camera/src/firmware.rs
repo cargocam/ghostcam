@@ -146,27 +146,9 @@ pub async fn mark_healthy(data_dir: &Path) {
     tracing::debug!("health sentinel written");
 }
 
-/// Verify SHA-256 of data against expected hex digest.
-pub fn verify_sha256(data: &[u8], expected_hex: &str) -> bool {
-    ghostcam::pki::sha256_hex(data) == expected_hex
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn sha256_verify_correct() {
-        let data = b"hello world";
-        let hash = ghostcam::pki::sha256_hex(data);
-        assert!(verify_sha256(data, &hash));
-    }
-
-    #[test]
-    fn sha256_verify_wrong() {
-        let data = b"hello world";
-        assert!(!verify_sha256(data, "0000000000000000000000000000000000000000000000000000000000000000"));
-    }
 
     #[tokio::test]
     async fn mark_healthy_creates_file() {

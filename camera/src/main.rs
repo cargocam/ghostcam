@@ -8,7 +8,6 @@ mod network;
 mod quic;
 mod recording;
 mod session;
-mod stream;
 mod telemetry;
 mod tofu;
 
@@ -85,7 +84,6 @@ async fn main() -> Result<()> {
         server_addr,
         test_source: cli.test_source,
         test_video: cli.test_video,
-        segment_dir: cli.segment_dir,
         no_audio: cli.no_audio || conf.as_ref().map_or(false, |c| c.no_audio),
         no_gps: cli.no_gps || conf.as_ref().map_or(false, |c| c.no_gps),
         data_dir: cli.data_dir,
@@ -175,7 +173,6 @@ async fn main() -> Result<()> {
                 server_addr: String::new(),
                 test_source: true,
                 test_video: String::new(),
-                segment_dir: String::new(),
                 no_audio: camera_config.no_audio,
                 no_gps: telem_no_gps,
                 data_dir: String::new(),

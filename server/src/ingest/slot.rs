@@ -12,7 +12,6 @@ use ghostcam::wire::command::Command;
 use ghostcam::wire::framing;
 use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
 use tokio::task::JoinHandle;
-use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::frames::{AudioFrame, InboundStreamTag, VideoFrame};
@@ -26,7 +25,7 @@ pub enum SegmentState {
         waiters: Vec<oneshot::Sender<Result<Bytes>>>,
     },
     /// Upload complete. Data buffered for a TTL period.
-    Buffered { data: Bytes, expires_at: Instant },
+    Buffered { data: Bytes },
 }
 
 /// Represents a connected camera's server-side state.

@@ -59,24 +59,6 @@ impl RoutingRegistry {
         None
     }
 
-    /// List all connected slots for a user.
-    pub async fn list_slots(&self, user_id: &UserId) -> Vec<Arc<IngestSlot>> {
-        let cameras = self.cameras.read().await;
-        cameras
-            .get(user_id)
-            .map(|m| m.values().cloned().collect())
-            .unwrap_or_default()
-    }
-
-    /// List all connected device_ids for a user.
-    pub async fn list_device_ids(&self, user_id: &UserId) -> Vec<DeviceId> {
-        let cameras = self.cameras.read().await;
-        cameras
-            .get(user_id)
-            .map(|m| m.keys().cloned().collect())
-            .unwrap_or_default()
-    }
-
     /// Check if a device is currently connected.
     pub async fn is_connected(&self, device_id: &DeviceId) -> bool {
         self.get_slot(device_id).await.is_some()
@@ -117,35 +99,6 @@ mod tests {
         registry.register(slot.clone()).await;
         registry.unregister(&DeviceId("cam-1".into()), &slot).await;
         assert!(!registry.is_connected(&DeviceId("cam-1".into())).await);
-    }
-
-    #[tokio::test]
-    async fn list_slots_for_user() {
-        let registry = RoutingRegistry::new();
-        for i in 0..3 {
-            registry
-                .register(test_slot(&format!("cam-a-{i}"), "user-a"))
-                .await;
-        }
-        for i in 0..2 {
-            registry
-                .register(test_slot(&format!("cam-b-{i}"), "user-b"))
-                .await;
-        }
-        let slots = registry.list_slots(&UserId("user-a".into())).await;
-        assert_eq!(slots.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn list_device_ids() {
-        let registry = RoutingRegistry::new();
-        for i in 0..3 {
-            registry
-                .register(test_slot(&format!("cam-{i}"), "user-1"))
-                .await;
-        }
-        let ids = registry.list_device_ids(&UserId("user-1".into())).await;
-        assert_eq!(ids.len(), 3);
     }
 
     #[tokio::test]
@@ -196,8 +149,9 @@ mod tests {
         }
 
         // All should be unregistered
-        let ids = registry.list_device_ids(&UserId("user-1".into())).await;
-        assert!(ids.is_empty());
+        for i in 0..10 {
+            assert!(!registry.is_connected(&DeviceId(format!("cam-{i}"))).await);
+        }
     }
 
     #[tokio::test]

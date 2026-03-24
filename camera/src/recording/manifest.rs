@@ -20,23 +20,16 @@ pub fn generate_manifest(segments: &[SegmentInfo]) -> String {
     m
 }
 
-/// Write manifest to disk.
-pub async fn write_manifest(path: &std::path::Path, manifest: &str) -> anyhow::Result<()> {
-    tokio::fs::write(path, manifest.as_bytes()).await?;
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
 
-    fn make_seg(id: &str, start: u64, end: u64, size: u64) -> SegmentInfo {
+    fn make_seg(id: &str, start: u64, end: u64, _size: u64) -> SegmentInfo {
         SegmentInfo {
             segment_id: id.to_string(),
             start_ts: start,
             end_ts: end,
-            size_bytes: size,
             path: PathBuf::from(format!("{id}.m4s")),
         }
     }

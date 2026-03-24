@@ -63,22 +63,6 @@ pub fn hmac_token(raw_token: &str, secret: &[u8]) -> String {
     tag.as_ref().iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Constant-time comparison of a raw token against a stored HMAC hash.
-pub fn verify_token_hmac(raw_token: &str, stored_hash: &str, secret: &[u8]) -> bool {
-    let key = ring::hmac::Key::new(ring::hmac::HMAC_SHA256, secret);
-    // Decode the stored hex hash to bytes
-    let stored_bytes: Vec<u8> = match (0..stored_hash.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&stored_hash[i..i + 2], 16))
-        .collect::<Result<Vec<u8>, _>>()
-    {
-        Ok(b) => b,
-        Err(_) => return false,
-    };
-    // ring::hmac::verify does constant-time comparison internally
-    ring::hmac::verify(&key, raw_token.as_bytes(), &stored_bytes).is_ok()
-}
-
 /// Generate a 32-byte random HMAC secret.
 pub fn generate_hmac_secret() -> Vec<u8> {
     let mut bytes = [0u8; 32];
@@ -169,20 +153,6 @@ mod tests {
         let h1 = hmac_token("my-token", b"secret-a");
         let h2 = hmac_token("my-token", b"secret-b");
         assert_ne!(h1, h2);
-    }
-
-    #[test]
-    fn verify_token_hmac_valid() {
-        let secret = b"test-secret";
-        let hash = hmac_token("my-token", secret);
-        assert!(verify_token_hmac("my-token", &hash, secret));
-    }
-
-    #[test]
-    fn verify_token_hmac_invalid() {
-        let secret = b"test-secret";
-        let hash = hmac_token("my-token", secret);
-        assert!(!verify_token_hmac("wrong-token", &hash, secret));
     }
 
     #[test]

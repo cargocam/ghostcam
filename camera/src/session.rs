@@ -181,21 +181,6 @@ impl Session {
                                 let mut stream = evt_alerts.lock().await;
                                 let _ = framing::write_json(&mut *stream, &alert).await;
                             }
-                            SegmentEvent::Evicted { segment_id } => {
-                                let alert = Alert::SegmentEvicted { segment_id };
-                                let mut stream = evt_alerts.lock().await;
-                                let _ = framing::write_json(&mut *stream, &alert).await;
-                            }
-                            SegmentEvent::StorageFull { free_bytes } => {
-                                let alert = Alert::StorageFull { free_bytes };
-                                let mut stream = evt_alerts.lock().await;
-                                let _ = framing::write_json(&mut *stream, &alert).await;
-                            }
-                            SegmentEvent::StorageResumed { free_bytes } => {
-                                let alert = Alert::StorageResumed { free_bytes };
-                                let mut stream = evt_alerts.lock().await;
-                                let _ = framing::write_json(&mut *stream, &alert).await;
-                            }
                         }
                     }
                 }

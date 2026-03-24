@@ -17,10 +17,6 @@ class VideoStatsStore {
 		return this.stats.get(sourceId);
 	}
 
-	getAll(): Map<string, VideoStats> {
-		return this.stats;
-	}
-
 	update(sourceId: string, stats: VideoStats) {
 		const next = new Map(this.stats);
 		next.set(sourceId, stats);

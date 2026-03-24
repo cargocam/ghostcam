@@ -6,7 +6,7 @@ use serde::Serialize;
 use super::connection::RedisManager;
 
 const TELEMETRY_KEY_PREFIX: &str = "telemetry:";
-const RETENTION_MS: u64 = 72 * 60 * 60 * 1000; // 72 hours
+const RETENTION_MS: u64 = ghostcam::config::TELEMETRY_RETENTION_SECS * 1000;
 
 /// Response type for telemetry queries.
 #[derive(Debug, Clone, Serialize)]

@@ -2,10 +2,8 @@ use std::sync::Arc;
 
 use bytes::Bytes;
 use ghostcam::wire::alert::{Alert, UploadFailReason};
-use tokio::time::Instant;
 
 use super::slot::{IngestSlot, SegmentState};
-use ghostcam::config::SEGMENT_BUFFER_TTL_SECS;
 
 /// Dispatch an alert from a camera to the appropriate handler.
 pub async fn handle_alert(slot: &Arc<IngestSlot>, alert: Alert) {
@@ -91,10 +89,7 @@ pub async fn complete_segment_upload(slot: &Arc<IngestSlot>, segment_id: &str, d
     // Store as buffered
     segments.insert(
         segment_id.to_string(),
-        SegmentState::Buffered {
-            data,
-            expires_at: Instant::now() + std::time::Duration::from_secs(SEGMENT_BUFFER_TTL_SECS),
-        },
+        SegmentState::Buffered { data },
     );
 }
 

@@ -9,18 +9,6 @@ use super::alerts::complete_segment_upload;
 use super::slot::IngestSlot;
 use crate::frames::InboundStreamTag;
 
-/// Handle an inbound unidirectional stream from the camera.
-/// Reads the 1-byte type tag and dispatches to the appropriate handler.
-pub async fn handle_upload_stream(
-    slot: &Arc<IngestSlot>,
-    mut stream: quinn::RecvStream,
-) -> Result<()> {
-    let mut tag = [0u8; 1];
-    stream.read_exact(&mut tag).await?;
-    let tag = InboundStreamTag::try_from(tag[0])?;
-    handle_upload_stream_tagged(slot, tag, stream).await
-}
-
 /// Handle an upload stream where the tag has already been read.
 pub async fn handle_upload_stream_tagged(
     slot: &Arc<IngestSlot>,

@@ -37,12 +37,12 @@
 	let hlsSrc = $derived(`/hls/${encodeURIComponent(deviceId)}/playlist.m3u8`);
 	let playbackSeekTime = $derived(isPlaybackMode ? scrubberStore.playheadTime : undefined);
 
+	let isSelected = $derived(cameraStore.selectedId === deviceId);
+	let camera = $derived(cameraStore.cameras.find((c) => c.device_id === deviceId));
+
 	// Use HLS live view when there's no WebRTC stream (e.g. Docker Desktop on Mac,
 	// where UDP port forwarding from host → container is broken).
 	let hasWebRtcStream = $derived(!!camera?.videoStream);
-
-	let isSelected = $derived(cameraStore.selectedId === deviceId);
-	let camera = $derived(cameraStore.cameras.find((c) => c.device_id === deviceId));
 	let isMuted = $derived(settingsStore.isCameraMuted(deviceId));
 	let videoElement = $state<HTMLVideoElement | undefined>(undefined);
 	let cardEl = $state<HTMLButtonElement | undefined>(undefined);

@@ -37,8 +37,8 @@ camera stores cert, uses it for future mTLS connections
 | File | Purpose |
 |------|---------|
 | `bootstrap.rs` | `bootstrap_pki` — CA and server cert generation on first start |
-| `ca.rs` | `CertificateAuthority` — signs device certificates |
-| `enrollment.rs` | `sign_device_cert` — validates enrollment JWT, issues signed camera cert |
-| `server_tls.rs` | Builds `rustls::ServerConfig` from the server cert for the QUIC endpoint |
+| `ca.rs` | `CaManager` — signs device certificates |
+| `enrollment.rs` | `EnrollmentClaims` — JWT claim structure and validation for camera enrollment |
+| `server_tls.rs` | `ServerTlsCert` — generates and loads the self-signed server TLS certificate |
 | `revocation.rs` | `RevocationCache` — in-memory fingerprint blocklist |
 | `unregister.rs` | Revoke a camera: add fingerprint to revocation list, delete DB record |

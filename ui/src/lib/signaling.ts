@@ -1,19 +1,19 @@
 import type { GroupInfo, CameraInfo } from '$lib/types.js';
 
-export interface CoverageSegment {
+interface CoverageSegment {
 	id: string;
 	start_ms: number;
 	end_ms: number;
 }
 
-export interface CoverageResponse {
+interface CoverageResponse {
 	online: boolean;
 	segments: CoverageSegment[];
 }
 
 const API_BASE = '/api/v1';
 
-export interface WatchResponse {
+interface WatchResponse {
 	session_id: string;
 	sdp_answer: string;
 }
@@ -34,7 +34,7 @@ export interface TelemetryEntry {
 	gps_fix?: number;
 }
 
-export interface TelemetryPage {
+interface TelemetryPage {
 	entries: TelemetryEntry[];
 	next_cursor?: string;
 }
@@ -65,18 +65,6 @@ export async function unwatchCamera(sessionId: string): Promise<void> {
 	await fetch(`${API_BASE}/session/${sessionId}`, {
 		method: 'DELETE',
 		headers: headers(),
-		credentials: 'include',
-	});
-}
-
-export async function sendIceCandidate(
-	sessionId: string,
-	candidate: RTCIceCandidateInit,
-): Promise<void> {
-	await fetch(`${API_BASE}/session/${sessionId}/ice`, {
-		method: 'POST',
-		headers: headers(),
-		body: JSON.stringify(candidate),
 		credentials: 'include',
 	});
 }

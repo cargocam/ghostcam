@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -46,8 +45,9 @@ async fn refresh_cache(redis: &RedisManager, cache: &RevocationCache) -> Result<
     };
 
     let serials: Vec<String> = conn.smembers(REVOCATION_KEY).await?;
-    let set: HashSet<String> = serials.into_iter().collect();
-    cache.replace(set).await;
+    for serial in serials {
+        cache.add(serial).await;
+    }
     Ok(())
 }
 
@@ -58,17 +58,5 @@ pub async fn revoke_cert(redis: &RedisManager, serial: &str) -> Result<()> {
     };
 
     conn.sadd::<_, _, ()>(REVOCATION_KEY, serial).await?;
-    Ok(())
-}
-
-/// Remove revocation entries from the Redis set.
-pub async fn purge_revocations(redis: &RedisManager, serials: &[String]) -> Result<()> {
-    let Some(mut conn) = redis.get_conn().await else {
-        anyhow::bail!("redis unavailable");
-    };
-
-    for serial in serials {
-        let _: Result<(), _> = conn.srem::<_, _, ()>(REVOCATION_KEY, serial).await;
-    }
     Ok(())
 }

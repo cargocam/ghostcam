@@ -15,7 +15,6 @@ const MAX_ALERTS = 100;
 class AlertsStore {
 	alerts = $state<Alert[]>([]);
 	enabled = $state(true);
-	disconnectAlertEnabled = $state(true);
 
 	private nextId = 1;
 

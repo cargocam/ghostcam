@@ -49,8 +49,6 @@ pub fn parse_enrollment_jwt(jwt: &str) -> Result<EnrollmentData> {
 struct EnrollmentClaims {
     #[serde(default)]
     server_addr: String,
-    #[serde(default)]
-    display_name: Option<String>,
     #[allow(dead_code)]
     #[serde(flatten)]
     extra: std::collections::HashMap<String, serde_json::Value>,
@@ -204,11 +202,6 @@ pub async fn clear_enrollment(data_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Check if the camera is enrolled (has a user certificate).
-pub fn is_enrolled(data_dir: &Path) -> bool {
-    data_dir.join("user.crt").exists()
-}
-
 /// Get the SHA-256 fingerprint of the server's TLS certificate.
 fn get_peer_fingerprint(connection: &quinn::Connection) -> Result<String> {
     let peer_certs = connection
@@ -268,19 +261,6 @@ mod tests {
     fn parse_invalid_jwt_string() {
         let result = parse_enrollment_jwt("not-a-jwt");
         assert!(result.is_err());
-    }
-
-    #[test]
-    fn is_enrolled_when_no_cert() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(!is_enrolled(dir.path()));
-    }
-
-    #[test]
-    fn is_enrolled_when_cert_exists() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("user.crt"), "cert").unwrap();
-        assert!(is_enrolled(dir.path()));
     }
 
     #[tokio::test]

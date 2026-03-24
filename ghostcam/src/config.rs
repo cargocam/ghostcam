@@ -38,8 +38,8 @@ pub const ENROLLMENT_TOKEN_TTL_SECS: u64 = 600;
 /// Session cookie lifetime.
 pub const SESSION_TTL_DAYS: u64 = 30;
 
-/// Redis telemetry stream retention.
-pub const TELEMETRY_RETENTION_HOURS: u64 = 72;
+/// Redis telemetry stream retention (seconds). Default 7 days.
+pub const TELEMETRY_RETENTION_SECS: u64 = 7 * 24 * 60 * 60;
 
 /// Revocation cache refresh interval.
 pub const REVOCATION_CACHE_REFRESH_SECS: u64 = 60;

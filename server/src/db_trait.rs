@@ -2,7 +2,7 @@ use anyhow::Result;
 use async_trait::async_trait;
 use ghostcam::types::{CertFingerprint, DeviceId, SessionId, TokenId, UserId};
 
-/// The fixed UserId for server-solo (single operator, always ID "solo").
+/// The fixed UserId used until multi-user support is implemented.
 pub const SOLO_USER_ID: &str = "solo";
 
 /// A camera record from the database.
@@ -80,7 +80,7 @@ pub struct ApiTokenRecord {
     pub last_used_at: Option<u64>,
 }
 
-/// A user record from the database (server-multi only).
+/// A user record from the database.
 #[derive(Debug, Clone)]
 pub struct UserRecord {
     pub user_id: UserId,
@@ -91,7 +91,7 @@ pub struct UserRecord {
     pub disabled_at: Option<u64>,
 }
 
-/// Fields for updating a user record (server-multi only).
+/// Fields for updating a user record.
 #[derive(Debug, Clone, Default)]
 pub struct UserUpdate {
     pub email: Option<String>,
@@ -99,7 +99,7 @@ pub struct UserUpdate {
     pub password_hash: Option<String>,
 }
 
-/// Async database trait implemented by both server-solo (SQLite) and server-multi (Postgres).
+/// Async database trait. PostgreSQL implementation in db.rs.
 #[async_trait]
 pub trait Database: Send + Sync + 'static {
     // --- Camera operations ---
@@ -146,7 +146,7 @@ pub trait Database: Send + Sync + 'static {
     /// Check if the database is reachable (for health checks).
     async fn health_check(&self) -> Result<()>;
 
-    // --- User management (server-multi only) ---
+    // --- User management ---
     async fn create_user(
         &self,
         email: &str,

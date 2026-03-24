@@ -42,14 +42,6 @@ impl SseEventBus {
             let _ = tx.send(event);
         }
     }
-
-    /// Publish an event to all users (used when we don't know user_id at camera level).
-    pub async fn publish_all(&self, event: SseEvent) {
-        let channels = self.channels.read().await;
-        for tx in channels.values() {
-            let _ = tx.send(event.clone());
-        }
-    }
 }
 
 impl Default for SseEventBus {

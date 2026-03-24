@@ -62,18 +62,6 @@ pub fn load_user_cert(
     Ok(Some((cert_der, key_der)))
 }
 
-/// Load the server TLS fingerprint pin (for TOFU verification).
-pub fn load_server_pin(path: &Path) -> Result<Option<String>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-    let pin = std::fs::read_to_string(path)?.trim().to_string();
-    if pin.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(pin))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,18 +99,4 @@ mod tests {
         assert!(load_user_cert(&cert, &key).unwrap().is_none());
     }
 
-    #[test]
-    fn load_server_pin_missing() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("server.pin");
-        assert!(load_server_pin(&path).unwrap().is_none());
-    }
-
-    #[test]
-    fn load_server_pin_present() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("server.pin");
-        std::fs::write(&path, "abc123\n").unwrap();
-        assert_eq!(load_server_pin(&path).unwrap().as_deref(), Some("abc123"));
-    }
 }

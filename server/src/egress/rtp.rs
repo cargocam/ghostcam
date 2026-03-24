@@ -47,74 +47,12 @@ impl NalAccumulator {
         Some(au)
     }
 
-    /// Clear buffered NALs (e.g., on camera disconnect).
-    pub fn clear(&mut self) {
-        self.pending.clear();
-    }
 }
 
 impl Default for NalAccumulator {
     fn default() -> Self {
         Self::new()
     }
-}
-
-/// Cache of most recent SPS and PPS per camera, for late-joining viewers.
-pub struct SpsCache {
-    pub sps: Option<Vec<u8>>,
-    pub pps: Option<Vec<u8>>,
-}
-
-impl SpsCache {
-    pub fn new() -> Self {
-        Self {
-            sps: None,
-            pps: None,
-        }
-    }
-
-    /// Update the cache with a NAL unit. Detects SPS (type 7) and PPS (type 8).
-    pub fn update(&mut self, nal: &[u8]) {
-        if nal.is_empty() {
-            return;
-        }
-        let nal_type = nal[0] & 0x1F;
-        match nal_type {
-            7 => self.sps = Some(nal.to_vec()),
-            8 => self.pps = Some(nal.to_vec()),
-            _ => {}
-        }
-    }
-
-    /// Build an Annex-B prefix with cached SPS+PPS for late-join.
-    /// Returns None if either SPS or PPS is missing.
-    pub fn annex_b_prefix(&self) -> Option<Vec<u8>> {
-        let sps = self.sps.as_ref()?;
-        let pps = self.pps.as_ref()?;
-        let start_code = [0x00, 0x00, 0x00, 0x01];
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&start_code);
-        buf.extend_from_slice(sps);
-        buf.extend_from_slice(&start_code);
-        buf.extend_from_slice(pps);
-        Some(buf)
-    }
-}
-
-impl Default for SpsCache {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-/// Convert a timestamp in microseconds to 90kHz RTP clock (video).
-pub fn us_to_90khz(timestamp_us: u64) -> u64 {
-    (timestamp_us * 90 + 500) / 1000
-}
-
-/// Convert a timestamp in microseconds to 48kHz RTP clock (Opus audio).
-pub fn us_to_48khz(timestamp_us: u64) -> u64 {
-    (timestamp_us * 48 + 500) / 1000
 }
 
 /// Extract individual NAL units from an Annex-B byte stream.
@@ -195,27 +133,4 @@ mod tests {
         assert_eq!(nals[2][0] & 0x1F, 5); // IDR
     }
 
-    #[test]
-    fn sps_cache_update_and_prefix() {
-        let mut cache = SpsCache::new();
-        assert!(cache.annex_b_prefix().is_none());
-
-        cache.update(&[0x67, 0x01, 0x02]); // SPS
-        assert!(cache.annex_b_prefix().is_none()); // Need PPS too
-
-        cache.update(&[0x68, 0x01]); // PPS
-        let prefix = cache.annex_b_prefix().unwrap();
-        let nals = parse_annex_b(&prefix);
-        assert_eq!(nals.len(), 2);
-    }
-
-    #[test]
-    fn us_to_90khz_conversion() {
-        assert_eq!(us_to_90khz(1_000_000), 90_000); // 1 second
-    }
-
-    #[test]
-    fn us_to_48khz_conversion() {
-        assert_eq!(us_to_48khz(1_000_000), 48_000); // 1 second
-    }
 }

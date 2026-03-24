@@ -108,11 +108,6 @@ impl SegmentWriter {
         Ok(())
     }
 
-    /// Current duration of the segment.
-    pub fn duration(&self) -> Duration {
-        self.last_video_ts
-    }
-
     /// Finalize the segment: write proper fMP4 (styp + moof + mdat) to disk.
     pub async fn finalize(self) -> Result<SegmentMetadata> {
         let buf = self.build_fmp4_segment();

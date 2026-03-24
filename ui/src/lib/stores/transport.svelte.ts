@@ -10,7 +10,6 @@ import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 
 class TransportStore {
 	authenticated = $state(false);
-	sseConnected = $state(false);
 	connected = $state(false);
 	connectedAt = $state<number | null>(null);
 	error = $state<string | null>(null);
@@ -40,13 +39,10 @@ class TransportStore {
 			this.sse = connectSse(
 				(event) => this.handleSseEvent(event),
 				() => {
-					this.sseConnected = true;
 					this.connected = true;
 					this.connectedAt = Date.now();
 				},
-				() => {
-					this.sseConnected = false;
-				},
+				() => {},
 			);
 
 			// Create connection manager
@@ -139,42 +135,16 @@ class TransportStore {
 		this.authenticated = false;
 		this.sse?.close();
 		this.sse = null;
-		this.sseConnected = false;
 		await this.connManager?.disconnectAll();
 		this.connManager = null;
 		cameraStore.clear();
 		groupStore.clear();
 	}
 
-	/** Legacy: connect to a specific group (delegates to initialize for backward compat) */
-	async connect(groupId?: string) {
-		if (groupId) {
-			groupStore.setActiveGroup(groupId);
-		}
-		await this.initialize();
-	}
-
-	async disconnect() {
-		this.sse?.close();
-		this.sse = null;
-		this.sseConnected = false;
-		await this.connManager?.disconnectAll();
-		this.connManager = null;
-		cameraStore.clear();
-	}
-
 	async switchGroup(groupId: string) {
 		groupStore.setActiveGroup(groupId);
 		// In per-camera model, group switching filters the view
 		// but doesn't tear down connections
-	}
-
-	async refreshGroups() {
-		try {
-			const { listGroups } = await import('$lib/signaling.js');
-			const groups = await listGroups();
-			groupStore.setGroups(groups);
-		} catch {}
 	}
 
 	/** Broadcast client_mode to all connected cameras. */

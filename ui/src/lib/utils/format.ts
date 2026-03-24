@@ -5,13 +5,6 @@ export function formatBitrate(kbps: number): string {
 	return '0 kbps';
 }
 
-/** Compact bitrate format for overlays (e.g. "1.2M", "45k") */
-export function formatBitrateCompact(kbps: number): string {
-	if (kbps >= 1000) return `${(kbps / 1000).toFixed(1)}M`;
-	if (kbps > 0) return `${kbps.toFixed(0)}k`;
-	return '';
-}
-
 /** Format seconds of uptime to a human-readable string */
 export function formatUptime(secs: number): string {
 	const d = Math.floor(secs / 86400);

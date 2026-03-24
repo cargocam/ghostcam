@@ -11,20 +11,17 @@ pub struct SegmentInfo {
     pub segment_id: String,
     pub start_ts: u64,
     pub end_ts: u64,
-    pub size_bytes: u64,
     pub path: PathBuf,
 }
 
 /// Manages segment files on disk, enforcing storage limits.
 pub struct RingBuffer {
-    dir: PathBuf,
     segments: Vec<SegmentInfo>,
-    event_tx: mpsc::Sender<SegmentEvent>,
 }
 
 impl RingBuffer {
     /// Scan the segment directory and rebuild state from files on disk.
-    pub async fn scan(dir: &Path, event_tx: mpsc::Sender<SegmentEvent>) -> Result<Self> {
+    pub async fn scan(dir: &Path, _event_tx: mpsc::Sender<SegmentEvent>) -> Result<Self> {
         let mut segments = Vec::new();
 
         if dir.exists() {
@@ -37,7 +34,7 @@ impl RingBuffer {
                         .and_then(|s| s.to_str())
                         .unwrap_or("")
                         .to_string();
-                    let meta = entry.metadata().await?;
+                    let _meta = entry.metadata().await?;
                     // Parse start_ts from segment_id (format: device_id:timestamp)
                     let start_ts = file_name
                         .rsplit(':')
@@ -48,7 +45,6 @@ impl RingBuffer {
                         segment_id: file_name,
                         start_ts,
                         end_ts: start_ts + 10_000, // Estimate
-                        size_bytes: meta.len(),
                         path,
                     });
                 }
@@ -60,57 +56,12 @@ impl RingBuffer {
         // Sort by start timestamp
         segments.sort_by_key(|s| s.start_ts);
 
-        Ok(Self {
-            dir: dir.to_path_buf(),
-            segments,
-            event_tx,
-        })
+        Ok(Self { segments })
     }
 
     /// Register a newly finalized segment.
     pub fn register(&mut self, info: SegmentInfo) {
         self.segments.push(info);
-    }
-
-    /// Evict oldest segments until at least `needed_bytes` of free space would be recovered.
-    pub async fn ensure_space(&mut self, needed_bytes: u64) -> Result<Vec<String>> {
-        let mut freed = 0u64;
-        let mut evicted = Vec::new();
-
-        while freed < needed_bytes && !self.segments.is_empty() {
-            let seg = self.segments.remove(0);
-            let _ = tokio::fs::remove_file(&seg.path).await;
-            freed += seg.size_bytes;
-            let _ = self
-                .event_tx
-                .send(SegmentEvent::Evicted {
-                    segment_id: seg.segment_id.clone(),
-                })
-                .await;
-            evicted.push(seg.segment_id);
-        }
-
-        Ok(evicted)
-    }
-
-    /// Emergency eviction: delete the oldest N segments.
-    pub async fn emergency_evict(&mut self, count: usize) -> Result<Vec<String>> {
-        let n = count.min(self.segments.len());
-        let mut evicted = Vec::new();
-
-        for _ in 0..n {
-            let seg = self.segments.remove(0);
-            let _ = tokio::fs::remove_file(&seg.path).await;
-            let _ = self
-                .event_tx
-                .send(SegmentEvent::Evicted {
-                    segment_id: seg.segment_id.clone(),
-                })
-                .await;
-            evicted.push(seg.segment_id);
-        }
-
-        Ok(evicted)
     }
 
     /// Get all segments.
@@ -125,33 +76,6 @@ impl RingBuffer {
             .iter()
             .find(|s| s.segment_id == id)
             .map(|s| s.path.as_path())
-    }
-
-    /// Get the init segment path.
-    pub fn init_path(&self) -> PathBuf {
-        self.dir.join("init.mp4")
-    }
-
-    /// Check available space on the partition.
-    pub async fn available_space(&self) -> Result<u64> {
-        // Use statvfs on Unix
-        #[cfg(unix)]
-        {
-            use std::os::unix::ffi::OsStrExt;
-            let c_path =
-                std::ffi::CString::new(self.dir.as_os_str().as_bytes())?;
-            let mut stat: libc::statvfs = unsafe { std::mem::zeroed() };
-            let ret = unsafe { libc::statvfs(c_path.as_ptr(), &mut stat) };
-            if ret != 0 {
-                anyhow::bail!("statvfs failed");
-            }
-            Ok(stat.f_bavail as u64 * stat.f_frsize as u64)
-        }
-        #[cfg(not(unix))]
-        {
-            // Fallback: report large value
-            Ok(u64::MAX)
-        }
     }
 }
 
@@ -198,50 +122,9 @@ mod tests {
             segment_id: "s1".to_string(),
             start_ts: 0,
             end_ts: 10000,
-            size_bytes: 100,
             path: dir.path().join("s1.m4s"),
         });
         assert_eq!(rb.segments().len(), 1);
-    }
-
-    #[tokio::test]
-    async fn ensure_space_no_eviction() {
-        let dir = tempfile::tempdir().unwrap();
-        let (tx, _rx) = mpsc::channel(16);
-        let mut rb = RingBuffer::scan(dir.path(), tx).await.unwrap();
-        let evicted = rb.ensure_space(0).await.unwrap();
-        assert!(evicted.is_empty());
-    }
-
-    #[tokio::test]
-    async fn ensure_space_evicts_oldest() {
-        let dir = tempfile::tempdir().unwrap();
-        for i in 0..3 {
-            let path = dir.path().join(format!("cam:{}000.m4s", i));
-            tokio::fs::write(&path, vec![0u8; 100]).await.unwrap();
-        }
-        let (tx, mut rx) = mpsc::channel(16);
-        let mut rb = RingBuffer::scan(dir.path(), tx).await.unwrap();
-        let evicted = rb.ensure_space(50).await.unwrap();
-        assert_eq!(evicted.len(), 1);
-        assert_eq!(rb.segments().len(), 2);
-        // Check event was sent
-        let event = rx.try_recv().unwrap();
-        assert!(matches!(event, SegmentEvent::Evicted { .. }));
-    }
-
-    #[tokio::test]
-    async fn emergency_evict() {
-        let dir = tempfile::tempdir().unwrap();
-        for i in 0..5 {
-            let path = dir.path().join(format!("cam:{}000.m4s", i));
-            tokio::fs::write(&path, vec![0u8; 100]).await.unwrap();
-        }
-        let (tx, _rx) = mpsc::channel(16);
-        let mut rb = RingBuffer::scan(dir.path(), tx).await.unwrap();
-        let evicted = rb.emergency_evict(3).await.unwrap();
-        assert_eq!(evicted.len(), 3);
-        assert_eq!(rb.segments().len(), 2);
     }
 
     #[tokio::test]
@@ -254,7 +137,6 @@ mod tests {
             segment_id: "s1".to_string(),
             start_ts: 0,
             end_ts: 10000,
-            size_bytes: 100,
             path: path.clone(),
         });
         assert_eq!(rb.get_segment_path("s1"), Some(path.as_path()));

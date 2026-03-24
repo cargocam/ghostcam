@@ -20,14 +20,6 @@ class CameraStore {
 
 	onlineCount = $derived(this.cameras.filter((c) => c.online).length);
 
-	get list(): CameraState[] {
-		return this.cameras;
-	}
-
-	get onlineList(): CameraState[] {
-		return this.cameras.filter((c) => c.online);
-	}
-
 	getCamera(deviceId: string): CameraState | undefined {
 		return this.cameras.find((c) => c.device_id === deviceId);
 	}
@@ -69,13 +61,6 @@ class CameraStore {
 					lastTelemetryAt: null,
 				},
 			];
-		}
-	}
-
-	setName(deviceId: string, name: string) {
-		const idx = this.cameras.findIndex((c) => c.device_id === deviceId);
-		if (idx >= 0) {
-			this.cameras[idx].device_name = name;
 		}
 	}
 

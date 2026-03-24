@@ -8,7 +8,6 @@ pub struct CameraConfig {
     pub server_addr: String,
     pub test_source: bool,
     pub test_video: String,
-    pub segment_dir: String,
     pub no_audio: bool,
     pub no_gps: bool,
     pub data_dir: String,

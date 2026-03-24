@@ -64,7 +64,6 @@ impl Muxer {
                             segment_id: meta.segment_id.clone(),
                             start_ts: meta.start_ts,
                             end_ts: meta.end_ts,
-                            size_bytes: meta.size_bytes,
                             path: meta.path,
                         });
                         let _ = self.event_tx.send(SegmentEvent::Finalized {
@@ -126,7 +125,6 @@ impl Muxer {
                                     segment_id: meta.segment_id.clone(),
                                     start_ts: meta.start_ts,
                                     end_ts: meta.end_ts,
-                                    size_bytes: meta.size_bytes,
                                     path: meta.path,
                                 });
                                 let _ = self.event_tx.send(SegmentEvent::Finalized {

@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
-	import Sparkline from './Sparkline.svelte';
+	import Sparkline from '$lib/components/ui/Sparkline.svelte';
 	import { cn } from '$lib/utils.js';
 
 	let { sourceId }: { sourceId: string } = $props();

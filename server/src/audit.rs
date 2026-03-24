@@ -175,40 +175,6 @@ impl AuditLogger {
     }
 }
 
-/// Verify the HMAC chain in an audit log file.
-/// Returns Ok(count) on success or Err with the line number that failed.
-pub fn verify_audit_log(hmac_key: &str, contents: &str) -> Result<usize, (usize, String)> {
-    let key = hmac::Key::new(hmac::HMAC_SHA256, hmac_key.as_bytes());
-    let mut prev_hmac = "0".repeat(64);
-    let mut count = 0;
-
-    for (i, line) in contents.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let entry: AuditEntry = serde_json::from_str(line)
-            .map_err(|e| (i + 1, format!("parse error: {e}")))?;
-
-        let event_json = serde_json::to_string(&entry.event)
-            .map_err(|e| (i + 1, format!("re-serialize error: {e}")))?;
-
-        let expected = compute_hmac(&key, &event_json, &prev_hmac);
-
-        if entry.hmac != expected {
-            return Err((
-                i + 1,
-                format!("HMAC mismatch: expected {expected}, got {}", entry.hmac),
-            ));
-        }
-
-        prev_hmac = entry.hmac;
-        count += 1;
-    }
-
-    Ok(count)
-}
-
 // hex encoding without an external crate
 mod hex {
     pub fn encode(bytes: &[u8]) -> String {
@@ -266,90 +232,16 @@ mod tests {
     }
 
     #[test]
-    fn hmac_chain_valid() {
+    fn hmac_chain_produces_deterministic_output() {
         let key_str = "test-hmac-key";
         let key = hmac::Key::new(hmac::HMAC_SHA256, key_str.as_bytes());
-        let mut prev_hmac = "0".repeat(64);
-
-        let mut lines = Vec::new();
-        for i in 0..3 {
-            let event = AuditEvent::CameraConnected {
-                device_id: format!("cam-{i:02}"),
-                ip: "10.0.0.1".into(),
-                firmware_version: "0.1.0".into(),
-            };
-            let event_json = serde_json::to_string(&event).unwrap();
-            let hmac_hex = compute_hmac(&key, &event_json, &prev_hmac);
-            let entry = AuditEntry {
-                timestamp: "2026-01-01T00:00:00Z".into(),
-                event,
-                hmac: hmac_hex.clone(),
-            };
-            lines.push(serde_json::to_string(&entry).unwrap());
-            prev_hmac = hmac_hex;
-        }
-
-        let contents = lines.join("\n");
-        let result = verify_audit_log(key_str, &contents);
-        assert_eq!(result, Ok(3));
-    }
-
-    #[test]
-    fn hmac_chain_tampered() {
-        let key_str = "test-hmac-key";
-        let key = hmac::Key::new(hmac::HMAC_SHA256, key_str.as_bytes());
-        let mut prev_hmac = "0".repeat(64);
-
-        let mut lines = Vec::new();
-        for i in 0..3 {
-            let event = AuditEvent::AuthSuccess {
-                user_id: format!("user-{i}"),
-                ip: "1.2.3.4".into(),
-            };
-            let event_json = serde_json::to_string(&event).unwrap();
-            let hmac_hex = compute_hmac(&key, &event_json, &prev_hmac);
-            let entry = AuditEntry {
-                timestamp: "2026-01-01T00:00:00Z".into(),
-                event,
-                hmac: hmac_hex.clone(),
-            };
-            lines.push(serde_json::to_string(&entry).unwrap());
-            prev_hmac = hmac_hex;
-        }
-
-        // Tamper with the second entry
-        let mut tampered: AuditEntry = serde_json::from_str(&lines[1]).unwrap();
-        tampered.event = AuditEvent::AuthSuccess {
-            user_id: "TAMPERED".into(),
-            ip: "1.2.3.4".into(),
-        };
-        lines[1] = serde_json::to_string(&tampered).unwrap();
-
-        let contents = lines.join("\n");
-        let result = verify_audit_log(key_str, &contents);
-        assert!(result.is_err());
-        let (line, _msg) = result.unwrap_err();
-        assert_eq!(line, 2);
-    }
-
-    #[test]
-    fn first_entry_uses_zero_hmac() {
-        let key_str = "test-key";
-        let key = hmac::Key::new(hmac::HMAC_SHA256, key_str.as_bytes());
-        let zero_hmac = "0".repeat(64);
+        let prev_hmac = "0".repeat(64);
 
         let event = AuditEvent::ServerStarted { version: "0.1.0".into() };
         let event_json = serde_json::to_string(&event).unwrap();
-        let hmac_hex = compute_hmac(&key, &event_json, &zero_hmac);
-
-        let entry = AuditEntry {
-            timestamp: "2026-01-01T00:00:00Z".into(),
-            event,
-            hmac: hmac_hex,
-        };
-        let line = serde_json::to_string(&entry).unwrap();
-
-        let result = verify_audit_log(key_str, &line);
-        assert_eq!(result, Ok(1));
+        let hmac1 = compute_hmac(&key, &event_json, &prev_hmac);
+        let hmac2 = compute_hmac(&key, &event_json, &prev_hmac);
+        assert_eq!(hmac1, hmac2);
+        assert_eq!(hmac1.len(), 64); // SHA-256 = 32 bytes = 64 hex chars
     }
 }

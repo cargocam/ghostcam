@@ -25,14 +25,14 @@ Auto-reconnects to the server with exponential backoff (1s → 30s).
 | `--segment-dir` | `/var/ghostcam/segments` | fMP4 ring buffer for HLS recording |
 | `--no-audio` | off | Disable audio capture |
 | `--no-gps` | off | Disable GPS via gpsd |
-| `--enrollment-jwt` | _(none)_ | JWT to skip QR-based enrollment |
+| `--enrollment-jwt` | _(none)_ | JWT for enrollment |
 | `--no-tofu` | off | Disable TOFU server fingerprint verification (dev/testing) |
 
 Server address resolution precedence: `--server-addr` CLI flag → `ghostcam.conf` → `/etc/ghostcam/server.addr` (written during enrollment) → hardcoded default.
 
 ## How It Works
 
-1. **Enrollment** — On first boot (no device cert), camera either scans a QR code or accepts an `--enrollment-jwt`. The server signs and returns a device certificate.
+1. **Enrollment** — On first boot (no device cert), camera accepts an `--enrollment-jwt`. The server signs and returns a device certificate.
 2. **TOFU** — On first connection after enrollment, the server's TLS fingerprint is pinned. Subsequent connections verify against the pin (bypassed with `--no-tofu`).
 3. **Connect** — Opens a QUIC connection using the device cert for mTLS. Opens persistent streams: `Alerts` (bidirectional), `Video`, `Audio`.
 4. **Handshake** — Sends an `Alert::Handshake` with device ID, cert fingerprint, and capabilities.

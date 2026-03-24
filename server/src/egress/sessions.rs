@@ -73,48 +73,12 @@ impl SessionManager {
         }
     }
 
-    /// Tear down all sessions for a user.
-    pub async fn teardown_by_user(&self, user_id: &UserId) {
-        let mut sessions = self.sessions.write().await;
-        let to_remove: Vec<String> = sessions
-            .iter()
-            .filter(|(_, e)| &e.user_id == user_id)
-            .map(|(k, _)| k.clone())
-            .collect();
-        for key in to_remove {
-            if let Some(entry) = sessions.remove(&key) {
-                entry.cancel.cancel();
-                entry.handle.abort();
-            }
-        }
-    }
-
-    /// List session IDs for a user.
-    pub async fn list_sessions(&self, user_id: &UserId) -> Vec<String> {
-        let sessions = self.sessions.read().await;
-        sessions
-            .iter()
-            .filter(|(_, e)| &e.user_id == user_id)
-            .map(|(k, _)| k.clone())
-            .collect()
-    }
-
-    /// Get the device_id for a session.
-    pub async fn get_device_id(&self, session_id: &str) -> Option<DeviceId> {
-        let sessions = self.sessions.read().await;
-        sessions.get(session_id).map(|e| e.device_id.clone())
-    }
-
     /// Get the user_id for a session.
     pub async fn get_user_id(&self, session_id: &str) -> Option<UserId> {
         let sessions = self.sessions.read().await;
         sessions.get(session_id).map(|e| e.user_id.clone())
     }
 
-    /// Count active sessions.
-    pub async fn count(&self) -> usize {
-        self.sessions.read().await.len()
-    }
 }
 
 impl Default for SessionManager {
@@ -137,7 +101,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn register_and_list() {
+    async fn register_and_get_user() {
         let mgr = SessionManager::new();
         let (cancel, handle) = spawn_dummy();
         let uid = UserId::from("user-1");
@@ -149,9 +113,8 @@ mod tests {
             handle,
         )
         .await;
-        let sessions = mgr.list_sessions(&uid).await;
-        assert_eq!(sessions.len(), 1);
-        assert_eq!(sessions[0], "s1");
+        let found = mgr.get_user_id("s1").await;
+        assert_eq!(found, Some(uid));
     }
 
     #[tokio::test]
@@ -168,7 +131,7 @@ mod tests {
         )
         .await;
         assert!(mgr.teardown("s1").await);
-        assert!(mgr.list_sessions(&uid).await.is_empty());
+        assert!(mgr.get_user_id("s1").await.is_none());
     }
 
     #[tokio::test]
@@ -200,9 +163,11 @@ mod tests {
         }
 
         mgr.teardown_by_device(&DeviceId::from("cam-a")).await;
-        let remaining = mgr.list_sessions(&uid).await;
-        assert_eq!(remaining.len(), 1);
-        assert_eq!(remaining[0], "sb-0");
+        // sb-0 should still exist
+        assert!(mgr.get_user_id("sb-0").await.is_some());
+        // sa-0 and sa-1 should be gone
+        assert!(mgr.get_user_id("sa-0").await.is_none());
+        assert!(mgr.get_user_id("sa-1").await.is_none());
     }
 
     #[tokio::test]
