@@ -21,7 +21,9 @@ pub struct TelemetryRangeParams {
     pub limit: Option<usize>,
 }
 
-/// Verify the authenticated user owns the given camera. Returns 403 if not.
+/// Verify the authenticated user owns the given camera.
+/// Returns 404 for both non-existent and not-owned cameras to avoid
+/// leaking camera existence to other users.
 async fn verify_ownership(
     state: &AppState,
     user: &AuthUser,
@@ -29,8 +31,7 @@ async fn verify_ownership(
 ) -> Result<(), StatusCode> {
     match state.db.get_camera(device_id).await {
         Ok(Some(c)) if c.user_id == user.user_id => Ok(()),
-        Ok(Some(_)) => Err(StatusCode::FORBIDDEN),
-        Ok(None) => Err(StatusCode::NOT_FOUND),
+        Ok(Some(_)) | Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }
 }
