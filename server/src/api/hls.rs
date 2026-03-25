@@ -149,11 +149,13 @@ pub async fn get_init(
         None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
 
-    // Register the notified future *before* the check so no notification
-    // can slip past between the check and the await (notify_one stores a
-    // permit, so even if the camera responds before we await, it is captured).
+    // Register the waiter *before* the cache check so notify_waiters()
+    // cannot fire in the gap between the check and the await.
+    // enable() registers immediately without polling, so the waiter is
+    // visible to notify_waiters() even before we reach the await point.
     let notified = slot.init_notify.notified();
     tokio::pin!(notified);
+    notified.as_mut().enable();
 
     // Check if init segment is already cached
     {
