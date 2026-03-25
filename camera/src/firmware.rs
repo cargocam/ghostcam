@@ -35,7 +35,7 @@ pub async fn handle_firmware_update(
     let previous_path = firmware_dir.join("previous");
 
     // Download
-    match download_and_verify(url, expected_sha256, &temp_path).await {
+    match download_and_verify(url, expected_sha256, &temp_path, data_dir).await {
         Ok(()) => {}
         Err(e) => {
             tracing::error!("firmware download/verify failed: {e}");
@@ -93,12 +93,23 @@ pub async fn handle_firmware_update(
 }
 
 /// Download a file and verify its SHA-256 hash.
-async fn download_and_verify(url: &str, expected_sha256: &str, dest: &Path) -> Result<()> {
+async fn download_and_verify(
+    url: &str,
+    expected_sha256: &str,
+    dest: &Path,
+    data_dir: &Path,
+) -> Result<()> {
     // Use a simple HTTP GET via tokio (avoid adding reqwest dep)
     // For now, support file:// URLs for testing, and shell out to curl for http(s)
     let bytes = if url.starts_with("file://") {
         let raw = url.strip_prefix("file://").unwrap();
         let resolved = std::fs::canonicalize(raw).context("resolving firmware file path")?;
+        let canon_data_dir =
+            std::fs::canonicalize(data_dir).context("resolving data dir for path check")?;
+        anyhow::ensure!(
+            resolved.starts_with(&canon_data_dir),
+            "firmware file path escapes data dir"
+        );
         tokio::fs::read(resolved)
             .await
             .context("reading firmware file")?
@@ -167,7 +178,9 @@ mod tests {
         let dest = dir.path().join("downloaded");
         let url = format!("file://{}", src.display());
 
-        download_and_verify(&url, &hash, &dest).await.unwrap();
+        download_and_verify(&url, &hash, &dest, dir.path())
+            .await
+            .unwrap();
         assert!(dest.exists());
         assert_eq!(std::fs::read(&dest).unwrap(), content);
     }
@@ -181,7 +194,7 @@ mod tests {
         let dest = dir.path().join("downloaded");
         let url = format!("file://{}", src.display());
 
-        let result = download_and_verify(&url, "badhash", &dest).await;
+        let result = download_and_verify(&url, "badhash", &dest, dir.path()).await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("hash mismatch"));
     }

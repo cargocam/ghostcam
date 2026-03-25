@@ -69,9 +69,9 @@ fn read_memory() -> Option<u32> {
     let mut available = 0u64;
     for line in contents.lines() {
         if let Some(val) = line.strip_prefix("MemTotal:") {
-            total = val.trim().split_whitespace().next()?.parse().ok()?;
+            total = val.split_whitespace().next()?.parse().ok()?;
         } else if let Some(val) = line.strip_prefix("MemAvailable:") {
-            available = val.trim().split_whitespace().next()?.parse().ok()?;
+            available = val.split_whitespace().next()?.parse().ok()?;
         }
     }
     if total == 0 {

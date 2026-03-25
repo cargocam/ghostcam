@@ -200,7 +200,7 @@ pub async fn change_password(
 
     // Cap current password check to prevent Argon2 CPU exhaustion
     if body.current_password.len() > 128 {
-        return StatusCode::UNAUTHORIZED.into_response();
+        return (StatusCode::BAD_REQUEST, "password must be 8-128 characters").into_response();
     }
 
     // Verify current password
