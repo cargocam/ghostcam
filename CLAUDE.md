@@ -240,7 +240,8 @@ MessagePack-encoded `TelemetryDatagram`. All fields `Option<f32>` — only chang
 Auth: `Authorization: Bearer <token>` or `session=<id>` cookie.
 
 ```
-POST   /api/v1/auth/login                  { username, password } → session cookie
+POST   /api/v1/auth/register               { email, password, display_name? } → 201 + session cookie
+POST   /api/v1/auth/login                  { email, password } → session cookie
 POST   /api/v1/auth/logout
 PATCH  /api/v1/auth/password
 

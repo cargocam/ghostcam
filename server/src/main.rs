@@ -72,11 +72,14 @@ async fn main() -> anyhow::Result<()> {
         .context("GHOSTCAM_DATABASE_URL is required")?;
     let db = PostgresDatabase::connect(&database_url).await?;
     let preset_password = std::env::var("GHOSTCAM_ADMIN_PASSWORD").ok().filter(|s| !s.is_empty());
-    if let Some(initial_password) = db.initialize(preset_password.as_deref()).await? {
+    let admin_email = std::env::var("GHOSTCAM_ADMIN_EMAIL")
+        .unwrap_or_else(|_| "admin@localhost".to_string());
+    if let Some(initial_password) = db.initialize(preset_password.as_deref(), &admin_email).await? {
         println!("============================================================");
         println!("Ghostcam server first run");
         println!();
-        println!("Initial operator password: {initial_password}");
+        println!("Admin email: {admin_email}");
+        println!("Initial admin password: {initial_password}");
         println!();
         if preset_password.is_none() {
             println!("Log in and change this password.");
