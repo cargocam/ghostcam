@@ -71,7 +71,7 @@ async fn handle_init_upload(slot: &Arc<IngestSlot>, mut stream: quinn::RecvStrea
     );
 
     *slot.init_segment.write().await = Some(Bytes::from(data));
-    slot.init_notify.notify_one();
+    slot.init_notify.notify_waiters();
     Ok(())
 }
 

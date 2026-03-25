@@ -282,15 +282,18 @@ impl IngestSlot {
                         Ok(data) => {
                             match rmp_serde::from_slice::<TelemetryDatagram>(&data) {
                                 Ok(datagram) => {
-                                    // Broadcast first (cheap: broadcast clones internally),
-                                    // then move datagram into Redis spawn to avoid an extra clone.
-                                    let _ = tx.send(datagram.clone());
+                                    // Broadcast before Redis spawn so viewer latency
+                                    // is not gated behind the spawn overhead.
                                     if let Some(ref redis) = redis {
                                         let r = redis.clone();
                                         let d = device_id.clone();
+                                        let dg = datagram.clone();
+                                        let _ = tx.send(datagram);
                                         tokio::spawn(async move {
-                                            crate::redis::telemetry::write_telemetry(&r, &d, &datagram).await;
+                                            crate::redis::telemetry::write_telemetry(&r, &d, &dg).await;
                                         });
+                                    } else {
+                                        let _ = tx.send(datagram);
                                     }
                                 }
                                 Err(e) => {
