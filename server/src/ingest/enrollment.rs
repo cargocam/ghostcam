@@ -1,10 +1,10 @@
 use anyhow::{Context, Result};
-use ghostcam::types::{CertFingerprint, UserId};
+use ghostcam::types::CertFingerprint;
 use ghostcam::wire::alert::Alert;
 use ghostcam::wire::command::Command;
 use ghostcam::wire::framing;
 
-use crate::db_trait::{Database, NewCameraRecord, SOLO_USER_ID};
+use crate::db_trait::{Database, NewCameraRecord};
 use crate::frames::InboundStreamTag;
 use crate::pki::ca::CaManager;
 
@@ -81,9 +81,12 @@ pub async fn handle_enrollment(
     // 5. Create camera record in database
     let display_name = claims.display_name.unwrap_or_else(|| "Camera".to_string());
 
+    let user_id = db.get_enrollment_token_user_id(&jti).await?
+        .ok_or_else(|| anyhow::anyhow!("enrollment token has no associated user"))?;
+
     let camera = db
         .create_camera(&NewCameraRecord {
-            user_id: UserId(SOLO_USER_ID.to_string()),
+            user_id,
             cert_fingerprint: fingerprint.clone(),
             display_name,
         })

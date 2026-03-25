@@ -7,14 +7,18 @@ test.describe('Login flow', () => {
     await page.goto('/');
 
     await expect(page.getByRole('heading', { name: 'Ghostcam' })).toBeVisible();
+    await expect(page.getByPlaceholder('Email')).toBeVisible();
     await expect(page.getByPlaceholder('Password')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Sign in' })).toBeVisible();
   });
 
-  test('sign-in button is disabled when password is empty', async ({ page }) => {
+  test('sign-in button is disabled when email or password is empty', async ({ page }) => {
     await mockApiRoutes(page, { authenticated: false });
     await page.goto('/');
 
+    await expect(page.getByRole('button', { name: 'Sign in' })).toBeDisabled();
+
+    await page.getByPlaceholder('Email').fill('test@example.com');
     await expect(page.getByRole('button', { name: 'Sign in' })).toBeDisabled();
   });
 
@@ -22,16 +26,18 @@ test.describe('Login flow', () => {
     await mockApiRoutes(page, { authenticated: false });
     await page.goto('/');
 
+    await page.getByPlaceholder('Email').fill('test@example.com');
     await page.getByPlaceholder('Password').fill('wrong-password');
     await page.getByRole('button', { name: 'Sign in' }).click();
 
-    await expect(page.getByText('Invalid password')).toBeVisible();
+    await expect(page.getByText('Invalid email or password')).toBeVisible();
   });
 
   test('successful login shows the main view', async ({ page }) => {
     await mockApiRoutes(page, { authenticated: false });
     await page.goto('/');
 
+    await page.getByPlaceholder('Email').fill('test@example.com');
     await page.getByPlaceholder('Password').fill('correct-password');
 
     // After login succeeds, the app calls checkSession (GET /cameras) and listCameras.
@@ -73,6 +79,7 @@ test.describe('Login flow', () => {
     });
 
     await page.goto('/');
+    await page.getByPlaceholder('Email').fill('test@example.com');
     await page.getByPlaceholder('Password').fill('any-password');
     await page.getByRole('button', { name: 'Sign in' }).click();
 

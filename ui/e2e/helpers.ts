@@ -26,7 +26,7 @@ export async function mockApiRoutes(page: Page, { authenticated = false } = {}) 
   // Login endpoint
   await page.route('**/api/v1/auth/login', async (route) => {
     const body = route.request().postDataJSON();
-    if (body?.password === 'correct-password') {
+    if (body?.email === 'test@example.com' && body?.password === 'correct-password') {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
@@ -139,6 +139,7 @@ export async function loginViaUi(page: Page) {
   await page.goto('/');
 
   // Fill in and submit
+  await page.getByPlaceholder('Email').fill('test@example.com');
   await page.getByPlaceholder('Password').fill('correct-password');
 
   // After submitting, the app will re-check session and fetch cameras.

@@ -4,7 +4,7 @@ use ghostcam::types::{CertFingerprint, DeviceId, SessionId, TokenId, UserId};
 use crate::auth;
 use crate::db_trait::{
     ApiTokenRecord, CameraRecord, CameraUpdate, Database, NewApiToken, NewCameraRecord,
-    NewEnrollmentToken, NewSession, SessionRecord, UserRecord, UserUpdate, SOLO_USER_ID,
+    NewEnrollmentToken, NewSession, SessionRecord, UserRecord, UserUpdate,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
@@ -36,23 +36,30 @@ impl PostgresDatabase {
 
     /// First-run initialization. Returns the initial password if one was generated.
     /// If `preset_password` is provided it will be used instead of a random one.
-    pub async fn initialize(&self, preset_password: Option<&str>) -> Result<Option<String>> {
-        // Check if owner exists
-        let owner_exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM owner WHERE id = 1)")
+    pub async fn initialize(
+        &self,
+        preset_password: Option<&str>,
+        admin_email: &str,
+    ) -> Result<Option<String>> {
+        let has_users: bool =
+            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users)")
                 .fetch_one(&self.pool)
                 .await?;
 
-        let initial_password = if !owner_exists {
+        let initial_password = if !has_users {
             let password = preset_password
                 .map(str::to_owned)
                 .unwrap_or_else(auth::generate_random_password);
             let hash = auth::hash_password(&password)?;
+            let user_id = uuid::Uuid::new_v4().to_string();
             let now = now_unix() as i64;
 
             sqlx::query(
-                "INSERT INTO owner (id, password_hash, display_name, password_changed_at) VALUES (1, $1, 'Operator', $2)",
+                "INSERT INTO users (user_id, email, password_hash, display_name, created_at, password_changed_at) \
+                 VALUES ($1, $2, $3, 'Admin', $4, $4)"
             )
+            .bind(&user_id)
+            .bind(admin_email)
             .bind(&hash)
             .bind(now)
             .execute(&self.pool)
@@ -90,7 +97,7 @@ impl Database for PostgresDatabase {
         fingerprint: &CertFingerprint,
     ) -> Result<Option<CameraRecord>> {
         let row = sqlx::query(
-            "SELECT device_id, cert_fingerprint, display_name, enrolled_at, last_seen_at, notes FROM cameras WHERE cert_fingerprint = $1",
+            "SELECT device_id, user_id, cert_fingerprint, display_name, enrolled_at, last_seen_at, notes FROM cameras WHERE cert_fingerprint = $1",
         )
         .bind(&fingerprint.0)
         .fetch_optional(&self.pool)
@@ -98,7 +105,7 @@ impl Database for PostgresDatabase {
 
         Ok(row.map(|r| CameraRecord {
             device_id: DeviceId(r.get("device_id")),
-            user_id: UserId(SOLO_USER_ID.to_string()),
+            user_id: UserId(r.get("user_id")),
             cert_fingerprint: CertFingerprint(r.get("cert_fingerprint")),
             display_name: r.get("display_name"),
             enrolled_at: r.get::<i64, _>("enrolled_at") as u64,
@@ -109,7 +116,7 @@ impl Database for PostgresDatabase {
 
     async fn get_camera(&self, device_id: &DeviceId) -> Result<Option<CameraRecord>> {
         let row = sqlx::query(
-            "SELECT device_id, cert_fingerprint, display_name, enrolled_at, last_seen_at, notes FROM cameras WHERE device_id = $1",
+            "SELECT device_id, user_id, cert_fingerprint, display_name, enrolled_at, last_seen_at, notes FROM cameras WHERE device_id = $1",
         )
         .bind(&device_id.0)
         .fetch_optional(&self.pool)
@@ -117,7 +124,7 @@ impl Database for PostgresDatabase {
 
         Ok(row.map(|r| CameraRecord {
             device_id: DeviceId(r.get("device_id")),
-            user_id: UserId(SOLO_USER_ID.to_string()),
+            user_id: UserId(r.get("user_id")),
             cert_fingerprint: CertFingerprint(r.get("cert_fingerprint")),
             display_name: r.get("display_name"),
             enrolled_at: r.get::<i64, _>("enrolled_at") as u64,
@@ -126,10 +133,11 @@ impl Database for PostgresDatabase {
         }))
     }
 
-    async fn list_cameras(&self, _user_id: &UserId) -> Result<Vec<CameraRecord>> {
+    async fn list_cameras(&self, user_id: &UserId) -> Result<Vec<CameraRecord>> {
         let rows = sqlx::query(
-            "SELECT device_id, cert_fingerprint, display_name, enrolled_at, last_seen_at, notes FROM cameras ORDER BY enrolled_at",
+            "SELECT device_id, user_id, cert_fingerprint, display_name, enrolled_at, last_seen_at, notes FROM cameras WHERE user_id = $1 ORDER BY enrolled_at",
         )
+        .bind(&user_id.0)
         .fetch_all(&self.pool)
         .await?;
 
@@ -137,7 +145,7 @@ impl Database for PostgresDatabase {
             .into_iter()
             .map(|r| CameraRecord {
                 device_id: DeviceId(r.get("device_id")),
-                user_id: UserId(SOLO_USER_ID.to_string()),
+                user_id: UserId(r.get("user_id")),
                 cert_fingerprint: CertFingerprint(r.get("cert_fingerprint")),
                 display_name: r.get("display_name"),
                 enrolled_at: r.get::<i64, _>("enrolled_at") as u64,
@@ -152,9 +160,10 @@ impl Database for PostgresDatabase {
         let now = now_unix() as i64;
 
         sqlx::query(
-            "INSERT INTO cameras (device_id, cert_fingerprint, display_name, enrolled_at) VALUES ($1, $2, $3, $4)",
+            "INSERT INTO cameras (device_id, user_id, cert_fingerprint, display_name, enrolled_at) VALUES ($1, $2, $3, $4, $5)",
         )
         .bind(&device_id)
+        .bind(&record.user_id.0)
         .bind(&record.cert_fingerprint.0)
         .bind(&record.display_name)
         .bind(now)
@@ -163,7 +172,7 @@ impl Database for PostgresDatabase {
 
         Ok(CameraRecord {
             device_id: DeviceId(device_id),
-            user_id: UserId(SOLO_USER_ID.to_string()),
+            user_id: record.user_id.clone(),
             cert_fingerprint: record.cert_fingerprint.clone(),
             display_name: record.display_name.clone(),
             enrolled_at: now as u64,
@@ -211,8 +220,9 @@ impl Database for PostgresDatabase {
     // --- Enrollment tokens ---
 
     async fn create_enrollment_token(&self, token: &NewEnrollmentToken) -> Result<()> {
-        sqlx::query("INSERT INTO enrollment_tokens (jti, expires_at) VALUES ($1, $2)")
+        sqlx::query("INSERT INTO enrollment_tokens (jti, user_id, expires_at) VALUES ($1, $2, $3)")
             .bind(&token.jti)
+            .bind(&token.user_id.0)
             .bind(token.expires_at as i64)
             .execute(&self.pool)
             .await?;
@@ -244,6 +254,19 @@ impl Database for PostgresDatabase {
         Ok(result.rows_affected())
     }
 
+    async fn get_enrollment_token_user_id(&self, jti: &str) -> Result<Option<UserId>> {
+        let now = now_unix() as i64;
+        let row = sqlx::query(
+            "SELECT user_id FROM enrollment_tokens WHERE jti = $1 AND claimed_by IS NULL AND expires_at > $2"
+        )
+        .bind(jti)
+        .bind(now)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| UserId(r.get("user_id"))))
+    }
+
     // --- Sessions ---
 
     async fn create_session(&self, session: &NewSession) -> Result<()> {
@@ -251,9 +274,10 @@ impl Database for PostgresDatabase {
         let expires_at = now + 86400 * 30; // 30 days
 
         sqlx::query(
-            "INSERT INTO sessions (session_id, created_at, expires_at, user_agent, ip_address) VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO sessions (session_id, user_id, created_at, expires_at, user_agent, ip_address) VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(&session.session_id.0)
+        .bind(&session.user_id.0)
         .bind(now)
         .bind(expires_at)
         .bind(&session.user_agent)
@@ -265,7 +289,7 @@ impl Database for PostgresDatabase {
 
     async fn get_session(&self, session_id: &SessionId) -> Result<Option<SessionRecord>> {
         let row = sqlx::query(
-            "SELECT session_id, created_at, expires_at, last_active_at FROM sessions WHERE session_id = $1",
+            "SELECT session_id, user_id, created_at, expires_at, last_active_at FROM sessions WHERE session_id = $1",
         )
         .bind(&session_id.0)
         .fetch_optional(&self.pool)
@@ -273,7 +297,7 @@ impl Database for PostgresDatabase {
 
         Ok(row.map(|r| SessionRecord {
             session_id: SessionId(r.get("session_id")),
-            user_id: UserId(SOLO_USER_ID.to_string()),
+            user_id: UserId(r.get("user_id")),
             created_at: r.get::<i64, _>("created_at") as u64,
             expires_at: r.get::<i64, _>("expires_at") as u64,
             last_active_at: r.get::<Option<i64>, _>("last_active_at").map(|v| v as u64),
@@ -312,9 +336,10 @@ impl Database for PostgresDatabase {
     async fn create_api_token(&self, token: &NewApiToken) -> Result<()> {
         let now = now_unix() as i64;
         sqlx::query(
-            "INSERT INTO api_tokens (token_id, token_hash, label, created_at, expires_at) VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO api_tokens (token_id, user_id, token_hash, label, created_at, expires_at) VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(&token.token_id.0)
+        .bind(&token.user_id.0)
         .bind(&token.token_hash)
         .bind(&token.label)
         .bind(now)
@@ -324,10 +349,11 @@ impl Database for PostgresDatabase {
         Ok(())
     }
 
-    async fn list_api_tokens(&self, _user_id: &UserId) -> Result<Vec<ApiTokenRecord>> {
+    async fn list_api_tokens(&self, user_id: &UserId) -> Result<Vec<ApiTokenRecord>> {
         let rows = sqlx::query(
-            "SELECT token_id, label, created_at, expires_at, last_used_at FROM api_tokens ORDER BY created_at",
+            "SELECT token_id, user_id, label, created_at, expires_at, last_used_at FROM api_tokens WHERE user_id = $1 ORDER BY created_at",
         )
+        .bind(&user_id.0)
         .fetch_all(&self.pool)
         .await?;
 
@@ -335,7 +361,7 @@ impl Database for PostgresDatabase {
             .into_iter()
             .map(|r| ApiTokenRecord {
                 token_id: TokenId(r.get("token_id")),
-                user_id: UserId(SOLO_USER_ID.to_string()),
+                user_id: UserId(r.get("user_id")),
                 label: r.get("label"),
                 created_at: r.get::<i64, _>("created_at") as u64,
                 expires_at: r.get::<Option<i64>, _>("expires_at").map(|v| v as u64),
@@ -346,7 +372,7 @@ impl Database for PostgresDatabase {
 
     async fn verify_api_token(&self, token_hash: &str) -> Result<Option<ApiTokenRecord>> {
         let row = sqlx::query(
-            "SELECT token_id, label, created_at, expires_at, last_used_at FROM api_tokens WHERE token_hash = $1",
+            "SELECT token_id, user_id, label, created_at, expires_at, last_used_at FROM api_tokens WHERE token_hash = $1",
         )
         .bind(token_hash)
         .fetch_optional(&self.pool)
@@ -363,7 +389,7 @@ impl Database for PostgresDatabase {
 
             Ok(Some(ApiTokenRecord {
                 token_id: TokenId(token_id),
-                user_id: UserId(SOLO_USER_ID.to_string()),
+                user_id: UserId(r.get("user_id")),
                 label: r.get("label"),
                 created_at: r.get::<i64, _>("created_at") as u64,
                 expires_at: r.get::<Option<i64>, _>("expires_at").map(|v| v as u64),
@@ -384,8 +410,9 @@ impl Database for PostgresDatabase {
 
     // --- Auth ---
 
-    async fn verify_password(&self, _user_id: &UserId, password: &str) -> Result<bool> {
-        let row = sqlx::query("SELECT password_hash FROM owner WHERE id = 1")
+    async fn verify_password(&self, user_id: &UserId, password: &str) -> Result<bool> {
+        let row = sqlx::query("SELECT password_hash FROM users WHERE user_id = $1")
+            .bind(&user_id.0)
             .fetch_optional(&self.pool)
             .await?;
 
@@ -398,11 +425,12 @@ impl Database for PostgresDatabase {
         }
     }
 
-    async fn set_password(&self, _user_id: &UserId, password_hash: &str) -> Result<()> {
+    async fn set_password(&self, user_id: &UserId, password_hash: &str) -> Result<()> {
         let now = now_unix() as i64;
-        sqlx::query("UPDATE owner SET password_hash = $1, password_changed_at = $2 WHERE id = 1")
+        sqlx::query("UPDATE users SET password_hash = $1, password_changed_at = $2 WHERE user_id = $3")
             .bind(password_hash)
             .bind(now)
+            .bind(&user_id.0)
             .execute(&self.pool)
             .await?;
         Ok(())
@@ -425,7 +453,11 @@ impl Database for PostgresDatabase {
         sqlx::raw_sql(include_str!("../migrations/001_initial.sql"))
             .execute(&self.pool)
             .await
-            .context("failed to run migrations")?;
+            .context("failed to run migration 001")?;
+        sqlx::raw_sql(include_str!("../migrations/002_multi_user.sql"))
+            .execute(&self.pool)
+            .await
+            .context("failed to run migration 002")?;
         Ok(())
     }
 
@@ -437,26 +469,90 @@ impl Database for PostgresDatabase {
         Ok(())
     }
 
-    // --- User management (not supported in server) ---
+    // --- User management ---
 
     async fn create_user(
         &self,
-        _email: &str,
-        _password_hash: &str,
-        _display_name: &str,
+        email: &str,
+        password_hash: &str,
+        display_name: &str,
     ) -> Result<UserId> {
-        anyhow::bail!("user management is not supported")
+        let user_id = uuid::Uuid::new_v4().to_string();
+        let now = now_unix() as i64;
+        sqlx::query(
+            "INSERT INTO users (user_id, email, password_hash, display_name, created_at, password_changed_at) \
+             VALUES ($1, $2, $3, $4, $5, $5)"
+        )
+        .bind(&user_id)
+        .bind(email)
+        .bind(password_hash)
+        .bind(display_name)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(UserId(user_id))
     }
 
-    async fn get_user_by_email(&self, _email: &str) -> Result<Option<UserRecord>> {
-        anyhow::bail!("user management is not supported")
+    async fn get_user_by_email(&self, email: &str) -> Result<Option<UserRecord>> {
+        let row = sqlx::query(
+            "SELECT user_id, email, display_name, created_at, verified_at, disabled_at FROM users WHERE email = $1"
+        )
+        .bind(email)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| UserRecord {
+            user_id: UserId(r.get("user_id")),
+            email: r.get("email"),
+            display_name: r.get("display_name"),
+            created_at: r.get::<i64, _>("created_at") as u64,
+            verified_at: r.get::<Option<i64>, _>("verified_at").map(|v| v as u64),
+            disabled_at: r.get::<Option<i64>, _>("disabled_at").map(|v| v as u64),
+        }))
     }
 
-    async fn get_user(&self, _user_id: &UserId) -> Result<Option<UserRecord>> {
-        anyhow::bail!("user management is not supported")
+    async fn get_user(&self, user_id: &UserId) -> Result<Option<UserRecord>> {
+        let row = sqlx::query(
+            "SELECT user_id, email, display_name, created_at, verified_at, disabled_at FROM users WHERE user_id = $1"
+        )
+        .bind(&user_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| UserRecord {
+            user_id: UserId(r.get("user_id")),
+            email: r.get("email"),
+            display_name: r.get("display_name"),
+            created_at: r.get::<i64, _>("created_at") as u64,
+            verified_at: r.get::<Option<i64>, _>("verified_at").map(|v| v as u64),
+            disabled_at: r.get::<Option<i64>, _>("disabled_at").map(|v| v as u64),
+        }))
     }
 
-    async fn update_user(&self, _user_id: &UserId, _update: &UserUpdate) -> Result<()> {
-        anyhow::bail!("user management is not supported")
+    async fn update_user(&self, user_id: &UserId, update: &UserUpdate) -> Result<()> {
+        if let Some(ref email) = update.email {
+            sqlx::query("UPDATE users SET email = $1 WHERE user_id = $2")
+                .bind(email)
+                .bind(&user_id.0)
+                .execute(&self.pool)
+                .await?;
+        }
+        if let Some(ref name) = update.display_name {
+            sqlx::query("UPDATE users SET display_name = $1 WHERE user_id = $2")
+                .bind(name)
+                .bind(&user_id.0)
+                .execute(&self.pool)
+                .await?;
+        }
+        if let Some(ref hash) = update.password_hash {
+            let now = now_unix() as i64;
+            sqlx::query("UPDATE users SET password_hash = $1, password_changed_at = $2 WHERE user_id = $3")
+                .bind(hash)
+                .bind(now)
+                .bind(&user_id.0)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
     }
 }

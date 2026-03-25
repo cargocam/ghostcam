@@ -2,9 +2,6 @@ use anyhow::Result;
 use async_trait::async_trait;
 use ghostcam::types::{CertFingerprint, DeviceId, SessionId, TokenId, UserId};
 
-/// The fixed UserId used until multi-user support is implemented.
-pub const SOLO_USER_ID: &str = "solo";
-
 /// A camera record from the database.
 #[derive(Debug, Clone)]
 pub struct CameraRecord {
@@ -118,6 +115,7 @@ pub trait Database: Send + Sync + 'static {
     async fn create_enrollment_token(&self, token: &NewEnrollmentToken) -> Result<()>;
     async fn claim_enrollment_token(&self, jti: &str, device_id: &DeviceId) -> Result<bool>;
     async fn cleanup_expired_tokens(&self) -> Result<u64>;
+    async fn get_enrollment_token_user_id(&self, jti: &str) -> Result<Option<UserId>>;
 
     // --- Sessions ---
     async fn create_session(&self, session: &NewSession) -> Result<()>;

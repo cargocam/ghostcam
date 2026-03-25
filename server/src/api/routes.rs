@@ -56,7 +56,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     let public = Router::new()
         .route("/healthz", get(health::healthz))
         .route("/readyz", get(health::readyz))
-        .route("/api/v1/auth/login", post(auth::login));
+        .route("/api/v1/auth/login", post(auth::login))
+        .route("/api/v1/auth/register", post(auth::register));
 
     Router::new()
         .merge(protected)

@@ -121,8 +121,8 @@ class TransportStore {
 		}
 	}
 
-	async login(password: string): Promise<boolean> {
-		const ok = await authLogin(password);
+	async login(email: string, password: string): Promise<boolean> {
+		const ok = await authLogin(email, password);
 		if (ok) {
 			this.authenticated = true;
 			await this.initialize();

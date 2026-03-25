@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use super::state::AppState;
 use crate::auth;
-use crate::db_trait::{NewSession, SOLO_USER_ID};
+use crate::db_trait::NewSession;
 
 /// Authenticated user identity, extracted by middleware.
 #[derive(Debug, Clone)]
@@ -85,6 +85,7 @@ pub async fn auth_middleware(
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
+    pub email: String,
     pub password: String,
 }
 
@@ -98,10 +99,23 @@ pub async fn login(
     State(state): State<Arc<AppState>>,
     Json(body): Json<LoginRequest>,
 ) -> Response {
-    let user_id = UserId(SOLO_USER_ID.to_string());
+    // Look up user by email
+    let user = match state.db.get_user_by_email(&body.email).await {
+        Ok(Some(u)) => u,
+        Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+        Err(e) => {
+            tracing::error!("failed to look up user: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    // Check if user is disabled
+    if user.disabled_at.is_some() {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
 
     // Verify password
-    match state.db.verify_password(&user_id, &body.password).await {
+    match state.db.verify_password(&user.user_id, &body.password).await {
         Ok(true) => {}
         _ => return StatusCode::UNAUTHORIZED.into_response(),
     }
@@ -110,7 +124,7 @@ pub async fn login(
     let session_id = auth::generate_session_id();
     let new_session = NewSession {
         session_id: session_id.clone(),
-        user_id: user_id.clone(),
+        user_id: user.user_id.clone(),
         user_agent: None,
         ip_address: None,
     };
@@ -131,7 +145,7 @@ pub async fn login(
         .header("content-type", "application/json")
         .body(Body::from(
             serde_json::to_string(&LoginResponse {
-                user_id: user_id.0,
+                user_id: user.user_id.0,
             })
             .unwrap(),
         ))
@@ -201,4 +215,94 @@ pub async fn change_password(
     }
 
     StatusCode::OK.into_response()
+}
+
+#[derive(Deserialize)]
+pub struct RegisterRequest {
+    pub email: String,
+    pub password: String,
+    pub display_name: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct RegisterResponse {
+    pub user_id: String,
+}
+
+/// POST /api/v1/auth/register
+pub async fn register(
+    State(state): State<Arc<AppState>>,
+    Json(body): Json<RegisterRequest>,
+) -> Response {
+    // Validate email
+    if !body.email.contains('@') || body.email.len() > 254 {
+        return (StatusCode::BAD_REQUEST, "invalid email address").into_response();
+    }
+
+    // Validate password length
+    if body.password.len() < 8 {
+        return (StatusCode::BAD_REQUEST, "password must be at least 8 characters").into_response();
+    }
+
+    // Check if email is already taken
+    match state.db.get_user_by_email(&body.email).await {
+        Ok(Some(_)) => {
+            return (StatusCode::CONFLICT, "email already registered").into_response();
+        }
+        Ok(None) => {}
+        Err(e) => {
+            tracing::error!("failed to check email: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
+    // Hash password
+    let hash = match auth::hash_password(&body.password) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!("failed to hash password: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    // Create user
+    let display_name = body.display_name.as_deref().unwrap_or("User");
+    let user_id = match state.db.create_user(&body.email, &hash, display_name).await {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!("failed to create user: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    // Auto-login: create session
+    let session_id = auth::generate_session_id();
+    let new_session = NewSession {
+        session_id: session_id.clone(),
+        user_id: user_id.clone(),
+        user_agent: None,
+        ip_address: None,
+    };
+    if let Err(e) = state.db.create_session(&new_session).await {
+        tracing::error!("failed to create session: {e}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    let cookie = format!(
+        "ghostcam-session={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",
+        session_id.0,
+        ghostcam::config::SESSION_TTL_DAYS * 86400,
+    );
+
+    Response::builder()
+        .status(StatusCode::CREATED)
+        .header("set-cookie", cookie)
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_string(&RegisterResponse {
+                user_id: user_id.0,
+            })
+            .unwrap(),
+        ))
+        .unwrap()
 }
