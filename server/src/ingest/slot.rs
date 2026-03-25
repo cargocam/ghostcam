@@ -196,6 +196,10 @@ impl IngestSlot {
                 result = framing::read_json::<ghostcam::wire::alert::Alert, _>(&mut stream) => {
                     match result {
                         Ok(Some(alert)) => {
+                            if let Err(e) = alert.validate() {
+                                tracing::warn!(device_id = %slot.device_id, "alert validation failed: {e}");
+                                continue;
+                            }
                             super::alerts::handle_alert(&slot, alert).await;
                         }
                         Ok(None) => break, // Clean EOF

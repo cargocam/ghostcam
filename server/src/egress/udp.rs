@@ -171,9 +171,7 @@ mod tests {
         pkt.extend_from_slice(&attr_len.to_be_bytes());
         pkt.extend_from_slice(attr_val);
         // Padding
-        for _ in 0..(padded - attr_val.len()) {
-            pkt.push(0x00);
-        }
+        pkt.extend(std::iter::repeat_n(0x00, padded - attr_val.len()));
         pkt
     }
 

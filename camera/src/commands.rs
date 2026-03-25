@@ -33,6 +33,11 @@ pub async fn run_command_reader(
             .map_err(|e| anyhow::anyhow!("command read error: {e}"))?
             .ok_or_else(|| anyhow::anyhow!("commands stream closed"))?;
 
+        if let Err(e) = cmd.validate() {
+            tracing::warn!("command validation failed: {e}");
+            continue;
+        }
+
         tracing::debug!(?cmd, "received command");
 
         match cmd {

@@ -17,6 +17,7 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all
+      - run: cargo install cargo-audit --quiet && cargo audit
 
   ui:
     runs-on: ubuntu-latest

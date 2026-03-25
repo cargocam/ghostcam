@@ -280,10 +280,11 @@ pub async fn get_coverage(
         _ => return StatusCode::NOT_FOUND.into_response(),
     }
 
-    let online = state.registry.get_slot(&device_id).await.is_some();
+    let slot = state.registry.get_slot(&device_id).await;
+    let online = slot.is_some();
 
     // Read manifest: live slot → Redis fallback
-    let manifest_text = if let Some(slot) = state.registry.get_slot(&device_id).await {
+    let manifest_text = if let Some(ref slot) = slot {
         slot.manifest.read().await.clone()
     } else {
         None

@@ -98,6 +98,69 @@ pub struct NetworkEntry {
     pub signal_dbm: Option<i8>,
 }
 
+/// Maximum length for short string fields (IDs, versions, SSIDs).
+const MAX_SHORT_STRING: usize = 256;
+
+/// Maximum length for PEM certificate/CSR fields.
+const MAX_PEM_STRING: usize = 8192;
+
+fn check_short(field: &str, val: &str) -> Result<(), String> {
+    if val.len() > MAX_SHORT_STRING {
+        Err(format!("{field} too long: {} bytes", val.len()))
+    } else {
+        Ok(())
+    }
+}
+
+fn check_pem(field: &str, val: &str) -> Result<(), String> {
+    if val.len() > MAX_PEM_STRING {
+        Err(format!("{field} too long: {} bytes", val.len()))
+    } else {
+        Ok(())
+    }
+}
+
+impl Alert {
+    /// Validate string field lengths after deserialization.
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Alert::Handshake { fw_version, .. } => check_short("fw_version", fw_version),
+            Alert::RecordingSegment {
+                device_id,
+                segment_id,
+                ..
+            } => {
+                check_short("device_id", device_id)?;
+                check_short("segment_id", segment_id)
+            }
+            Alert::SegmentEvicted { segment_id } => check_short("segment_id", segment_id),
+            Alert::SegmentUploaded { segment_id, .. } => check_short("segment_id", segment_id),
+            Alert::SegmentUploadFailed { segment_id, .. } => check_short("segment_id", segment_id),
+            Alert::Ack { cmd, .. } => check_short("cmd", cmd),
+            Alert::Enrollment { token } => check_short("token", token),
+            Alert::Csr { csr_pem } => check_pem("csr_pem", csr_pem),
+            Alert::UpdateApplying { version } | Alert::UpdateSucceeded { version } => {
+                check_short("version", version)
+            }
+            Alert::UpdateFailed {
+                version_attempted,
+                version_current,
+                ..
+            } => {
+                check_short("version_attempted", version_attempted)?;
+                check_short("version_current", version_current)
+            }
+            Alert::Networks { networks } => {
+                for n in networks {
+                    check_short("ssid", &n.ssid)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -149,13 +149,13 @@ mod tests {
 
     #[test]
     fn limit_clamped_to_max() {
-        let clamped = Some(10000usize).unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
+        let clamped = 10000usize.min(MAX_LIMIT);
         assert_eq!(clamped, 3600);
     }
 
     #[test]
     fn limit_default() {
-        let clamped = None::<usize>.unwrap_or(DEFAULT_LIMIT).min(MAX_LIMIT);
+        let clamped = DEFAULT_LIMIT.min(MAX_LIMIT);
         assert_eq!(clamped, 3600);
     }
 }

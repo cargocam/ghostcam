@@ -57,7 +57,74 @@ pub enum Command {
     },
 }
 
+/// Maximum length for short string fields (IDs, versions, SSIDs).
+const MAX_SHORT_STRING: usize = 256;
+
+/// Maximum length for PEM certificate fields.
+const MAX_PEM_STRING: usize = 8192;
+
+/// Maximum length for URL fields.
+const MAX_URL_STRING: usize = 2048;
+
 impl Command {
+    /// Validate string field lengths after deserialization.
+    pub fn validate(&self) -> Result<(), String> {
+        match self {
+            Command::UploadSegment { segment_id, .. } => {
+                if segment_id.len() > MAX_SHORT_STRING {
+                    return Err(format!("segment_id too long: {} bytes", segment_id.len()));
+                }
+                Ok(())
+            }
+            Command::NetworkConfig { ssid, psk, .. } => {
+                if ssid.len() > MAX_SHORT_STRING {
+                    return Err(format!("ssid too long: {} bytes", ssid.len()));
+                }
+                if psk.len() > MAX_SHORT_STRING {
+                    return Err(format!("psk too long: {} bytes", psk.len()));
+                }
+                Ok(())
+            }
+            Command::RemoveNetwork { ssid, .. } => {
+                if ssid.len() > MAX_SHORT_STRING {
+                    return Err(format!("ssid too long: {} bytes", ssid.len()));
+                }
+                Ok(())
+            }
+            Command::UpdateAvailable {
+                version,
+                url,
+                sha256,
+                ..
+            } => {
+                if version.len() > MAX_SHORT_STRING {
+                    return Err(format!("version too long: {} bytes", version.len()));
+                }
+                if url.len() > MAX_URL_STRING {
+                    return Err(format!("url too long: {} bytes", url.len()));
+                }
+                if sha256.len() > MAX_SHORT_STRING {
+                    return Err(format!("sha256 too long: {} bytes", sha256.len()));
+                }
+                Ok(())
+            }
+            Command::CertRefresh {
+                cert_pem, ca_pem, ..
+            } => {
+                if cert_pem.len() > MAX_PEM_STRING {
+                    return Err(format!("cert_pem too long: {} bytes", cert_pem.len()));
+                }
+                if let Some(ca) = ca_pem {
+                    if ca.len() > MAX_PEM_STRING {
+                        return Err(format!("ca_pem too long: {} bytes", ca.len()));
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Extract the sequence number from any command variant.
     pub fn seq(&self) -> u64 {
         match self {
