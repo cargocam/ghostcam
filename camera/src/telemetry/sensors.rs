@@ -82,8 +82,7 @@ fn read_memory() -> Option<u32> {
 
 #[cfg(target_os = "linux")]
 fn read_temperature() -> Option<u32> {
-    let contents =
-        std::fs::read_to_string("/sys/class/thermal/thermal_zone0/temp").ok()?;
+    let contents = std::fs::read_to_string("/sys/class/thermal/thermal_zone0/temp").ok()?;
     let millideg: u32 = contents.trim().parse().ok()?;
     Some(millideg / 1000)
 }

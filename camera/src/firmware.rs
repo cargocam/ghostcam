@@ -97,8 +97,9 @@ async fn download_and_verify(url: &str, expected_sha256: &str, dest: &Path) -> R
     // Use a simple HTTP GET via tokio (avoid adding reqwest dep)
     // For now, support file:// URLs for testing, and shell out to curl for http(s)
     let bytes = if url.starts_with("file://") {
-        let path = url.strip_prefix("file://").unwrap();
-        tokio::fs::read(path)
+        let raw = url.strip_prefix("file://").unwrap();
+        let resolved = std::fs::canonicalize(raw).context("resolving firmware file path")?;
+        tokio::fs::read(resolved)
             .await
             .context("reading firmware file")?
     } else {
@@ -118,9 +119,7 @@ async fn download_and_verify(url: &str, expected_sha256: &str, dest: &Path) -> R
     // Verify SHA-256
     let actual = ghostcam::pki::sha256_hex(&bytes);
     if actual != expected_sha256 {
-        anyhow::bail!(
-            "firmware hash mismatch: expected {expected_sha256}, got {actual}"
-        );
+        anyhow::bail!("firmware hash mismatch: expected {expected_sha256}, got {actual}");
     }
 
     tokio::fs::write(dest, &bytes)

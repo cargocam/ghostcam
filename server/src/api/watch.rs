@@ -85,13 +85,7 @@ pub async fn create_session(
     // Register session
     state
         .sessions
-        .register(
-            session_id.clone(),
-            device_id,
-            user.user_id,
-            cancel,
-            handle,
-        )
+        .register(session_id.clone(), device_id, user.user_id, cancel, handle)
         .await;
 
     Json(WatchResponse {

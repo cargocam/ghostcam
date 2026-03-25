@@ -165,7 +165,9 @@ mod tests {
         registry.register(new_slot.clone()).await;
 
         // Old connection's cleanup tries to unregister — should be a no-op
-        registry.unregister(&DeviceId("cam-1".into()), &old_slot).await;
+        registry
+            .unregister(&DeviceId("cam-1".into()), &old_slot)
+            .await;
 
         // New slot should still be registered
         assert!(registry.is_connected(&DeviceId("cam-1".into())).await);

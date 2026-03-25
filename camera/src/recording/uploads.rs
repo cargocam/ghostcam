@@ -1,7 +1,7 @@
 use anyhow::Result;
 use ghostcam::wire::alert::Alert;
-use ghostcam::wire::framing;
 use ghostcam::wire::frames::InboundStreamTag;
+use ghostcam::wire::framing;
 use tokio::sync::{mpsc, Mutex, RwLock};
 
 use super::ring_buffer::RingBuffer;

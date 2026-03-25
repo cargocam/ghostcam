@@ -84,8 +84,8 @@ async fn main() -> Result<()> {
         server_addr,
         test_source: cli.test_source,
         test_video: cli.test_video,
-        no_audio: cli.no_audio || conf.as_ref().map_or(false, |c| c.no_audio),
-        no_gps: cli.no_gps || conf.as_ref().map_or(false, |c| c.no_gps),
+        no_audio: cli.no_audio || conf.as_ref().is_some_and(|c| c.no_audio),
+        no_gps: cli.no_gps || conf.as_ref().is_some_and(|c| c.no_gps),
         no_tofu: cli.no_tofu,
         data_dir: cli.data_dir,
     };
@@ -154,7 +154,12 @@ async fn main() -> Result<()> {
     let (video_tx, video_rx) = mpsc::channel::<CaptureMessage>(256);
     let (audio_tx, audio_rx) = mpsc::channel::<CaptureMessage>(256);
     let fanout_cancel = cancel.clone();
-    tokio::spawn(fanout_capture(capture_rx, video_tx, audio_tx, fanout_cancel));
+    tokio::spawn(fanout_capture(
+        capture_rx,
+        video_tx,
+        audio_tx,
+        fanout_cancel,
+    ));
 
     // Telemetry loop with connection watch
     let (conn_tx, conn_rx) = watch::channel::<Option<quinn::Connection>>(None);
@@ -179,9 +184,7 @@ async fn main() -> Result<()> {
                 no_tofu: true,
                 data_dir: String::new(),
             };
-            if let Err(e) =
-                telemetry::run_telemetry_loop(conn_rx, &buffer, &config, cancel).await
-            {
+            if let Err(e) = telemetry::run_telemetry_loop(conn_rx, &buffer, &config, cancel).await {
                 tracing::warn!("telemetry loop ended: {e}");
             }
         }
@@ -211,6 +214,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_connection_loop(
     config: &CameraConfig,
     device_cert: &[u8],
@@ -265,6 +269,7 @@ async fn run_connection_loop(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn try_connect_and_run(
     config: &CameraConfig,
     device_cert: &[u8],

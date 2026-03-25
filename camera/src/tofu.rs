@@ -33,7 +33,9 @@ impl TofuServerCertVerifier {
                 } else if s.is_empty() {
                     None
                 } else {
-                    tracing::warn!("stored server fingerprint has unexpected format — treating as unpinned");
+                    tracing::warn!(
+                        "stored server fingerprint has unexpected format — treating as unpinned"
+                    );
                     None
                 }
             }
@@ -58,7 +60,10 @@ impl ServerCertVerifier for TofuServerCertVerifier {
     ) -> Result<ServerCertVerified, TlsError> {
         let actual = ghostcam::pki::sha256_hex(end_entity.as_ref());
 
-        let mut cached = self.cached_fingerprint.lock().unwrap();
+        let mut cached = self
+            .cached_fingerprint
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
 
         match cached.as_deref() {
             Some(stored) if stored == actual => {
@@ -199,13 +204,8 @@ mod tests {
         let expected_fp = ghostcam::pki::sha256_hex(&[1, 2, 3, 4, 5]);
         let server_name = ServerName::try_from("ghostcam").unwrap();
 
-        let result = verifier.verify_server_cert(
-            &fake_cert,
-            &[],
-            &server_name,
-            &[],
-            UnixTime::now(),
-        );
+        let result =
+            verifier.verify_server_cert(&fake_cert, &[], &server_name, &[], UnixTime::now());
         assert!(result.is_ok());
 
         // Fingerprint should be cached
@@ -229,13 +229,8 @@ mod tests {
         let verifier = TofuServerCertVerifier::new(dir.path());
         let server_name = ServerName::try_from("ghostcam").unwrap();
 
-        let result = verifier.verify_server_cert(
-            &fake_cert,
-            &[],
-            &server_name,
-            &[],
-            UnixTime::now(),
-        );
+        let result =
+            verifier.verify_server_cert(&fake_cert, &[], &server_name, &[], UnixTime::now());
         assert!(result.is_ok());
     }
 
@@ -249,18 +244,16 @@ mod tests {
         let fake_cert = CertificateDer::from(vec![1, 2, 3, 4, 5]);
         let server_name = ServerName::try_from("ghostcam").unwrap();
 
-        let result = verifier.verify_server_cert(
-            &fake_cert,
-            &[],
-            &server_name,
-            &[],
-            UnixTime::now(),
-        );
+        let result =
+            verifier.verify_server_cert(&fake_cert, &[], &server_name, &[], UnixTime::now());
         assert!(result.is_err());
 
         let err = result.unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("fingerprint mismatch"), "error should mention mismatch: {msg}");
+        assert!(
+            msg.contains("fingerprint mismatch"),
+            "error should mention mismatch: {msg}"
+        );
     }
 
     #[test]
@@ -291,16 +284,17 @@ mod tests {
         let fake_cert = CertificateDer::from(vec![1, 2, 3, 4, 5]);
         let server_name = ServerName::try_from("ghostcam").unwrap();
 
-        let result = verifier.verify_server_cert(
-            &fake_cert,
-            &[],
-            &server_name,
-            &[],
-            UnixTime::now(),
+        let result =
+            verifier.verify_server_cert(&fake_cert, &[], &server_name, &[], UnixTime::now());
+        assert!(
+            result.is_err(),
+            "should reject when fingerprint can't be persisted"
         );
-        assert!(result.is_err(), "should reject when fingerprint can't be persisted");
 
         let msg = format!("{}", result.unwrap_err());
-        assert!(msg.contains("cannot persist"), "error should mention persist failure: {msg}");
+        assert!(
+            msg.contains("cannot persist"),
+            "error should mention persist failure: {msg}"
+        );
     }
 }

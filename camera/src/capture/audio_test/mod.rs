@@ -9,10 +9,7 @@ use super::{CaptureMessage, CaptureSender};
 mod opus_tone_data;
 
 /// Send pre-encoded Opus frames (440Hz + 880Hz sine tone) every 20ms, looping.
-pub async fn run_test_audio(
-    tx: CaptureSender,
-    cancel: CancellationToken,
-) -> Result<()> {
+pub async fn run_test_audio(tx: CaptureSender, cancel: CancellationToken) -> Result<()> {
     tracing::info!(
         "test audio source started (Opus tone @ 50fps, {} frames looping)",
         opus_tone_data::TONE_FRAMES.len()

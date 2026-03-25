@@ -78,7 +78,6 @@ impl SessionManager {
         let sessions = self.sessions.read().await;
         sessions.get(session_id).map(|e| e.user_id.clone())
     }
-
 }
 
 impl Default for SessionManager {

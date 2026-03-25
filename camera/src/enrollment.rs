@@ -3,8 +3,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use ghostcam::wire::alert::Alert;
 use ghostcam::wire::command::Command;
-use ghostcam::wire::framing;
 use ghostcam::wire::frames::InboundStreamTag;
+use ghostcam::wire::framing;
 
 /// Data extracted from an enrollment JWT.
 pub struct EnrollmentData {
@@ -67,7 +67,7 @@ pub async fn enroll(
         device_cert,
         device_key,
         None,
-        true, // no_tofu: enrollment is the initial trust establishment
+        true,          // no_tofu: enrollment is the initial trust establishment
         Path::new(""), // unused when no_tofu=true
     )?;
     let connection = crate::quic::connect(&endpoint, &enrollment.server_addr).await?;
@@ -99,14 +99,12 @@ pub async fn enroll(
     .unwrap_or_default();
 
     let csr_pem = if !device_key_pem.is_empty() {
-        let kp = rcgen::KeyPair::from_pem(&device_key_pem)
-            .context("parsing device key for CSR")?;
+        let kp = rcgen::KeyPair::from_pem(&device_key_pem).context("parsing device key for CSR")?;
         ghostcam::pki::create_csr("ghostcam-device", &kp)?
     } else {
         // Fallback: generate a fresh CSR from the DER key via PEM conversion
         let key_pem = pem::encode(&pem::Pem::new("PRIVATE KEY", device_key.to_vec()));
-        let kp = rcgen::KeyPair::from_pem(&key_pem)
-            .context("parsing device key DER for CSR")?;
+        let kp = rcgen::KeyPair::from_pem(&key_pem).context("parsing device key DER for CSR")?;
         ghostcam::pki::create_csr("ghostcam-device", &kp)?
     };
 

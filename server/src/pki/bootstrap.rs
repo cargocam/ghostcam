@@ -57,10 +57,7 @@ pub async fn bootstrap_pki(data_dir: &Path) -> Result<BootstrapResult> {
             server_key_path.display(),
         );
 
-        Ok(BootstrapResult {
-            ca,
-            server_tls,
-        })
+        Ok(BootstrapResult { ca, server_tls })
     } else {
         // Load existing PKI material
         let ca_cert_pem = tokio::fs::read_to_string(&ca_cert_path)
@@ -81,10 +78,7 @@ pub async fn bootstrap_pki(data_dir: &Path) -> Result<BootstrapResult> {
         let server_tls = server_tls::load_server_tls(&server_cert_pem, &server_key_pem)
             .context("failed to load server TLS from PEM")?;
 
-        Ok(BootstrapResult {
-            ca,
-            server_tls,
-        })
+        Ok(BootstrapResult { ca, server_tls })
     }
 }
 

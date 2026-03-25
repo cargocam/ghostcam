@@ -42,8 +42,7 @@ pub async fn run_telemetry_loop(
 
         let current = sensors::read_sensors(config).await;
 
-        let heartbeat_due =
-            last_heartbeat.elapsed() >= heartbeat_interval;
+        let heartbeat_due = last_heartbeat.elapsed() >= heartbeat_interval;
         let threshold_exceeded = exceeds_threshold(&previous, &current, &thresholds);
 
         if !heartbeat_due && !threshold_exceeded {
@@ -57,7 +56,13 @@ pub async fn run_telemetry_loop(
         // Try to send via QUIC datagram
         let conn = connected_rx.borrow().clone();
         if let Some(ref conn) = conn {
-            let encoded = current.encode();
+            let encoded = match current.encode() {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!("telemetry encode failed: {e}");
+                    continue;
+                }
+            };
             match conn.send_datagram(encoded.into()) {
                 Ok(()) => {}
                 Err(e) => {

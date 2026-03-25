@@ -57,11 +57,7 @@ pub fn read_ghostcam_conf(path: &Path) -> Result<Option<GhostcamConf>> {
 /// 2. ghostcam.conf server_addr
 /// 3. /etc/ghostcam/server.addr (stored during enrollment)
 /// 4. Hardcoded default
-pub fn resolve_server_addr(
-    cli: Option<&str>,
-    conf: Option<&str>,
-    addr_file: &Path,
-) -> String {
+pub fn resolve_server_addr(cli: Option<&str>, conf: Option<&str>, addr_file: &Path) -> String {
     if let Some(addr) = cli {
         return addr.to_string();
     }

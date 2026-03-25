@@ -181,10 +181,7 @@ mod tests {
     fn parses_local_ufrag() {
         // USERNAME = "serverUfrag:browserUfrag"; we want the server's ufrag (first token).
         let pkt = make_stun_binding_request("serverUfrag:browserUfrag");
-        assert_eq!(
-            parse_stun_local_ufrag(&pkt),
-            Some("serverUfrag".to_owned())
-        );
+        assert_eq!(parse_stun_local_ufrag(&pkt), Some("serverUfrag".to_owned()));
     }
 
     #[test]

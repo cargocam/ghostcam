@@ -98,15 +98,11 @@ pub async fn run_command_reader(
                 tracing::info!("cert refresh received");
 
                 // Write the new user certificate
-                if let Err(e) =
-                    tokio::fs::write(data_dir.join("user.crt"), &cert_pem).await
-                {
+                if let Err(e) = tokio::fs::write(data_dir.join("user.crt"), &cert_pem).await {
                     tracing::error!("failed to write refreshed cert: {e}");
                 }
                 if let Some(ca) = ca_pem {
-                    if let Err(e) =
-                        tokio::fs::write(data_dir.join("ca.crt"), &ca).await
-                    {
+                    if let Err(e) = tokio::fs::write(data_dir.join("ca.crt"), &ca).await {
                         tracing::error!("failed to write refreshed CA cert: {e}");
                     }
                 }
@@ -140,11 +136,7 @@ pub async fn run_command_reader(
 }
 
 /// Send an ack alert on the alerts stream.
-async fn send_ack(
-    alerts_tx: &Mutex<quinn::SendStream>,
-    cmd: &str,
-    seq: u64,
-) -> Result<()> {
+async fn send_ack(alerts_tx: &Mutex<quinn::SendStream>, cmd: &str, seq: u64) -> Result<()> {
     let ack = Alert::Ack {
         cmd: cmd.to_string(),
         seq,

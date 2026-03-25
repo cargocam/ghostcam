@@ -33,9 +33,7 @@ impl Muxer {
         Self {
             segment_dir,
             device_id,
-            segment_duration: Duration::from_secs(
-                ghostcam::config::SEGMENT_DURATION_SECS,
-            ),
+            segment_duration: Duration::from_secs(ghostcam::config::SEGMENT_DURATION_SECS),
             event_tx,
             ring_buffer,
             init_generated: false,
@@ -116,8 +114,7 @@ impl Muxer {
 
                     // Check if we need a new segment (IDR + duration exceeded)
                     let is_idr = nal_type == 5;
-                    if is_idr && current_segment.is_some() {
-                        if segment_start.elapsed() >= self.segment_duration {
+                    if is_idr && current_segment.is_some() && segment_start.elapsed() >= self.segment_duration {
                             // Finalize current segment
                             if let Some(sw) = current_segment.take() {
                                 let meta = sw.finalize().await?;
@@ -140,7 +137,6 @@ impl Muxer {
                                     manifest,
                                 }).await;
                             }
-                        }
                     }
 
                     // Start new segment if needed

@@ -48,12 +48,16 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(ghostcam::config::QUIC_PORT);
-    let redis_url = std::env::var("GHOSTCAM_REDIS_URL").ok().filter(|s| !s.is_empty());
+    let redis_url = std::env::var("GHOSTCAM_REDIS_URL")
+        .ok()
+        .filter(|s| !s.is_empty());
     let public_ip_override = parse_public_ip_env();
     if let Some(ip) = public_ip_override {
         tracing::info!(ip = %ip, "explicit public IP override");
     } else {
-        tracing::info!("no GHOSTCAM_PUBLIC_IP set; ICE candidate IP will be derived from HTTP Host header");
+        tracing::info!(
+            "no GHOSTCAM_PUBLIC_IP set; ICE candidate IP will be derived from HTTP Host header"
+        );
     }
     // enrollment_addr is embedded in enrollment JWTs. Defaults to
     // <public_ip_override>:<quic_port> but can be overridden when cameras and
@@ -63,18 +67,24 @@ async fn main() -> anyhow::Result<()> {
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| {
-            let ip = public_ip_override.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
+            let ip =
+                public_ip_override.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
             format!("{ip}:{quic_port}")
         });
 
     // --- Database ---
-    let database_url = std::env::var("GHOSTCAM_DATABASE_URL")
-        .context("GHOSTCAM_DATABASE_URL is required")?;
+    let database_url =
+        std::env::var("GHOSTCAM_DATABASE_URL").context("GHOSTCAM_DATABASE_URL is required")?;
     let db = PostgresDatabase::connect(&database_url).await?;
-    let preset_password = std::env::var("GHOSTCAM_ADMIN_PASSWORD").ok().filter(|s| !s.is_empty());
-    let admin_email = std::env::var("GHOSTCAM_ADMIN_EMAIL")
-        .unwrap_or_else(|_| "admin@localhost".to_string());
-    if let Some(initial_password) = db.initialize(preset_password.as_deref(), &admin_email).await? {
+    let preset_password = std::env::var("GHOSTCAM_ADMIN_PASSWORD")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let admin_email =
+        std::env::var("GHOSTCAM_ADMIN_EMAIL").unwrap_or_else(|_| "admin@localhost".to_string());
+    if let Some(initial_password) = db
+        .initialize(preset_password.as_deref(), &admin_email)
+        .await?
+    {
         println!("============================================================");
         println!("Ghostcam server first run");
         println!();
@@ -149,11 +159,8 @@ async fn main() -> anyhow::Result<()> {
 
     // --- QUIC listener ---
     let quic_bind: SocketAddr = format!("0.0.0.0:{quic_port}").parse()?;
-    let endpoint = build_server_endpoint(
-        &pki.server_tls.cert_der,
-        &pki.server_tls.key_der,
-        quic_bind,
-    )?;
+    let endpoint =
+        build_server_endpoint(&pki.server_tls.cert_der, &pki.server_tls.key_der, quic_bind)?;
     tracing::info!(%quic_bind, "QUIC listening");
 
     let quic_cancel = cancel.clone();

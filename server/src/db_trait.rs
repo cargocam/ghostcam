@@ -47,6 +47,7 @@ pub struct NewSession {
 }
 
 /// A session record from the database.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct SessionRecord {
     pub session_id: SessionId,
@@ -78,6 +79,7 @@ pub struct ApiTokenRecord {
 }
 
 /// A user record from the database.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct UserRecord {
     pub user_id: UserId,
@@ -89,6 +91,7 @@ pub struct UserRecord {
 }
 
 /// Fields for updating a user record.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub struct UserUpdate {
     pub email: Option<String>,
@@ -114,6 +117,7 @@ pub trait Database: Send + Sync + 'static {
     // --- Enrollment tokens ---
     async fn create_enrollment_token(&self, token: &NewEnrollmentToken) -> Result<()>;
     async fn claim_enrollment_token(&self, jti: &str, device_id: &DeviceId) -> Result<bool>;
+    #[allow(dead_code)]
     async fn cleanup_expired_tokens(&self) -> Result<u64>;
     async fn get_enrollment_token_user_id(&self, jti: &str) -> Result<Option<UserId>>;
 
@@ -122,6 +126,7 @@ pub trait Database: Send + Sync + 'static {
     async fn get_session(&self, session_id: &SessionId) -> Result<Option<SessionRecord>>;
     async fn delete_session(&self, session_id: &SessionId) -> Result<()>;
     async fn extend_session(&self, session_id: &SessionId) -> Result<()>;
+    #[allow(dead_code)]
     async fn cleanup_expired_sessions(&self) -> Result<u64>;
 
     // --- API tokens ---
@@ -152,7 +157,9 @@ pub trait Database: Send + Sync + 'static {
         display_name: &str,
     ) -> Result<UserId>;
     async fn get_user_by_email(&self, email: &str) -> Result<Option<UserRecord>>;
+    #[allow(dead_code)]
     async fn get_user(&self, user_id: &UserId) -> Result<Option<UserRecord>>;
+    #[allow(dead_code)]
     async fn update_user(&self, user_id: &UserId, update: &UserUpdate) -> Result<()>;
 }
 

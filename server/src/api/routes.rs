@@ -21,10 +21,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         )
         // Watch / session
         .route("/api/v1/watch", post(watch::create_session))
-        .route(
-            "/api/v1/session/:id",
-            delete(watch::teardown_session),
-        )
+        .route("/api/v1/session/:id", delete(watch::teardown_session))
         .route("/api/v1/session/:id/ice", post(watch::ice_candidate))
         // API tokens
         .route("/api/v1/tokens", get(tokens::list).post(tokens::create))

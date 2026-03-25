@@ -178,6 +178,7 @@ impl IngestSlot {
     }
 
     /// Returns true if this slot has been shut down.
+    #[allow(dead_code)]
     pub fn is_shutdown(&self) -> bool {
         self.cancel.is_cancelled()
     }

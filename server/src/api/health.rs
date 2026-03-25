@@ -32,7 +32,11 @@ pub async fn readyz(State(state): State<Arc<AppState>>) -> Json<ReadyResponse> {
         None => "not_configured",
     };
 
-    let status = if db_status == "ok" { "ready" } else { "not_ready" };
+    let status = if db_status == "ok" {
+        "ready"
+    } else {
+        "not_ready"
+    };
 
     Json(ReadyResponse {
         status: status.to_string(),

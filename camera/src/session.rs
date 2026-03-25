@@ -2,11 +2,11 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use bytes::Bytes;
 use ghostcam::wire::alert::{Alert, StreamKind};
-use ghostcam::wire::framing;
 use ghostcam::wire::frames::InboundStreamTag;
+use ghostcam::wire::framing;
 use tokio::sync::{broadcast, mpsc, Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 
@@ -143,7 +143,10 @@ impl Session {
         );
         let muxer_cancel = cancel.clone();
         let muxer_task = tokio::spawn(async move {
-            if let Err(e) = muxer.run(muxer_video_rx, muxer_audio_rx, muxer_cancel).await {
+            if let Err(e) = muxer
+                .run(muxer_video_rx, muxer_audio_rx, muxer_cancel)
+                .await
+            {
                 tracing::warn!("muxer ended: {e}");
             }
         });
@@ -195,8 +198,15 @@ impl Session {
         let upl_cancel = cancel.clone();
         let upload_task = tokio::spawn(async move {
             if let Err(e) = crate::recording::uploads::run_upload_handler(
-                upl_conn, upload_rx, &upl_rb, &upl_init, &upl_alerts, upl_cancel,
-            ).await {
+                upl_conn,
+                upload_rx,
+                &upl_rb,
+                &upl_init,
+                &upl_alerts,
+                upl_cancel,
+            )
+            .await
+            {
                 tracing::warn!("upload handler ended: {e}");
             }
         });
@@ -320,7 +330,8 @@ async fn upload_telemetry_buffer(
         return Ok(());
     }
 
-    let encoded = ghostcam::telemetry::TelemetryDatagram::encode_batch(&entries);
+    let encoded = ghostcam::telemetry::TelemetryDatagram::encode_batch(&entries)
+        .context("encoding telemetry batch")?;
 
     let mut stream = connection.open_uni().await?;
     stream

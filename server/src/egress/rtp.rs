@@ -46,7 +46,6 @@ impl NalAccumulator {
 
         Some(au)
     }
-
 }
 
 impl Default for NalAccumulator {
@@ -132,5 +131,4 @@ mod tests {
         assert_eq!(nals[1][0] & 0x1F, 8); // PPS
         assert_eq!(nals[2][0] & 0x1F, 5); // IDR
     }
-
 }

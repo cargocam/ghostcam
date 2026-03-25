@@ -90,13 +90,10 @@ mod tests {
         });
 
         // Should receive frames within 100ms
-        let frame = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            rx.recv(),
-        )
-        .await
-        .expect("timeout waiting for audio frame")
-        .expect("channel closed");
+        let frame = tokio::time::timeout(std::time::Duration::from_millis(100), rx.recv())
+            .await
+            .expect("timeout waiting for audio frame")
+            .expect("channel closed");
 
         cancel.cancel();
 

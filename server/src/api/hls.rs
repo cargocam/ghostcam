@@ -46,7 +46,12 @@ fn parse_manifest_segments(manifest: &str) -> Vec<CoverageSegment> {
     for line in manifest.lines() {
         let line = line.trim();
         if let Some(dur_str) = line.strip_prefix("#EXTINF:") {
-            let dur: f64 = dur_str.trim_end_matches(',').parse().unwrap_or(10.0);
+            let dur: f64 = dur_str.trim_end_matches(',').parse().unwrap_or_else(|e| {
+                tracing::warn!(
+                    "failed to parse EXTINF duration '{dur_str}': {e}, defaulting to 10s"
+                );
+                10.0
+            });
             pending_duration_ms = Some((dur * 1000.0) as u64);
         } else if line.ends_with(".m4s") && !line.starts_with('#') {
             let id = line
@@ -123,7 +128,7 @@ fn manifest_response(body: String) -> Response {
         .header("content-type", "application/vnd.apple.mpegurl")
         .header("cache-control", "no-cache")
         .body(axum::body::Body::from(body))
-        .unwrap()
+        .expect("manifest response")
 }
 
 /// GET /hls/:device_id/init.mp4
@@ -180,7 +185,7 @@ fn init_response(data: Bytes) -> Response {
         .header("content-type", "video/mp4")
         .header("cache-control", "no-store, no-cache, must-revalidate")
         .body(axum::body::Body::from(data))
-        .unwrap()
+        .expect("init response")
 }
 
 /// GET /hls/:device_id/:segment_id
@@ -257,7 +262,7 @@ fn segment_response(data: Bytes) -> Response {
         .header("content-type", "video/mp4")
         .header("cache-control", "private, max-age=3600")
         .body(axum::body::Body::from(data))
-        .unwrap()
+        .expect("segment response")
 }
 
 /// GET /hls/:device_id/coverage

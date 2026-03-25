@@ -61,7 +61,6 @@ mod tests {
         assert!(!cache.is_revoked("def").await);
     }
 
-
     #[tokio::test]
     async fn concurrent_reads() {
         let cache = std::sync::Arc::new(RevocationCache::new());

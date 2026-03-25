@@ -20,7 +20,13 @@ impl TelemetryBuffer {
             if data.is_empty() {
                 Vec::new()
             } else {
-                TelemetryDatagram::decode_batch(&data).unwrap_or_default()
+                match TelemetryDatagram::decode_batch(&data) {
+                    Ok(entries) => entries,
+                    Err(e) => {
+                        tracing::warn!("corrupt telemetry buffer, starting fresh: {e}");
+                        Vec::new()
+                    }
+                }
             }
         } else {
             Vec::new()
@@ -84,7 +90,7 @@ impl TelemetryBuffer {
             let _ = tokio::fs::remove_file(&self.path).await;
             return Ok(());
         }
-        let data = TelemetryDatagram::encode_batch(&entries);
+        let data = TelemetryDatagram::encode_batch(&entries)?;
         if let Some(parent) = self.path.parent() {
             tokio::fs::create_dir_all(parent).await?;
         }

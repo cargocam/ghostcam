@@ -121,5 +121,4 @@ mod tests {
         assert!(!manager.is_connected());
         assert!(manager.get_conn().await.is_none());
     }
-
 }

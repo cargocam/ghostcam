@@ -4,19 +4,13 @@ use anyhow::{Context, Result};
 
 /// Load the device certificate and key from disk.
 /// If they don't exist, generate new ones (first boot).
-pub fn load_or_create_device_cert(
-    cert_path: &Path,
-    key_path: &Path,
-) -> Result<(Vec<u8>, Vec<u8>)> {
+pub fn load_or_create_device_cert(cert_path: &Path, key_path: &Path) -> Result<(Vec<u8>, Vec<u8>)> {
     if cert_path.exists() && key_path.exists() {
-        let cert_pem = std::fs::read_to_string(cert_path)
-            .context("reading device cert")?;
-        let key_pem = std::fs::read_to_string(key_path)
-            .context("reading device key")?;
+        let cert_pem = std::fs::read_to_string(cert_path).context("reading device cert")?;
+        let key_pem = std::fs::read_to_string(key_path).context("reading device key")?;
 
         let cert_der = ghostcam::pki::pem_to_der(&cert_pem)?;
-        let key_pair = rcgen::KeyPair::from_pem(&key_pem)
-            .context("parsing device key PEM")?;
+        let key_pair = rcgen::KeyPair::from_pem(&key_pem).context("parsing device key PEM")?;
         let key_der = key_pair.serialize_der();
 
         return Ok((cert_der, key_der));
@@ -41,22 +35,16 @@ pub fn load_or_create_device_cert(
 
 /// Load the user association certificate and key from disk.
 /// Returns None if not enrolled (files don't exist).
-pub fn load_user_cert(
-    cert_path: &Path,
-    key_path: &Path,
-) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
+pub fn load_user_cert(cert_path: &Path, key_path: &Path) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
     if !cert_path.exists() || !key_path.exists() {
         return Ok(None);
     }
 
-    let cert_pem = std::fs::read_to_string(cert_path)
-        .context("reading user cert")?;
-    let key_pem = std::fs::read_to_string(key_path)
-        .context("reading user key")?;
+    let cert_pem = std::fs::read_to_string(cert_path).context("reading user cert")?;
+    let key_pem = std::fs::read_to_string(key_path).context("reading user key")?;
 
     let cert_der = ghostcam::pki::pem_to_der(&cert_pem)?;
-    let key_pair = rcgen::KeyPair::from_pem(&key_pem)
-        .context("parsing user key PEM")?;
+    let key_pair = rcgen::KeyPair::from_pem(&key_pem).context("parsing user key PEM")?;
     let key_der = key_pair.serialize_der();
 
     Ok(Some((cert_der, key_der)))
@@ -98,5 +86,4 @@ mod tests {
         let key = dir.path().join("user.key");
         assert!(load_user_cert(&cert, &key).unwrap().is_none());
     }
-
 }

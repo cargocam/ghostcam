@@ -16,6 +16,7 @@ use crate::redis::connection::RedisManager;
 use crate::sse::SseEventBus;
 
 /// Run the QUIC accept loop, spawning a handler task per connection.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_accept_loop(
     endpoint: quinn::Endpoint,
     registry: Arc<RoutingRegistry>,

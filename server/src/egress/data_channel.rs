@@ -70,8 +70,7 @@ mod tests {
 
     #[test]
     fn parse_unknown_message() {
-        let result =
-            serde_json::from_str::<ClientMessage>(r#"{"type":"unknown","foo":"bar"}"#);
+        let result = serde_json::from_str::<ClientMessage>(r#"{"type":"unknown","foo":"bar"}"#);
         assert!(result.is_err());
     }
 }

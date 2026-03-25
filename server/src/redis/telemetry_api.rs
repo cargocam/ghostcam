@@ -46,7 +46,10 @@ pub async fn handle_latest(
 
     verify_ownership(&state, &user, &device_id).await?;
 
-    let redis = state.redis.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let redis = state
+        .redis
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     if !redis.is_connected() {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }
@@ -69,7 +72,10 @@ pub async fn handle_range(
 
     verify_ownership(&state, &user, &device_id).await?;
 
-    let redis = state.redis.as_ref().ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let redis = state
+        .redis
+        .as_ref()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
     if !redis.is_connected() {
         return Err(StatusCode::SERVICE_UNAVAILABLE);
     }

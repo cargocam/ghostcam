@@ -81,7 +81,9 @@ pub async fn handle_enrollment(
     // 5. Create camera record in database
     let display_name = claims.display_name.unwrap_or_else(|| "Camera".to_string());
 
-    let user_id = db.get_enrollment_token_user_id(&jti).await?
+    let user_id = db
+        .get_enrollment_token_user_id(&jti)
+        .await?
         .ok_or_else(|| anyhow::anyhow!("enrollment token has no associated user"))?;
 
     let camera = db

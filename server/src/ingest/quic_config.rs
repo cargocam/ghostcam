@@ -104,4 +104,3 @@ pub fn build_server_endpoint(
 
     Ok(endpoint)
 }
-

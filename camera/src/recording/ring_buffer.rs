@@ -28,7 +28,7 @@ impl RingBuffer {
             let mut entries = tokio::fs::read_dir(dir).await?;
             while let Some(entry) = entries.next_entry().await? {
                 let path = entry.path();
-                if path.extension().map_or(false, |e| e == "m4s") {
+                if path.extension().is_some_and(|e| e == "m4s") {
                     let file_name = path
                         .file_stem()
                         .and_then(|s| s.to_str())
@@ -106,8 +106,12 @@ mod tests {
     #[tokio::test]
     async fn scan_ignores_non_m4s() {
         let dir = tempfile::tempdir().unwrap();
-        tokio::fs::write(dir.path().join("cam:0.m4s"), b"seg").await.unwrap();
-        tokio::fs::write(dir.path().join("notes.txt"), b"txt").await.unwrap();
+        tokio::fs::write(dir.path().join("cam:0.m4s"), b"seg")
+            .await
+            .unwrap();
+        tokio::fs::write(dir.path().join("notes.txt"), b"txt")
+            .await
+            .unwrap();
         let (tx, _rx) = mpsc::channel(16);
         let rb = RingBuffer::scan(dir.path(), tx).await.unwrap();
         assert_eq!(rb.segments().len(), 1);

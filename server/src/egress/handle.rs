@@ -313,10 +313,7 @@ impl EgressHandle {
 
         let now = std::time::Instant::now();
         let elapsed_us = self.rtp_start.elapsed().as_micros() as u64;
-        let rtp_time = MediaTime::new(
-            (elapsed_us * 48 + 500) / 1000,
-            Frequency::FORTY_EIGHT_KHZ,
-        );
+        let rtp_time = MediaTime::new((elapsed_us * 48 + 500) / 1000, Frequency::FORTY_EIGHT_KHZ);
 
         let pt = self
             .rtc
@@ -348,10 +345,7 @@ impl EgressHandle {
     }
 
     /// Parse the SDP answer to find video/audio mids and the data channel ID.
-    fn parse_mids_from_sdp(
-        sdp: &str,
-        rtc: &mut Rtc,
-    ) -> Result<(Mid, Mid, ChannelId)> {
+    fn parse_mids_from_sdp(sdp: &str, rtc: &mut Rtc) -> Result<(Mid, Mid, ChannelId)> {
         let mut video_mid: Option<Mid> = None;
         let mut audio_mid: Option<Mid> = None;
         let mut current_kind: Option<&str> = None;
@@ -380,13 +374,13 @@ impl EgressHandle {
         // Pre-negotiated data channel (stream ID 1) — browser uses `negotiated: true, id: 1`
         // so no DATA_CHANNEL_OPEN/ACK exchange is needed. str0m marks it Open immediately
         // after SCTP is established, avoiding the DCEP round trip.
-        let telemetry_channel = rtc
-            .direct_api()
-            .create_data_channel(str0m::channel::ChannelConfig {
-                label: "telemetry".to_string(),
-                negotiated: Some(1),
-                ..Default::default()
-            });
+        let telemetry_channel =
+            rtc.direct_api()
+                .create_data_channel(str0m::channel::ChannelConfig {
+                    label: "telemetry".to_string(),
+                    negotiated: Some(1),
+                    ..Default::default()
+                });
 
         Ok((video_mid, audio_mid, telemetry_channel))
     }
@@ -410,8 +404,7 @@ impl EgressHandle {
                         let new_mode: ClientMode = mode.into();
                         let old = self.client_mode;
                         self.client_mode = new_mode;
-                        let _ =
-                            update_subscriber_demand(&self.slot, Some(old), new_mode).await;
+                        let _ = update_subscriber_demand(&self.slot, Some(old), new_mode).await;
                     }
                     Err(e) => {
                         tracing::debug!(

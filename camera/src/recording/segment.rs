@@ -59,7 +59,7 @@ impl SegmentWriter {
             audio_samples: Vec::new(),
             last_video_ts: Duration::ZERO,
             last_audio_ts: Duration::ZERO,
-            sequence_number: (start_ts / 1000) as u32, // Use timestamp as sequence
+            sequence_number: (start_ts / 1000).wrapping_rem(u32::MAX as u64) as u32,
         })
     }
 
@@ -83,7 +83,11 @@ impl SegmentWriter {
         } else {
             let delta = timestamp.saturating_sub(self.last_video_ts);
             let ticks = (delta.as_micros() as u64 * 90000 / 1_000_000) as u32;
-            if ticks == 0 { 3000 } else { ticks }
+            if ticks == 0 {
+                3000
+            } else {
+                ticks
+            }
         };
 
         self.last_video_ts = timestamp;
@@ -170,10 +174,8 @@ impl SegmentWriter {
         let audio_data_offset_from_moof = video_data_offset_from_moof + video_payload_size;
 
         // Rebuild moof with correct data_offsets
-        let moof_buf = self.build_moof_with_offsets(
-            video_data_offset_from_moof,
-            audio_data_offset_from_moof,
-        );
+        let moof_buf =
+            self.build_moof_with_offsets(video_data_offset_from_moof, audio_data_offset_from_moof);
 
         buf.extend_from_slice(&moof_buf);
 
@@ -190,11 +192,7 @@ impl SegmentWriter {
         self.build_moof_with_offsets(0, 0)
     }
 
-    fn build_moof_with_offsets(
-        &self,
-        video_data_offset: u32,
-        audio_data_offset: u32,
-    ) -> Vec<u8> {
+    fn build_moof_with_offsets(&self, video_data_offset: u32, audio_data_offset: u32) -> Vec<u8> {
         let mut buf = Vec::new();
 
         write_box(&mut buf, b"moof", |moof| {
@@ -248,7 +246,6 @@ impl SegmentWriter {
                     self.write_audio_trun(traf, audio_data_offset);
                 });
             }
-
         });
 
         buf
@@ -321,9 +318,7 @@ mod tests {
     #[tokio::test]
     async fn write_and_finalize_video_only() {
         let dir = tempfile::tempdir().unwrap();
-        let mut sw = SegmentWriter::create(dir.path(), "seg1", 0)
-            .await
-            .unwrap();
+        let mut sw = SegmentWriter::create(dir.path(), "seg1", 0).await.unwrap();
         // IDR NAL (type 5)
         sw.write_video(&[0x65, 0x00, 0x01, 0x02], Duration::from_millis(0))
             .await

@@ -1,11 +1,11 @@
-use anyhow::{Context, Result};
-use async_trait::async_trait;
-use ghostcam::types::{CertFingerprint, DeviceId, SessionId, TokenId, UserId};
 use crate::auth;
 use crate::db_trait::{
     ApiTokenRecord, CameraRecord, CameraUpdate, Database, NewApiToken, NewCameraRecord,
     NewEnrollmentToken, NewSession, SessionRecord, UserRecord, UserUpdate,
 };
+use anyhow::{Context, Result};
+use async_trait::async_trait;
+use ghostcam::types::{CertFingerprint, DeviceId, SessionId, TokenId, UserId};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{PgPool, Row};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -41,10 +41,9 @@ impl PostgresDatabase {
         preset_password: Option<&str>,
         admin_email: &str,
     ) -> Result<Option<String>> {
-        let has_users: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users)")
-                .fetch_one(&self.pool)
-                .await?;
+        let has_users: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users)")
+            .fetch_one(&self.pool)
+            .await?;
 
         let initial_password = if !has_users {
             let password = preset_password
@@ -427,12 +426,14 @@ impl Database for PostgresDatabase {
 
     async fn set_password(&self, user_id: &UserId, password_hash: &str) -> Result<()> {
         let now = now_unix() as i64;
-        sqlx::query("UPDATE users SET password_hash = $1, password_changed_at = $2 WHERE user_id = $3")
-            .bind(password_hash)
-            .bind(now)
-            .bind(&user_id.0)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "UPDATE users SET password_hash = $1, password_changed_at = $2 WHERE user_id = $3",
+        )
+        .bind(password_hash)
+        .bind(now)
+        .bind(&user_id.0)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -546,12 +547,14 @@ impl Database for PostgresDatabase {
         }
         if let Some(ref hash) = update.password_hash {
             let now = now_unix() as i64;
-            sqlx::query("UPDATE users SET password_hash = $1, password_changed_at = $2 WHERE user_id = $3")
-                .bind(hash)
-                .bind(now)
-                .bind(&user_id.0)
-                .execute(&self.pool)
-                .await?;
+            sqlx::query(
+                "UPDATE users SET password_hash = $1, password_changed_at = $2 WHERE user_id = $3",
+            )
+            .bind(hash)
+            .bind(now)
+            .bind(&user_id.0)
+            .execute(&self.pool)
+            .await?;
         }
         Ok(())
     }

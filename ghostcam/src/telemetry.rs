@@ -43,8 +43,8 @@ pub struct TelemetryDatagram {
 
 impl TelemetryDatagram {
     /// Encode to MessagePack bytes (named/map format for optional field support).
-    pub fn encode(&self) -> Vec<u8> {
-        rmp_serde::to_vec_named(self).expect("telemetry serialization cannot fail")
+    pub fn encode(&self) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+        rmp_serde::to_vec_named(self)
     }
 
     /// Decode from MessagePack bytes.
@@ -53,8 +53,8 @@ impl TelemetryDatagram {
     }
 
     /// Encode a batch of datagrams to MessagePack.
-    pub fn encode_batch(batch: &[TelemetryDatagram]) -> Vec<u8> {
-        rmp_serde::to_vec_named(batch).expect("telemetry batch serialization cannot fail")
+    pub fn encode_batch(batch: &[TelemetryDatagram]) -> Result<Vec<u8>, rmp_serde::encode::Error> {
+        rmp_serde::to_vec_named(batch)
     }
 
     /// Decode a batch of datagrams from MessagePack.
@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn datagram_msgpack_roundtrip() {
         let d = base_datagram();
-        let encoded = d.encode();
+        let encoded = d.encode().unwrap();
         let decoded = TelemetryDatagram::decode(&encoded).unwrap();
         assert_eq!(d, decoded);
     }
@@ -212,7 +212,7 @@ mod tests {
                 gps_fix: None,
             }
         };
-        let encoded = d.encode();
+        let encoded = d.encode().unwrap();
         let decoded = TelemetryDatagram::decode(&encoded).unwrap();
         assert_eq!(d, decoded);
         assert!(decoded.mem.is_none());
@@ -228,7 +228,7 @@ mod tests {
             gps_fix: Some(2),
             ..base_datagram()
         };
-        let decoded = TelemetryDatagram::decode(&d.encode()).unwrap();
+        let decoded = TelemetryDatagram::decode(&d.encode().unwrap()).unwrap();
         assert_eq!(decoded.lat, Some(51.5074));
         assert_eq!(decoded.alt, Some(30.5));
     }
@@ -243,7 +243,7 @@ mod tests {
             gps_fix: None,
             ..base_datagram()
         };
-        let decoded = TelemetryDatagram::decode(&d.encode()).unwrap();
+        let decoded = TelemetryDatagram::decode(&d.encode().unwrap()).unwrap();
         assert!(decoded.lat.is_none());
         assert!(decoded.gps_fix.is_none());
     }
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn datagram_array_roundtrip() {
         let batch = vec![base_datagram(), base_datagram()];
-        let encoded = TelemetryDatagram::encode_batch(&batch);
+        let encoded = TelemetryDatagram::encode_batch(&batch).unwrap();
         let decoded = TelemetryDatagram::decode_batch(&encoded).unwrap();
         assert_eq!(batch, decoded);
     }
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn datagram_empty_array() {
         let batch: Vec<TelemetryDatagram> = vec![];
-        let encoded = TelemetryDatagram::encode_batch(&batch);
+        let encoded = TelemetryDatagram::encode_batch(&batch).unwrap();
         let decoded = TelemetryDatagram::decode_batch(&encoded).unwrap();
         assert!(decoded.is_empty());
     }

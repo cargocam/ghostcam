@@ -37,14 +37,10 @@ pub async fn auth_middleware(
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap()
                         .as_secs();
-                    if record.expires_at.is_none()
-                        || record.expires_at.unwrap_or(u64::MAX) > now
-                    {
-                        request
-                            .extensions_mut()
-                            .insert(AuthUser {
-                                user_id: record.user_id,
-                            });
+                    if record.expires_at.is_none() || record.expires_at.unwrap_or(u64::MAX) > now {
+                        request.extensions_mut().insert(AuthUser {
+                            user_id: record.user_id,
+                        });
                         return next.run(request).await;
                     }
                 }
@@ -66,12 +62,12 @@ pub async fn auth_middleware(
                             .as_secs();
                         if session.expires_at > now {
                             // Extend session TTL
-                            let _ = state.db.extend_session(&sid).await;
-                            request
-                                .extensions_mut()
-                                .insert(AuthUser {
-                                    user_id: session.user_id,
-                                });
+                            if let Err(e) = state.db.extend_session(&sid).await {
+                                tracing::warn!("session extend failed: {e}");
+                            }
+                            request.extensions_mut().insert(AuthUser {
+                                user_id: session.user_id,
+                            });
                             return next.run(request).await;
                         }
                     }
@@ -95,13 +91,10 @@ pub struct LoginResponse {
 }
 
 /// POST /api/v1/auth/login
-pub async fn login(
-    State(state): State<Arc<AppState>>,
-    Json(body): Json<LoginRequest>,
-) -> Response {
+pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginRequest>) -> Response {
     // Cap password length to prevent Argon2 CPU exhaustion
     if body.password.len() > 128 {
-        return StatusCode::UNAUTHORIZED.into_response();
+        return (StatusCode::BAD_REQUEST, "password must be 8-128 characters").into_response();
     }
 
     // Look up user by email
@@ -120,7 +113,11 @@ pub async fn login(
     }
 
     // Verify password
-    match state.db.verify_password(&user.user_id, &body.password).await {
+    match state
+        .db
+        .verify_password(&user.user_id, &body.password)
+        .await
+    {
         Ok(true) => {}
         _ => return StatusCode::UNAUTHORIZED.into_response(),
     }
@@ -152,9 +149,9 @@ pub async fn login(
             serde_json::to_string(&LoginResponse {
                 user_id: user.user_id.0,
             })
-            .unwrap(),
+            .expect("login response serialization"),
         ))
-        .unwrap()
+        .expect("login response")
 }
 
 /// POST /api/v1/auth/logout
@@ -181,7 +178,7 @@ pub async fn logout(
         .status(StatusCode::OK)
         .header("set-cookie", cookie)
         .body(Body::empty())
-        .unwrap()
+        .expect("logout response")
 }
 
 #[derive(Deserialize)]
@@ -286,11 +283,9 @@ pub async fn register(
         Ok(id) => id,
         Err(e) => {
             // Check for PostgreSQL unique_violation (SQLSTATE 23505)
-            if let Some(db_err) = e.downcast_ref::<sqlx::Error>() {
-                if let sqlx::Error::Database(db_err) = db_err {
-                    if db_err.code().as_deref() == Some("23505") {
-                        return (StatusCode::CONFLICT, "email already registered").into_response();
-                    }
+            if let Some(sqlx::Error::Database(db_err)) = e.downcast_ref::<sqlx::Error>() {
+                if db_err.code().as_deref() == Some("23505") {
+                    return (StatusCode::CONFLICT, "email already registered").into_response();
                 }
             }
             tracing::error!("failed to create user: {e}");
@@ -322,10 +317,8 @@ pub async fn register(
         .header("set-cookie", cookie)
         .header("content-type", "application/json")
         .body(Body::from(
-            serde_json::to_string(&RegisterResponse {
-                user_id: user_id.0,
-            })
-            .unwrap(),
+            serde_json::to_string(&RegisterResponse { user_id: user_id.0 })
+                .expect("register response serialization"),
         ))
-        .unwrap()
+        .expect("register response")
 }

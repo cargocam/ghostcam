@@ -55,7 +55,7 @@ mod tests {
         let segs = (0..5)
             .map(|i| {
                 let start = i * 10000;
-                make_seg(&format!("cam:{}",start), start, start + 10000, 500000)
+                make_seg(&format!("cam:{}", start), start, start + 10000, 500000)
             })
             .collect::<Vec<_>>();
         let m = generate_manifest(&segs);

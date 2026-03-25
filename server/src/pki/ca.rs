@@ -109,6 +109,7 @@ impl CaManager {
     }
 
     /// Get the CA certificate DER.
+    #[allow(dead_code)]
     pub fn ca_cert_der(&self) -> &[u8] {
         &self.ca_cert_der
     }

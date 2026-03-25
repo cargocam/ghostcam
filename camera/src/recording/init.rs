@@ -14,11 +14,11 @@ pub fn generate_init_segment(sps: &[u8], pps: &[u8]) -> Result<Bytes> {
 
     // ftyp box
     write_box(&mut buf, b"ftyp", |b| {
-        b.extend_from_slice(b"isom");   // major brand
+        b.extend_from_slice(b"isom"); // major brand
         b.extend_from_slice(&0u32.to_be_bytes()); // minor version
-        b.extend_from_slice(b"isom");   // compatible brand
-        b.extend_from_slice(b"iso6");   // compatible brand
-        b.extend_from_slice(b"msdh");   // compatible brand
+        b.extend_from_slice(b"isom"); // compatible brand
+        b.extend_from_slice(b"iso6"); // compatible brand
+        b.extend_from_slice(b"msdh"); // compatible brand
     });
 
     // moov box
@@ -33,10 +33,8 @@ pub fn generate_init_segment(sps: &[u8], pps: &[u8]) -> Result<Bytes> {
             b.extend_from_slice(&0x00010000u32.to_be_bytes()); // rate 1.0
             b.extend_from_slice(&0x0100u16.to_be_bytes()); // volume 1.0
             b.extend_from_slice(&[0; 10]); // reserved
-            // Identity matrix
-            for &val in &[
-                0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000,
-            ] {
+                                           // Identity matrix
+            for &val in &[0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000] {
                 b.extend_from_slice(&val.to_be_bytes());
             }
             b.extend_from_slice(&[0; 24]); // pre-defined
@@ -89,9 +87,7 @@ fn write_video_trak(moov: &mut Vec<u8>, sps: &[u8], pps: &[u8]) {
             b.extend_from_slice(&0u16.to_be_bytes()); // alternate_group
             b.extend_from_slice(&0u16.to_be_bytes()); // volume (0 for video)
             b.extend_from_slice(&0u16.to_be_bytes()); // reserved
-            for &val in &[
-                0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000,
-            ] {
+            for &val in &[0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000] {
                 b.extend_from_slice(&val.to_be_bytes());
             }
             // width/height in fixed-point 16.16
@@ -220,9 +216,7 @@ fn write_audio_trak(moov: &mut Vec<u8>) {
             b.extend_from_slice(&0u16.to_be_bytes()); // alternate_group
             b.extend_from_slice(&0x0100u16.to_be_bytes()); // volume 1.0
             b.extend_from_slice(&0u16.to_be_bytes()); // reserved
-            for &val in &[
-                0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000,
-            ] {
+            for &val in &[0x00010000u32, 0, 0, 0, 0x00010000, 0, 0, 0, 0x40000000] {
                 b.extend_from_slice(&val.to_be_bytes());
             }
             b.extend_from_slice(&0u32.to_be_bytes()); // width

@@ -39,7 +39,7 @@ newtype_string!(SessionId, "Cryptographically random session token.");
 newtype_string!(TokenId, "API token identifier.");
 newtype_string!(
     CertFingerprint,
-    "SHA-256 fingerprint of a certificate's public key, hex-encoded."
+    "SHA-256 fingerprint of the full DER-encoded certificate, hex-encoded."
 );
 
 /// Monotonically increasing command sequence number.

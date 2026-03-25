@@ -57,10 +57,7 @@ pub fn build_client_endpoint(
 
 /// Connect to the server. Returns the QUIC connection.
 /// `server_addr` may be an IP:port or hostname:port — hostname is resolved via DNS.
-pub async fn connect(
-    endpoint: &quinn::Endpoint,
-    server_addr: &str,
-) -> Result<quinn::Connection> {
+pub async fn connect(endpoint: &quinn::Endpoint, server_addr: &str) -> Result<quinn::Connection> {
     // Try direct SocketAddr parse first (IP:port), then fall back to DNS resolution.
     let addr = if let Ok(a) = server_addr.parse() {
         a
