@@ -83,6 +83,39 @@ Camera events and state arrive via **Server-Sent Events** (`/events`), not WebRT
 
 Firefox obfuscates ICE candidates as mDNS hostnames (e.g. `a1b2c3.local`). `webrtc.ts` strips all `a=candidate` lines from the SDP offer before posting it to the server — safe because the server is ICE-lite and ignores browser candidates entirely. The server's `GHOSTCAM_PUBLIC_IP` must be a reachable LAN IP (not `127.0.0.1`) so Firefox can send STUN from its LAN-bound UDP socket.
 
+## E2E Testing
+
+End-to-end tests use [Playwright](https://playwright.dev/) with Chromium. All server interactions are mocked via `page.route()` — no running backend required.
+
+```bash
+# Install browser binaries (one-time)
+bunx playwright install chromium
+
+# Run tests
+bun run test:e2e
+
+# Run tests with interactive UI
+bun run test:e2e:ui
+```
+
+### Test Structure
+
+Tests live in `e2e/` and shared helpers (API mocking, mock data) are in `e2e/helpers.ts`.
+
+| File | Coverage |
+|------|----------|
+| `login.spec.ts` | Login form rendering, validation, wrong password error, successful login, connection failure |
+| `camera-grid.spec.ts` | Camera card display, online/offline badges, selection (ring highlight), double-click to camera view, empty state |
+| `settings.spec.ts` | Theme persistence (dark/light), grid layout persistence, mute state persistence in localStorage |
+| `sse-events.spec.ts` | Initial camera count, new camera appearing in grid, offline status update, camera card rendering |
+
+### Writing New Tests
+
+- Use `mockAuthenticatedSession(page)` from `helpers.ts` to set up all route intercepts before `page.goto('/')`.
+- Camera names appear in both the sidebar and the camera grid — use `.first()` or scope locators to `page.locator('main')` to avoid strict mode violations.
+- Camera card status badges (LIVE/OFF) are `<span class="uppercase">` elements inside `main button.aspect-video`.
+- The Playwright config (`playwright.config.ts`) auto-starts the Vite dev server.
+
 ## Conventions
 
 - **Svelte 5 runes only** — no legacy `$:` reactivity
