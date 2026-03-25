@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use tokio::net::UdpSocket;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::mpsc;
 
 /// A raw UDP packet: (source address, payload bytes).
 pub type UdpPacket = (SocketAddr, Vec<u8>);
@@ -40,21 +40,21 @@ impl SharedWebRtcSocket {
     /// incoming packets addressed to that session.
     pub async fn register(&self, ufrag: String) -> mpsc::UnboundedReceiver<UdpPacket> {
         let (tx, rx) = mpsc::unbounded_channel();
-        self.routing.lock().await.insert(ufrag, tx);
+        self.routing.lock().unwrap().insert(ufrag, tx);
         rx
     }
 
     /// Unregister a session and remove all cached source-address mappings for it.
     pub async fn unregister(&self, ufrag: &str) {
-        self.routing.lock().await.remove(ufrag);
+        self.routing.lock().unwrap().remove(ufrag);
         // Clean up fast-path entries that pointed to this ufrag.
-        let mut connected = self.connected.lock().await;
+        let mut connected = self.connected.lock().unwrap();
         connected.retain(|_, u| u != ufrag);
     }
 
     /// Cache a confirmed source-address → ufrag mapping for future fast-path lookups.
     pub async fn connect(&self, src: SocketAddr, ufrag: String) {
-        self.connected.lock().await.insert(src, ufrag);
+        self.connected.lock().unwrap().insert(src, ufrag);
     }
 
     /// Spawn the dispatch loop in its own Tokio task.
@@ -81,7 +81,7 @@ impl SharedWebRtcSocket {
             tracing::debug!(src = %src, len, "udp packet received");
 
             // Fast path: known source address.
-            let ufrag_opt = self.connected.lock().await.get(&src).cloned();
+            let ufrag_opt = self.connected.lock().unwrap().get(&src).cloned();
 
             let ufrag = if let Some(u) = ufrag_opt {
                 tracing::debug!(src = %src, ufrag = %u, "fast-path routing");
@@ -92,7 +92,7 @@ impl SharedWebRtcSocket {
                     Some(u) => {
                         tracing::debug!(src = %src, ufrag = %u, "stun routing, caching");
                         // Cache for future fast-path lookups.
-                        self.connected.lock().await.insert(src, u.clone());
+                        self.connected.lock().unwrap().insert(src, u.clone());
                         u
                     }
                     None => {
@@ -102,7 +102,7 @@ impl SharedWebRtcSocket {
                 }
             };
 
-            let routing = self.routing.lock().await;
+            let routing = self.routing.lock().unwrap();
             if let Some(tx) = routing.get(&ufrag) {
                 let _ = tx.send((src, data));
             } else {

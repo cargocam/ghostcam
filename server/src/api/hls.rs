@@ -15,7 +15,7 @@ use super::auth::AuthUser;
 use super::state::AppState;
 use crate::ingest::slot::SegmentState;
 
-fn normalize_manifest_for_browser(manifest: &str) -> String {
+pub fn normalize_manifest_for_browser(manifest: &str) -> String {
     manifest
         .lines()
         .map(|line| {
@@ -104,11 +104,11 @@ pub async fn get_manifest(
         _ => return StatusCode::NOT_FOUND.into_response(),
     }
 
-    // Try live slot first
+    // Try live slot first (pre-normalized cache avoids per-request processing)
     if let Some(slot) = state.registry.get_slot(&device_id).await {
-        let manifest = slot.manifest.read().await;
-        if let Some(m) = manifest.as_ref() {
-            return manifest_response(normalize_manifest_for_browser(m));
+        let normalized = slot.manifest_normalized.read().await;
+        if let Some(m) = normalized.as_ref() {
+            return manifest_response(m.clone());
         }
     }
 
@@ -164,18 +164,16 @@ pub async fn get_init(
         })
         .await;
 
-    // Wait for init segment to arrive (with timeout)
-    let deadline = Duration::from_secs(10);
-    let start = tokio::time::Instant::now();
-    loop {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let init = slot.init_segment.read().await;
-        if let Some(data) = init.as_ref() {
-            return init_response(data.clone());
+    // Wait for init segment to arrive (event-driven, no polling)
+    match timeout(Duration::from_secs(10), slot.init_notify.notified()).await {
+        Ok(_) => {
+            let init = slot.init_segment.read().await;
+            if let Some(data) = init.as_ref() {
+                return init_response(data.clone());
+            }
+            StatusCode::GATEWAY_TIMEOUT.into_response()
         }
-        if start.elapsed() > deadline {
-            return StatusCode::GATEWAY_TIMEOUT.into_response();
-        }
+        Err(_) => StatusCode::GATEWAY_TIMEOUT.into_response(),
     }
 }
 

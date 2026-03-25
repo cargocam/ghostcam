@@ -7,22 +7,35 @@ use tokio::sync::RwLock;
 use super::slot::IngestSlot;
 
 /// Registry of all connected cameras, keyed by owning user then device.
+///
+/// A flat secondary index (`by_device`) provides O(1) lookups by `DeviceId`,
+/// which is the common path for WebRTC session creation and segment requests.
 pub struct RoutingRegistry {
-    cameras: RwLock<HashMap<UserId, HashMap<DeviceId, Arc<IngestSlot>>>>,
+    cameras: RwLock<RegistryInner>,
+}
+
+struct RegistryInner {
+    /// Nested map for user-scoped queries.
+    by_user: HashMap<UserId, HashMap<DeviceId, Arc<IngestSlot>>>,
+    /// Flat index for O(1) device lookups.
+    by_device: HashMap<DeviceId, Arc<IngestSlot>>,
 }
 
 impl RoutingRegistry {
     pub fn new() -> Self {
         Self {
-            cameras: RwLock::new(HashMap::new()),
+            cameras: RwLock::new(RegistryInner {
+                by_user: HashMap::new(),
+                by_device: HashMap::new(),
+            }),
         }
     }
 
     /// Register an IngestSlot. If a stale slot exists for the same device_id,
     /// it is shut down and replaced.
     pub async fn register(&self, slot: Arc<IngestSlot>) {
-        let mut cameras = self.cameras.write().await;
-        let user_map = cameras.entry(slot.user_id.clone()).or_default();
+        let mut inner = self.cameras.write().await;
+        let user_map = inner.by_user.entry(slot.user_id.clone()).or_default();
 
         if let Some(old_slot) = user_map.insert(slot.device_id.clone(), slot.clone()) {
             old_slot.shutdown();
@@ -31,37 +44,36 @@ impl RoutingRegistry {
                 "replaced stale slot"
             );
         }
+        inner.by_device.insert(slot.device_id.clone(), slot);
     }
 
     /// Remove an IngestSlot on camera disconnect.
     /// Only removes if the registered slot is the exact same Arc instance,
     /// preventing a stale connection's cleanup from removing a newer slot.
     pub async fn unregister(&self, device_id: &DeviceId, slot: &Arc<IngestSlot>) {
-        let mut cameras = self.cameras.write().await;
-        for user_map in cameras.values_mut() {
-            if let Some(existing) = user_map.get(device_id) {
-                if Arc::ptr_eq(existing, slot) {
+        let mut inner = self.cameras.write().await;
+        // Check the flat index first for O(1) identity verification.
+        if let Some(existing) = inner.by_device.get(device_id) {
+            if Arc::ptr_eq(existing, slot) {
+                inner.by_device.remove(device_id);
+                // Also remove from the nested map.
+                for user_map in inner.by_user.values_mut() {
                     user_map.remove(device_id);
                 }
-                return;
             }
         }
     }
 
     /// Look up a slot by device_id. Returns None if camera is not connected.
     pub async fn get_slot(&self, device_id: &DeviceId) -> Option<Arc<IngestSlot>> {
-        let cameras = self.cameras.read().await;
-        for user_map in cameras.values() {
-            if let Some(slot) = user_map.get(device_id) {
-                return Some(slot.clone());
-            }
-        }
-        None
+        let inner = self.cameras.read().await;
+        inner.by_device.get(device_id).cloned()
     }
 
     /// Check if a device is currently connected.
     pub async fn is_connected(&self, device_id: &DeviceId) -> bool {
-        self.get_slot(device_id).await.is_some()
+        let inner = self.cameras.read().await;
+        inner.by_device.contains_key(device_id)
     }
 }
 

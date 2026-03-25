@@ -23,8 +23,12 @@ pub struct PostgresDatabase {
 
 impl PostgresDatabase {
     pub async fn connect(url: &str) -> Result<Self> {
+        let max_conns: u32 = std::env::var("GHOSTCAM_DB_POOL_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(20);
         let pool = PgPoolOptions::new()
-            .max_connections(5)
+            .max_connections(max_conns)
             .connect(url)
             .await
             .context("failed to connect to PostgreSQL")?;
@@ -181,20 +185,20 @@ impl Database for PostgresDatabase {
     }
 
     async fn update_camera(&self, device_id: &DeviceId, update: &CameraUpdate) -> Result<()> {
-        if let Some(ref name) = update.display_name {
-            sqlx::query("UPDATE cameras SET display_name = $1 WHERE device_id = $2")
-                .bind(name)
-                .bind(&device_id.0)
-                .execute(&self.pool)
-                .await?;
+        if update.display_name.is_none() && update.notes.is_none() {
+            return Ok(());
         }
-        if let Some(ref notes) = update.notes {
-            sqlx::query("UPDATE cameras SET notes = $1 WHERE device_id = $2")
-                .bind(notes)
-                .bind(&device_id.0)
-                .execute(&self.pool)
-                .await?;
-        }
+        sqlx::query(
+            "UPDATE cameras SET \
+             display_name = COALESCE($1, display_name), \
+             notes = COALESCE($2, notes) \
+             WHERE device_id = $3",
+        )
+        .bind(update.display_name.as_deref())
+        .bind(update.notes.as_deref())
+        .bind(&device_id.0)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -531,31 +535,26 @@ impl Database for PostgresDatabase {
     }
 
     async fn update_user(&self, user_id: &UserId, update: &UserUpdate) -> Result<()> {
-        if let Some(ref email) = update.email {
-            sqlx::query("UPDATE users SET email = $1 WHERE user_id = $2")
-                .bind(email)
-                .bind(&user_id.0)
-                .execute(&self.pool)
-                .await?;
+        if update.email.is_none() && update.display_name.is_none() && update.password_hash.is_none()
+        {
+            return Ok(());
         }
-        if let Some(ref name) = update.display_name {
-            sqlx::query("UPDATE users SET display_name = $1 WHERE user_id = $2")
-                .bind(name)
-                .bind(&user_id.0)
-                .execute(&self.pool)
-                .await?;
-        }
-        if let Some(ref hash) = update.password_hash {
-            let now = now_unix() as i64;
-            sqlx::query(
-                "UPDATE users SET password_hash = $1, password_changed_at = $2 WHERE user_id = $3",
-            )
-            .bind(hash)
-            .bind(now)
-            .bind(&user_id.0)
-            .execute(&self.pool)
-            .await?;
-        }
+        let now = now_unix() as i64;
+        sqlx::query(
+            "UPDATE users SET \
+             email = COALESCE($1, email), \
+             display_name = COALESCE($2, display_name), \
+             password_hash = COALESCE($3, password_hash), \
+             password_changed_at = CASE WHEN $3 IS NOT NULL THEN $4 ELSE password_changed_at END \
+             WHERE user_id = $5",
+        )
+        .bind(update.email.as_deref())
+        .bind(update.display_name.as_deref())
+        .bind(update.password_hash.as_deref())
+        .bind(now)
+        .bind(&user_id.0)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 }
