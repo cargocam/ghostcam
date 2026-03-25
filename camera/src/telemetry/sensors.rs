@@ -208,6 +208,7 @@ mod tests {
             test_video: String::new(),
             no_audio: false,
             no_gps: false,
+            no_tofu: true,
             data_dir: String::new(),
         };
         let d = read_sensors(&config).await;
@@ -222,6 +223,7 @@ mod tests {
             test_video: String::new(),
             no_audio: false,
             no_gps: false,
+            no_tofu: true,
             data_dir: String::new(),
         };
         let d = read_sensors(&config).await;
@@ -236,6 +238,7 @@ mod tests {
             test_video: String::new(),
             no_audio: false,
             no_gps: false,
+            no_tofu: true,
             data_dir: String::new(),
         };
         let d = read_sensors(&config).await;
@@ -250,6 +253,7 @@ mod tests {
             test_video: String::new(),
             no_audio: false,
             no_gps: true,
+            no_tofu: true,
             data_dir: String::new(),
         };
         let d = read_sensors(&config).await;

@@ -21,3 +21,4 @@ dump.rdb
 
 # OS
 .DS_Store
+ui/test-results/

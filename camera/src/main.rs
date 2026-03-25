@@ -86,6 +86,7 @@ async fn main() -> Result<()> {
         test_video: cli.test_video,
         no_audio: cli.no_audio || conf.as_ref().map_or(false, |c| c.no_audio),
         no_gps: cli.no_gps || conf.as_ref().map_or(false, |c| c.no_gps),
+        no_tofu: cli.no_tofu,
         data_dir: cli.data_dir,
     };
 
@@ -175,6 +176,7 @@ async fn main() -> Result<()> {
                 test_video: String::new(),
                 no_audio: camera_config.no_audio,
                 no_gps: telem_no_gps,
+                no_tofu: true,
                 data_dir: String::new(),
             };
             if let Err(e) =
@@ -275,7 +277,13 @@ async fn try_connect_and_run(
     conn_tx: &watch::Sender<Option<quinn::Connection>>,
     cancel: &CancellationToken,
 ) -> Result<()> {
-    let endpoint = quic::build_client_endpoint(device_cert, device_key, user_cert)?;
+    let endpoint = quic::build_client_endpoint(
+        device_cert,
+        device_key,
+        user_cert,
+        config.no_tofu,
+        std::path::Path::new(&config.data_dir),
+    )?;
     let connection = quic::connect(&endpoint, &config.server_addr).await?;
 
     tracing::info!("connected to server");

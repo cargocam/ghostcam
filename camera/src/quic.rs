@@ -1,19 +1,26 @@
+use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
+use crate::tofu::TofuServerCertVerifier;
+
 /// Build a Quinn client endpoint with mTLS.
 ///
 /// - `device_cert_der` + `device_key_der`: always presented (device identity)
 /// - `user_cert_der`: presented if enrolled (user association cert)
+/// - `no_tofu`: if true, skip TOFU verification (insecure, for dev/testing)
+/// - `data_dir`: path to data directory (for reading/writing server fingerprint)
 ///
-/// Server TLS verification is disabled in dev mode (self-signed server cert).
-/// In production, use server_pin for TOFU verification.
+/// When `no_tofu` is false, uses `TofuServerCertVerifier` which pins the server
+/// certificate fingerprint on first connect and verifies it on subsequent connects.
 pub fn build_client_endpoint(
     device_cert_der: &[u8],
     device_key_der: &[u8],
     user_cert_der: Option<&[u8]>,
+    no_tofu: bool,
+    data_dir: &Path,
 ) -> Result<quinn::Endpoint> {
     let mut certs = Vec::new();
 
@@ -27,9 +34,15 @@ pub fn build_client_endpoint(
 
     let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(device_key_der.to_vec()));
 
+    let verifier: Arc<dyn rustls::client::danger::ServerCertVerifier> = if no_tofu {
+        Arc::new(InsecureServerCertVerifier)
+    } else {
+        Arc::new(TofuServerCertVerifier::new(data_dir))
+    };
+
     let tls_config = rustls::ClientConfig::builder()
         .dangerous()
-        .with_custom_certificate_verifier(Arc::new(InsecureServerCertVerifier))
+        .with_custom_certificate_verifier(verifier)
         .with_client_auth_cert(certs, key)
         .context("failed to build TLS client config")?;
 

@@ -23,7 +23,7 @@ pub fn spawn_revocation_refresh(
 
         // Initial load
         if let Err(e) = refresh_cache(&redis, &cache).await {
-            tracing::debug!("initial revocation cache refresh failed: {e}");
+            tracing::warn!("initial revocation cache refresh failed: {e}");
         }
 
         loop {

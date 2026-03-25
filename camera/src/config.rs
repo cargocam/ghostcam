@@ -10,6 +10,7 @@ pub struct CameraConfig {
     pub test_video: String,
     pub no_audio: bool,
     pub no_gps: bool,
+    pub no_tofu: bool,
     pub data_dir: String,
 }
 

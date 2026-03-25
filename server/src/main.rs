@@ -94,12 +94,20 @@ async fn main() -> anyhow::Result<()> {
     let ca = Arc::new(pki.ca);
     tracing::info!(fingerprint = %pki.server_tls.fingerprint, "PKI ready");
 
+    // --- Revocation cache (must be created before Redis so refresh task can use it) ---
+    let revocation_cache = Arc::new(RevocationCache::new());
+
     // --- Redis (optional) ---
     let cancel = CancellationToken::new();
     let redis = if let Some(url) = &redis_url {
         let mgr = Arc::new(RedisManager::new(url).await);
         mgr.spawn_reconnect_loop(cancel.clone());
         crate::redis::purge::spawn_telemetry_purge(mgr.clone(), cancel.clone());
+        crate::redis::revocation::spawn_revocation_refresh(
+            mgr.clone(),
+            revocation_cache.clone(),
+            cancel.clone(),
+        );
         tracing::info!("redis connected");
         Some(mgr)
     } else {
@@ -121,7 +129,6 @@ async fn main() -> anyhow::Result<()> {
     let registry = Arc::new(RoutingRegistry::new());
     let sessions = Arc::new(SessionManager::new());
     let sse_bus = Arc::new(SseEventBus::new());
-    let revocation_cache = Arc::new(RevocationCache::new());
 
     let app_state = Arc::new(AppState {
         db: db.clone(),

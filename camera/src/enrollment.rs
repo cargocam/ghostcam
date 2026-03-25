@@ -60,14 +60,22 @@ pub async fn enroll(
     device_cert: &[u8],
     device_key: &[u8],
 ) -> Result<EnrollmentResult> {
-    // Build QUIC client with device cert only (no user cert)
-    let endpoint = crate::quic::build_client_endpoint(device_cert, device_key, None)?;
+    // Build QUIC client with device cert only (no user cert).
+    // Enrollment always skips TOFU — the server fingerprint is captured from
+    // this connection and stored as the initial pin.
+    let endpoint = crate::quic::build_client_endpoint(
+        device_cert,
+        device_key,
+        None,
+        true, // no_tofu: enrollment is the initial trust establishment
+        Path::new(""), // unused when no_tofu=true
+    )?;
     let connection = crate::quic::connect(&endpoint, &enrollment.server_addr).await?;
 
     tracing::info!("connected to server for enrollment");
 
-    // Get server fingerprint (TOFU)
-    let server_fingerprint = get_peer_fingerprint(&connection)?;
+    // Extract server fingerprint — stored later by store_enrollment()
+    let server_fingerprint = crate::tofu::get_peer_fingerprint(&connection)?;
 
     // Open bidirectional control stream
     let (mut send, mut recv) = connection.open_bi().await?;
@@ -200,23 +208,6 @@ pub async fn clear_enrollment(data_dir: &Path) -> Result<()> {
     // Keep device.key and device.crt — device identity persists
     tracing::info!("enrollment state cleared");
     Ok(())
-}
-
-/// Get the SHA-256 fingerprint of the server's TLS certificate.
-fn get_peer_fingerprint(connection: &quinn::Connection) -> Result<String> {
-    let peer_certs = connection
-        .peer_identity()
-        .and_then(|id| {
-            id.downcast::<Vec<rustls::pki_types::CertificateDer<'static>>>()
-                .ok()
-        })
-        .ok_or_else(|| anyhow::anyhow!("no peer certificate"))?;
-
-    let leaf = peer_certs
-        .first()
-        .ok_or_else(|| anyhow::anyhow!("empty peer cert chain"))?;
-
-    Ok(ghostcam::pki::sha256_hex(leaf.as_ref()))
 }
 
 #[cfg(test)]

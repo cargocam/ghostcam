@@ -3,7 +3,12 @@ use std::collections::HashSet;
 use tokio::sync::RwLock;
 
 /// In-memory set of revoked certificate serial numbers.
-/// Stubbed to always-empty for now; Plan 5 adds the Redis refresh loop.
+/// Populated from Redis on startup and refreshed every 60s by
+/// `redis::revocation::spawn_revocation_refresh()`.
+///
+/// This cache only grows — serials are never removed. Un-revocation
+/// requires a server restart. This is intentionally fail-safe: a revoked
+/// camera stays revoked even if the Redis set is modified.
 pub struct RevocationCache {
     revoked: RwLock<HashSet<String>>,
 }
