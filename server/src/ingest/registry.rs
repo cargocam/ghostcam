@@ -56,8 +56,8 @@ impl RoutingRegistry {
         if let Some(existing) = inner.by_device.get(device_id) {
             if Arc::ptr_eq(existing, slot) {
                 inner.by_device.remove(device_id);
-                // Also remove from the nested map.
-                for user_map in inner.by_user.values_mut() {
+                // O(1): use the slot's own user_id to target the right bucket.
+                if let Some(user_map) = inner.by_user.get_mut(&slot.user_id) {
                     user_map.remove(device_id);
                 }
             }

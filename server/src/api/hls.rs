@@ -149,6 +149,12 @@ pub async fn get_init(
         None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
 
+    // Register the notified future *before* the check so no notification
+    // can slip past between the check and the await (notify_one stores a
+    // permit, so even if the camera responds before we await, it is captured).
+    let notified = slot.init_notify.notified();
+    tokio::pin!(notified);
+
     // Check if init segment is already cached
     {
         let init = slot.init_segment.read().await;
@@ -165,7 +171,7 @@ pub async fn get_init(
         .await;
 
     // Wait for init segment to arrive (event-driven, no polling)
-    match timeout(Duration::from_secs(10), slot.init_notify.notified()).await {
+    match timeout(Duration::from_secs(10), &mut notified).await {
         Ok(_) => {
             let init = slot.init_segment.read().await;
             if let Some(data) = init.as_ref() {

@@ -25,7 +25,19 @@ impl PostgresDatabase {
     pub async fn connect(url: &str) -> Result<Self> {
         let max_conns: u32 = std::env::var("GHOSTCAM_DB_POOL_SIZE")
             .ok()
-            .and_then(|v| v.parse().ok())
+            .and_then(|v| match v.parse::<u32>() {
+                Ok(n) if n > 0 => Some(n),
+                Ok(_) => {
+                    tracing::warn!("GHOSTCAM_DB_POOL_SIZE=0 is invalid, using default 20");
+                    None
+                }
+                Err(_) => {
+                    tracing::warn!(
+                        "GHOSTCAM_DB_POOL_SIZE={v:?} is not a valid u32, using default 20"
+                    );
+                    None
+                }
+            })
             .unwrap_or(20);
         let pool = PgPoolOptions::new()
             .max_connections(max_conns)
