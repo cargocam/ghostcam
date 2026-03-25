@@ -51,4 +51,6 @@ jobs:
           PID1=$!
           docker buildx build --target camera -t ghostcam-camera --cache-from type=gha --cache-to type=gha,mode=max --load . &
           PID2=$!
-          wait $PID1 && wait $PID2
+          wait $PID1; STATUS1=$?
+          wait $PID2; STATUS2=$?
+          [ $STATUS1 -eq 0 ] && [ $STATUS2 -eq 0 ]

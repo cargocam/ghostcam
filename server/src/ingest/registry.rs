@@ -59,6 +59,9 @@ impl RoutingRegistry {
                 // O(1): use the slot's own user_id to target the right bucket.
                 if let Some(user_map) = inner.by_user.get_mut(&slot.user_id) {
                     user_map.remove(device_id);
+                    if user_map.is_empty() {
+                        inner.by_user.remove(&slot.user_id);
+                    }
                 }
             }
         }

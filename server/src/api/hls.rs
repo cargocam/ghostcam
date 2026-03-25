@@ -174,10 +174,13 @@ pub async fn get_init(
     match timeout(Duration::from_secs(10), &mut notified).await {
         Ok(_) => {
             let init = slot.init_segment.read().await;
-            if let Some(data) = init.as_ref() {
-                return init_response(data.clone());
+            match init.as_ref() {
+                Some(data) => init_response(data.clone()),
+                None => {
+                    tracing::warn!(device_id = %device_id, "init_notify fired but init_segment is None");
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
             }
-            StatusCode::GATEWAY_TIMEOUT.into_response()
         }
         Err(_) => StatusCode::GATEWAY_TIMEOUT.into_response(),
     }
