@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { transportStore } from '$lib/stores/transport.svelte.js';
-	import { register } from '$lib/auth.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 
 	let email = $state('');
@@ -16,13 +15,9 @@
 		loading = true;
 		try {
 			if (isRegistering) {
-				const ok = await register(email, password, displayName || undefined);
-				if (!ok) {
-					error = 'Registration failed';
-				} else {
-					// Registration sets session cookie, initialize transport
-					transportStore.authenticated = true;
-					await transportStore.initialize();
+				const result = await transportStore.register(email, password, displayName || undefined);
+				if (!result.ok) {
+					error = result.error ?? 'Registration failed';
 				}
 			} else {
 				const ok = await transportStore.login(email, password);

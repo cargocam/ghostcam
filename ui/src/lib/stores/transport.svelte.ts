@@ -1,4 +1,4 @@
-import { checkSession, login as authLogin, logout as authLogout } from '$lib/auth.js';
+import { checkSession, login as authLogin, register as authRegister, logout as authLogout } from '$lib/auth.js';
 import { listCameras, fetchCoverage } from '$lib/signaling.js';
 import { connectSse, type SseEvent } from '$lib/sse.js';
 import { ConnectionManager } from '$lib/connection-manager.js';
@@ -128,6 +128,15 @@ class TransportStore {
 			await this.initialize();
 		}
 		return ok;
+	}
+
+	async register(email: string, password: string, displayName?: string): Promise<{ ok: boolean; error?: string }> {
+		const result = await authRegister(email, password, displayName);
+		if (result.ok) {
+			this.authenticated = true;
+			await this.initialize();
+		}
+		return result;
 	}
 
 	async logout() {

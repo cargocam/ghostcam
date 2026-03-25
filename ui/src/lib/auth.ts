@@ -14,7 +14,7 @@ export async function register(
 	email: string,
 	password: string,
 	displayName?: string,
-): Promise<boolean> {
+): Promise<{ ok: boolean; error?: string }> {
 	const res = await fetch(`${API_BASE}/auth/register`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json' },
@@ -25,7 +25,9 @@ export async function register(
 		}),
 		credentials: 'include',
 	});
-	return res.ok;
+	if (res.ok) return { ok: true };
+	const text = await res.text();
+	return { ok: false, error: text || 'Registration failed' };
 }
 
 export async function logout(): Promise<void> {

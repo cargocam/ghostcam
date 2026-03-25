@@ -99,6 +99,11 @@ pub async fn login(
     State(state): State<Arc<AppState>>,
     Json(body): Json<LoginRequest>,
 ) -> Response {
+    // Cap password length to prevent Argon2 CPU exhaustion
+    if body.password.len() > 128 {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
     // Look up user by email
     let user = match state.db.get_user_by_email(&body.email).await {
         Ok(Some(u)) => u,
@@ -191,6 +196,16 @@ pub async fn change_password(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<ChangePasswordRequest>,
 ) -> Response {
+    // Validate new password length
+    if body.new_password.len() < 8 || body.new_password.len() > 128 {
+        return (StatusCode::BAD_REQUEST, "password must be 8-128 characters").into_response();
+    }
+
+    // Cap current password check to prevent Argon2 CPU exhaustion
+    if body.current_password.len() > 128 {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+
     // Verify current password
     match state
         .db
@@ -270,9 +285,13 @@ pub async fn register(
     let user_id = match state.db.create_user(&body.email, &hash, display_name).await {
         Ok(id) => id,
         Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("23505") || msg.contains("unique") || msg.contains("duplicate") {
-                return (StatusCode::CONFLICT, "email already registered").into_response();
+            // Check for PostgreSQL unique_violation (SQLSTATE 23505)
+            if let Some(db_err) = e.downcast_ref::<sqlx::Error>() {
+                if let sqlx::Error::Database(db_err) = db_err {
+                    if db_err.code().as_deref() == Some("23505") {
+                        return (StatusCode::CONFLICT, "email already registered").into_response();
+                    }
+                }
             }
             tracing::error!("failed to create user: {e}");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
