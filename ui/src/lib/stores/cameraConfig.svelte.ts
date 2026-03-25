@@ -1,4 +1,4 @@
-export interface CameraOverrides {
+interface CameraOverrides {
 	displayName?: string;
 }
 

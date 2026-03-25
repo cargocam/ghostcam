@@ -11,6 +11,11 @@ class GroupStore {
 	setActiveGroup(groupId: string | null) {
 		this.activeGroupId = groupId;
 	}
+
+	clear() {
+		this.groups = [];
+		this.activeGroupId = null;
+	}
 }
 
 export const groupStore = new GroupStore();

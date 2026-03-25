@@ -8,6 +8,10 @@ class SettingsStore {
 	currentView = $state<ViewMode>('live');
 	focusedCameraId = $state<string | null>(null);
 	debugMode = $state(false);
+	/** Global mute — defaults to true for browser autoplay policy */
+	globalMuted = $state(true);
+	/** Only one camera unmuted at a time (standard VMS pattern) */
+	unmutedCameraId = $state<string | null>(null);
 
 	constructor() {
 		if (typeof window !== 'undefined') {
@@ -18,6 +22,10 @@ class SettingsStore {
 			const savedGrid = localStorage.getItem('ghostcam-grid');
 			if (savedGrid === 'auto' || savedGrid === '1+5') {
 				this.gridLayout = savedGrid;
+			}
+			const savedMuted = localStorage.getItem('ghostcam-muted');
+			if (savedMuted === 'false') {
+				this.globalMuted = false;
 			}
 		}
 	}
@@ -74,8 +82,26 @@ class SettingsStore {
 		this.markerMode = mode;
 	}
 
-	toggleSidebar() {
-		this.sidebarOpen = !this.sidebarOpen;
+	toggleCameraMute(deviceId: string) {
+		if (this.globalMuted) {
+			// Unmute globally and unmute this camera
+			this.globalMuted = false;
+			this.unmutedCameraId = deviceId;
+		} else if (this.unmutedCameraId === deviceId) {
+			// Re-mute this camera (go back to global mute)
+			this.globalMuted = true;
+			this.unmutedCameraId = null;
+		} else {
+			// Switch unmuted camera
+			this.unmutedCameraId = deviceId;
+		}
+		if (typeof window !== 'undefined') {
+			localStorage.setItem('ghostcam-muted', String(this.globalMuted));
+		}
+	}
+
+	isCameraMuted(deviceId: string): boolean {
+		return this.globalMuted || this.unmutedCameraId !== deviceId;
 	}
 }
 

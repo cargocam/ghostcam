@@ -10,7 +10,8 @@
 
 	let cameraId = $derived(settingsStore.focusedCameraId);
 	let camera = $derived(cameraId ? cameraStore.cameras.find((c) => c.device_id === cameraId) : null);
-	let displayName = $derived(camera ? cameraConfigStore.getDisplayName(camera.device_id) : '');
+	let displayName = $derived(camera ? cameraConfigStore.getDisplayName(camera.device_id, camera.device_name) : '');
+	let isMuted = $derived(cameraId ? settingsStore.isCameraMuted(cameraId) : true);
 
 	let showOverlay = $state(true);
 	let overlayTimer: ReturnType<typeof setTimeout> | null = null;
@@ -38,8 +39,8 @@
 	}
 
 	function toggleMute() {
-		if (videoElement) {
-			videoElement.muted = !videoElement.muted;
+		if (cameraId) {
+			settingsStore.toggleCameraMute(cameraId);
 		}
 	}
 
@@ -103,7 +104,7 @@
 		onclick={resetOverlayTimer}
 	>
 		<div class="absolute inset-0">
-			<VideoPlayer deviceId={cameraId} bind:videoElement />
+			<VideoPlayer deviceId={cameraId} bind:videoElement muted={isMuted} />
 		</div>
 
 		<!-- Top overlay -->
@@ -121,14 +122,14 @@
 					<div class="flex items-center gap-2">
 						<span class={cn(
 							"h-2.5 w-2.5 rounded-full",
-							camera.connected ? "bg-primary animate-pulse" : "bg-destructive"
+							camera.online ? "bg-primary animate-pulse" : "bg-destructive"
 						)}></span>
 						<span class="text-sm font-medium text-white">{displayName}</span>
 						<span class={cn(
 							"text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded",
-							camera.connected ? "bg-primary/20 text-primary" : "bg-destructive/20 text-destructive"
+							camera.online ? "bg-primary/20 text-primary" : "bg-destructive/20 text-destructive"
 						)}>
-							{camera.connected ? 'LIVE' : 'OFF'}
+							{camera.online ? 'LIVE' : 'OFF'}
 						</span>
 					</div>
 				</div>
@@ -140,7 +141,7 @@
 						<PictureInPicture2 class="h-4 w-4" />
 					</Button>
 					<Button variant="ghost" size="icon" class="text-white hover:bg-white/10" onclick={toggleMute} title="Mute (M)">
-						{#if videoElement?.muted !== false}
+						{#if isMuted}
 							<VolumeOff class="h-5 w-5" />
 						{:else}
 							<Volume2 class="h-5 w-5" />
@@ -167,10 +168,10 @@
 			<div class="px-4 pb-3 pt-8">
 				{#if camera.telemetry}
 					<div class="flex items-center gap-4 text-xs text-white/70 font-mono">
-						<span>CPU {camera.telemetry.cpu_percent.toFixed(1)}%</span>
-						<span>{camera.telemetry.memory_mb.toFixed(0)}MB</span>
-						<span>{camera.telemetry.temp_celsius.toFixed(0)}&deg;C</span>
-						<span>Up {formatUptime(camera.telemetry.uptime_secs)}</span>
+						<span>CPU {(camera.telemetry.cpu_percent ?? 0).toFixed(1)}%</span>
+						<span>{(camera.telemetry.memory_mb ?? 0).toFixed(0)}MB</span>
+						<span>{(camera.telemetry.temp_celsius ?? 0).toFixed(0)}&deg;C</span>
+						<span>Up {formatUptime(camera.telemetry.uptime_secs ?? 0)}</span>
 					</div>
 				{/if}
 			</div>

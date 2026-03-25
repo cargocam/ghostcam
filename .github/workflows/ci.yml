@@ -1,91 +1,46 @@
 name: CI
-
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
   rust:
-    name: Rust (fmt, clippy, test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Install system dependencies
+      - run: sudo apt-get install -y libasound2-dev libopus-dev
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --all-targets -- -D warnings
+      - run: cargo test --all
+      - name: Dependency audit
         run: |
-          sudo apt-get update
-          sudo apt-get install -y libasound2-dev libopus-dev pkg-config
-
-      - name: Check formatting
-        run: cargo fmt --all --check
-
-      - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
-
-      - name: Generate test data
-        run: |
-          mkdir -p test-data
-          ffmpeg -f lavfi -i testsrc2=duration=1:size=320x240:rate=30 \
-            -c:v libx264 -profile:v baseline -x264-params keyint=30:min-keyint=30 \
-            -f h264 test-data/test.h264
-
-      - name: Test
-        run: cargo test --all
+          cargo install cargo-audit --quiet
+          # Ignore unfixable transitive deps:
+          # RUSTSEC-2023-0071: rsa timing (sqlx-mysql, no fix available, we use PostgreSQL)
+          # RUSTSEC-2025-0057: fxhash unmaintained (str0m -> sctp-proto)
+          cargo audit \
+            --ignore RUSTSEC-2023-0071 \
+            --ignore RUSTSEC-2025-0057
 
   ui:
-    name: Viewer (check, build)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: ui
     steps:
       - uses: actions/checkout@v4
-
       - uses: oven-sh/setup-bun@v2
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Type check
-        run: bun run check
-
-      - name: Build
-        run: bun run build
+      - run: cd ui && bun install --frozen-lockfile
+      - run: cd ui && bun run check
+      - run: cd ui && bun run build
 
   docker:
-    name: Docker build
-    runs-on: ubuntu-latest
     needs: [rust, ui]
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: docker/setup-buildx-action@v3
-
-      - name: Build bridge image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: bridge
-          push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Build agent image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          target: agent
-          push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - run: docker build --target server -t ghostcam-server .
+      - run: docker build --target camera -t ghostcam-camera .

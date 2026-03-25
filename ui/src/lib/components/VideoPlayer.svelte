@@ -6,20 +6,46 @@
 		deviceId,
 		videoElement = $bindable(undefined),
 		active = true,
+		muted = true,
 	}: {
 		deviceId: string;
 		videoElement?: HTMLVideoElement;
 		active?: boolean;
+		muted?: boolean;
 	} = $props();
 
 	let camera = $derived(cameraStore.cameras.find((c) => c.device_id === deviceId));
-	let stream = $derived(camera?.stream);
+	let videoStream = $derived(camera?.videoStream);
+	let audioStream = $derived(camera?.audioStream);
 
-	// Set srcObject when stream changes
+	// Combine video + audio tracks into a single MediaStream
+	let combinedStream = $derived.by(() => {
+		if (!videoStream) return undefined;
+		const tracks = [...videoStream.getTracks()];
+		if (audioStream) {
+			tracks.push(...audioStream.getTracks());
+		}
+		return new MediaStream(tracks);
+	});
+
+	// Track IDs for change detection
+	let currentTrackIds = $state('');
+
+	// Set srcObject when combined stream changes (compare track IDs to avoid restart)
 	$effect(() => {
-		if (!videoElement || !stream) return;
-		if (videoElement.srcObject !== stream) {
-			videoElement.srcObject = stream;
+		if (!videoElement || !combinedStream) return;
+		const newIds = combinedStream.getTracks().map((t) => t.id).sort().join(',');
+		if (newIds !== currentTrackIds) {
+			videoElement.srcObject = combinedStream;
+			currentTrackIds = newIds;
+			videoElement.play().catch(() => {});
+		}
+	});
+
+	// Sync muted prop to video element
+	$effect(() => {
+		if (videoElement) {
+			videoElement.muted = muted;
 		}
 	});
 
@@ -46,6 +72,6 @@
 	bind:this={videoElement}
 	autoplay
 	playsinline
-	muted
+	muted={muted}
 	class="absolute inset-0 w-full h-full object-cover"
 ></video>

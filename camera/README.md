@@ -1,96 +1,77 @@
 # camera
 
-Ghostcam camera agent — streams H.264 video and Opus audio over QUIC to the bridge server. Connects, performs a `DeviceHello` handshake, then continuously sends media frames on unidirectional QUIC streams.
+Ghostcam camera agent. Connects to the server over QUIC with mTLS, performs enrollment on first boot, then continuously streams H.264 video, Opus audio, and system telemetry. Records video locally to an fMP4 ring buffer for HLS playback.
 
-Supports two modes:
-- **Test source** (`--test-source`): Loops a pre-recorded H.264 file with Opus silence. No system dependencies beyond Rust.
-- **Real capture** (default): Uses `rpicam-vid`/`libcamera-vid` for video, `cpal` + Opus for audio, and reads `/proc`/`/sys` for system telemetry. Requires Linux with a camera.
+Two modes:
+- **Test source** (`--test-source`): loops a pre-recorded H.264 file with synthetic audio. No system dependencies beyond Rust. Used for development and Docker.
+- **Real capture** (default): `rpicam-vid`/`libcamera-vid` for video, `cpal` + Opus for audio, `/proc`/`/sys` + gpsd for telemetry. Requires Linux with a camera.
 
-Automatically reconnects to the bridge with exponential backoff (1s → 30s cap).
+Auto-reconnects to the server with exponential backoff (1s → 30s).
 
 ## System Requirements (Real Capture)
 
-- `rpicam-vid` or `libcamera-vid` in PATH (Raspberry Pi OS, or any libcamera-enabled Linux)
-- `libopus-dev` (Linux) or `brew install opus` (macOS, for cross-compilation)
-- Optional: `gpsd` running on `localhost:2947` for GPS data
-
-## Usage
-
-```bash
-# Generate test video (one-time, for --test-source mode)
-mkdir -p test-data
-ffmpeg -f lavfi -i testsrc2=duration=10:size=640x480:rate=30 \
-  -c:v libx264 -profile:v baseline -x264-params keyint=60:min-keyint=60 \
-  -f h264 test-data/test.h264
-
-# Test source mode (any platform)
-cargo run -p camera -- --test-source --bridge-addr 127.0.0.1:4433 --device-id cam-01 --group-id default
-
-# Real capture (Linux with camera)
-cargo run -p camera -- --bridge-addr 127.0.0.1:4433 --device-id cam-01 --group-id default
-
-# Real capture with GPS
-cargo run -p camera -- --enable-gps --device-id cam-01 --group-id default
-
-# Launch multiple test cameras
-./scripts/launch-cameras.sh 4 default
-```
+- `rpicam-vid` or `libcamera-vid` in PATH (Raspberry Pi OS or libcamera-enabled Linux)
+- `libopus-dev` (Linux) or `brew install opus` (macOS, cross-compilation)
+- Optional: `gpsd` on `localhost:2947` for GPS
 
 ## CLI Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--bridge-addr` | `127.0.0.1:4433` | Bridge QUIC address (host:port) |
-| `--device-id` | `test-cam-01` | Unique device identifier |
-| `--group-id` | `default` | Camera group assignment |
-| `--test-source` | _(off)_ | Use test source instead of real capture |
-| `--test-file` | `test-data/test.h264` | Raw H.264 Annex-B file (for `--test-source`) |
-| `--width` | `1280` | Video width (real capture) |
-| `--height` | `720` | Video height (real capture) |
-| `--fps` | `30` | Target frame rate |
-| `--bitrate` | `0` (auto) | Video bitrate in bits/s |
-| `--keyframe-interval` | `60` | Keyframe interval in frames |
-| `--no-audio` | _(off)_ | Disable audio capture |
-| `--no-telemetry` | _(off)_ | Disable telemetry collection |
-| `--enable-gps` | _(off)_ | Enable GPS via gpsd |
+| `--server-addr` | _(from enrollment / conf file)_ | Server QUIC address `host:port` |
+| `--test-source` | off | Use test H.264 file + synthetic audio |
+| `--test-video` | `test-data/test.h264` | H.264 file for `--test-source` |
+| `--data-dir` | `/var/ghostcam` | Device cert, config, and enrollment state |
+| `--segment-dir` | `/var/ghostcam/segments` | fMP4 ring buffer for HLS recording |
+| `--no-audio` | off | Disable audio capture |
+| `--no-gps` | off | Disable GPS via gpsd |
+| `--enrollment-jwt` | _(none)_ | JWT for enrollment |
+| `--no-tofu` | off | Disable TOFU server fingerprint verification (dev/testing) |
+
+Server address resolution precedence: `--server-addr` CLI flag → `ghostcam.conf` → `/etc/ghostcam/server.addr` (written during enrollment) → hardcoded default.
 
 ## How It Works
 
-1. **Connect** — Generates self-signed cert, opens QUIC connection to bridge
-2. **Handshake** — Sends `DeviceHello` JSON on bidirectional control stream
-3. **Capture** — Starts capture modules (video, audio, telemetry) which produce `CaptureMessage`s on a channel
-4. **Send loop** — Reads from capture channel, sends each message on a unidirectional QUIC stream with 13-byte frame header
-5. **Reconnect** — On connection loss, drains capture messages during backoff, then reconnects
+1. **Enrollment** — On first boot (no device cert), camera accepts an `--enrollment-jwt`. The server signs and returns a device certificate.
+2. **TOFU** — On first connection after enrollment, the server's TLS fingerprint is pinned. Subsequent connections verify against the pin (bypassed with `--no-tofu`).
+3. **Connect** — Opens a QUIC connection using the device cert for mTLS. Opens persistent streams: `Alerts` (bidirectional), `Video`, `Audio`.
+4. **Handshake** — Sends an `Alert::Handshake` with device ID, cert fingerprint, and capabilities.
+5. **Command loop** — Spawns a task reading `CameraCommand` messages from the server on the `Alerts` stream. Commands update `watch` channels that gate frame sending.
+6. **Capture** — Starts capture modules producing frames on an mpsc channel.
+7. **Recording** — Frames are also written to the local fMP4 ring buffer. Completed segments are announced via `Alert::RecordingSegment`; the server may request uploads.
+8. **Send loop** — Reads from capture channel, checks command-controlled gates, sends frames on their persistent QUIC stream.
+9. **Telemetry** — Independently polls system sensors every 2s, sends sparse diffs on a unidirectional upload stream.
 
-### Test Source Mode
-
-- Video: Parses H.264 NALs from test file, loops indefinitely with FPS-paced timing
-- Audio: Sends 3-byte Opus silence frames every 20ms
-- No telemetry (server shows no telemetry in viewer, fine for dev)
-
-### Real Capture Mode
-
-- **Video**: Spawns `rpicam-vid` (or `libcamera-vid`) as subprocess, reads H.264 from stdout, parses NAL units via streaming `NalParser`
-- **Audio**: `cpal` default input → stereo-to-mono → resample to 48kHz → Opus encode (20ms frames). Non-fatal if no audio device.
-- **Telemetry**: Polls `/proc/stat` (CPU), `/sys/class/thermal` (temp), `/proc/meminfo` (memory), `/proc/uptime`, `/proc/loadavg`, `/proc/net/dev` (network). GPS via gpsd TCP. Sends sparse diffs with thresholds, full heartbeat every 30s. MessagePack-encoded as `StreamType::Telemetry`.
-
-## Modules
+## Module Map
 
 | Module | Purpose |
 |--------|---------|
-| `main` | CLI parsing, capture orchestration, QUIC reconnect loop |
-| `quic` | QUIC client setup (uses `ghostcam::quic` helpers) |
-| `capture/mod` | `CaptureMessage` enum (VideoNal, Audio, Telemetry) |
-| `capture/video` | `rpicam-vid` subprocess + streaming NAL parser |
-| `capture/audio` | `cpal` input + Opus encoding |
-| `capture/telemetry` | Linux `/proc`/`/sys` readers + gpsd client |
-
-Shared modules in `ghostcam` lib: `h264` (NAL parser, `NalParser`), `stream` (frame send), `quic` (cert gen, hello), `telemetry` (SparseTelemetry types).
-
-## Notes
-
-- Server certificate verification is disabled (dev only). Production will use mTLS.
-- The agent is currently write-only — the bridge does not send commands back over QUIC.
-- `rpicam-vid` child process is killed on drop (`kill_on_drop(true)`) and on SIGTERM/SIGINT.
-- Audio capture failure is non-fatal — the camera continues without audio.
-- Telemetry readers return zero/None on non-Linux platforms (stubs for cross-compilation).
+| `main` | CLI, reconnect loop, top-level task orchestration |
+| `config` | Config struct, resolution from CLI / conf file / enrollment |
+| `session` | Active QUIC session: alert stream, command stream, video/audio enabled atomics |
+| `enrollment` | JWT parsing, enrollment handshake with server PKI |
+| `tofu` | Server fingerprint pinning on first connect |
+| `certs` | Device certificate load/store |
+| `quic` | QUIC endpoint setup with mTLS |
+| `commands` | `CameraCommand` handler — updates watch channels |
+| `network` | Network interface monitoring (stub) |
+| `firmware` | OTA update handling (stub) |
+| `capture/mod` | `CaptureMessage` enum (VideoNal, AudioFrame) |
+| `capture/video_test` | Test video source: loops H.264 file at real-time pace |
+| `capture/audio_test` | Test audio source: synthetic Opus tone |
+| `stream/mod` | Frame sender coordination |
+| `stream/video` | Writes H.264 NAL units to the persistent Video QUIC stream |
+| `stream/audio` | Writes Opus frames to the persistent Audio QUIC stream |
+| `recording/mod` | Ring buffer coordinator |
+| `recording/muxer` | fMP4 muxer (init segment + media segments) |
+| `recording/ring_buffer` | Segment ring buffer with eviction |
+| `recording/segment` | Segment state machine |
+| `recording/manifest` | HLS playlist generation |
+| `recording/manifest_push` | Pushes manifest to server via QUIC upload stream |
+| `recording/uploads` | Uploads segments to server on demand |
+| `recording/storage` | Segment persistence on disk |
+| `recording/init` | fMP4 init segment generation |
+| `recording/recovery` | Recover ring buffer state after crash |
+| `telemetry/mod` | Telemetry task: poll → diff → encode → send |
+| `telemetry/sensors` | Platform readers (`/proc/stat`, `/sys/class/thermal`, gpsd, etc.) |
+| `telemetry/buffer` | Buffered telemetry for upload after reconnect |

@@ -13,5 +13,12 @@ test-data/
 # MCP config (local)
 .mcp.json
 
+# Local notes / scratch
+notes.txt
+
+# Redis dump
+dump.rdb
+
 # OS
 .DS_Store
+ui/test-results/

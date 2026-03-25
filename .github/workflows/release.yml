@@ -1,0 +1,76 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/ghostcam
+
+jobs:
+  build-camera:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: aarch64-unknown-linux-gnu
+            name: ghostcam-camera-aarch64
+          - target: x86_64-unknown-linux-gnu
+            name: ghostcam-camera-x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install cross-compilation deps
+        run: sudo apt-get install -y gcc-aarch64-linux-gnu libasound2-dev libopus-dev
+      - name: Build camera binary
+        run: cargo build --release --target ${{ matrix.target }} -p camera
+      - name: Rename binary
+        run: cp target/${{ matrix.target }}/release/camera ${{ matrix.name }}
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.name }}
+          path: ${{ matrix.name }}
+
+  build-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push server
+        uses: docker/build-push-action@v5
+        with:
+          push: true
+          target: server
+          tags: ${{ env.IMAGE_PREFIX }}-server:${{ github.ref_name }},${{ env.IMAGE_PREFIX }}-server:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  release:
+    needs: [build-camera, build-docker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Generate checksums
+        run: sha256sum ghostcam-camera-* > checksums.txt
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ghostcam-camera-aarch64
+            ghostcam-camera-x86_64
+            checksums.txt
+          generate_release_notes: true

@@ -1,324 +1,394 @@
 mod capture;
+mod certs;
+mod commands;
+mod config;
+mod enrollment;
+mod firmware;
+mod network;
 mod quic;
+mod recording;
+mod session;
+mod telemetry;
+mod tofu;
+
+use std::path::Path;
+use std::time::Duration;
 
 use anyhow::Result;
-use bytes::Bytes;
-use capture::CaptureMessage;
 use clap::Parser;
-use ghostcam::h264;
-use ghostcam::stream;
-use ghostcam::{group::GroupId, hello::DeviceHello};
-use std::path::PathBuf;
-use std::time::Duration;
-use tokio::sync::mpsc;
-use tracing::{info, warn};
+use ghostcam::config::{RECONNECT_BACKOFF_INITIAL_SECS, RECONNECT_BACKOFF_MAX_SECS};
+use tokio::sync::{mpsc, watch};
+use tokio_util::sync::CancellationToken;
+
+use crate::capture::CaptureMessage;
+use crate::config::CameraConfig;
+use crate::telemetry::buffer::TelemetryBuffer;
 
 #[derive(Parser)]
-#[command(name = "camera", about = "Ghostcam camera agent")]
-struct Args {
-    /// Bridge address (host:port)
-    #[arg(long, default_value = "127.0.0.1:4433")]
-    bridge_addr: String,
+#[command(name = "ghostcam-camera")]
+struct Cli {
+    /// Server QUIC address (host:port)
+    #[arg(long)]
+    server_addr: Option<String>,
 
-    /// Device ID
-    #[arg(long, default_value = "test-cam-01")]
-    device_id: String,
-
-    /// Group ID
-    #[arg(long, default_value = "default")]
-    group_id: String,
-
-    /// Use test source (loop H.264 file + Opus silence) instead of real capture
+    /// Use test video + audio sources instead of real capture
     #[arg(long)]
     test_source: bool,
 
-    /// Path to raw H.264 annex-B test file (for --test-source)
+    /// Path to test H.264 file
     #[arg(long, default_value = "test-data/test.h264")]
-    test_file: PathBuf,
+    test_video: String,
 
-    /// Video width
-    #[arg(long, default_value = "1280")]
-    width: u32,
-
-    /// Video height
-    #[arg(long, default_value = "720")]
-    height: u32,
-
-    /// Target frames per second
-    #[arg(long, default_value = "30")]
-    fps: u32,
-
-    /// Video bitrate in bits/s (0 = auto)
-    #[arg(long, default_value = "0")]
-    bitrate: u32,
-
-    /// Keyframe interval in frames
-    #[arg(long, default_value = "60")]
-    keyframe_interval: u32,
+    /// Directory for fMP4 ring buffer
+    #[arg(long, default_value = "/var/ghostcam/segments")]
+    segment_dir: String,
 
     /// Disable audio capture
     #[arg(long)]
     no_audio: bool,
 
-    /// Disable telemetry collection
+    /// Disable GPS even if gpsd is available
     #[arg(long)]
-    no_telemetry: bool,
+    no_gps: bool,
 
-    /// Enable GPS via gpsd
+    /// Data directory
+    #[arg(long, default_value = "/var/ghostcam")]
+    data_dir: String,
+
+    /// Enrollment JWT (bypasses QR scanning for registration)
     #[arg(long)]
-    enable_gps: bool,
+    enrollment_jwt: Option<String>,
+
+    /// Disable TOFU server fingerprint verification
+    #[arg(long)]
+    no_tofu: bool,
 }
-
-const BACKOFF_INITIAL: Duration = Duration::from_secs(1);
-const BACKOFF_MAX: Duration = Duration::from_secs(30);
-const BACKOFF_MULTIPLIER: u32 = 2;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "camera=info".into()),
-        )
-        .init();
+    tracing_subscriber::fmt::init();
 
-    let args = Args::parse();
+    let cli = Cli::parse();
 
-    info!(
-        device_id = %args.device_id,
-        group_id = %args.group_id,
-        bridge = %args.bridge_addr,
-        test_source = args.test_source,
-        "starting ghostcam agent"
+    // Read optional ghostcam.conf
+    let conf = config::read_ghostcam_conf(Path::new("/boot/ghostcam.conf")).unwrap_or(None);
+
+    // Resolve server address
+    let server_addr = config::resolve_server_addr(
+        cli.server_addr.as_deref(),
+        conf.as_ref().and_then(|c| c.server_addr.as_deref()),
+        Path::new(&format!("{}/server.addr", cli.data_dir)),
     );
 
-    // Create capture channel
-    let (capture_tx, mut capture_rx) = mpsc::channel::<CaptureMessage>(256);
-
-    // Start capture sources
-    if args.test_source {
-        start_test_sources(&args, capture_tx)?;
-    } else {
-        start_real_sources(&args, capture_tx).await?;
-    }
-
-    // Signal handling for clean shutdown
-    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-    let mut sigint = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
-
-    // Connection loop with exponential backoff
-    let mut backoff = BACKOFF_INITIAL;
-
-    loop {
-        info!(bridge = %args.bridge_addr, "connecting to bridge");
-
-        tokio::select! {
-            result = connect_and_run(&args, &mut capture_rx) => {
-                match result {
-                    Ok(()) => {
-                        info!("session ended cleanly");
-                        backoff = BACKOFF_INITIAL;
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "session error");
-                    }
-                }
-            }
-            _ = sigterm.recv() => {
-                info!("received SIGTERM, shutting down");
-                return Ok(());
-            }
-            _ = sigint.recv() => {
-                info!("received SIGINT, shutting down");
-                return Ok(());
-            }
-        }
-
-        info!(delay_secs = backoff.as_secs(), "reconnecting after delay");
-
-        tokio::select! {
-            _ = drain_during_delay(&mut capture_rx, backoff) => {}
-            _ = sigterm.recv() => {
-                info!("received SIGTERM during backoff, shutting down");
-                return Ok(());
-            }
-            _ = sigint.recv() => {
-                info!("received SIGINT during backoff, shutting down");
-                return Ok(());
-            }
-        }
-
-        // Exponential backoff
-        backoff = (backoff * BACKOFF_MULTIPLIER).min(BACKOFF_MAX);
-    }
-}
-
-/// Connect to bridge and run the send session until an error occurs.
-async fn connect_and_run(
-    args: &Args,
-    capture_rx: &mut mpsc::Receiver<CaptureMessage>,
-) -> Result<()> {
-    let (connection, mut control_send, _control_recv) =
-        quic::connect(&args.bridge_addr).await?;
-    info!("connected to bridge");
-
-    // Send hello
-    let hello = DeviceHello {
-        device_id: args.device_id.clone(),
-        group_id: GroupId::new(&args.group_id),
-        capabilities: vec!["h264".into(), "opus".into()],
+    let camera_config = CameraConfig {
+        server_addr,
+        test_source: cli.test_source,
+        test_video: cli.test_video,
+        no_audio: cli.no_audio || conf.as_ref().is_some_and(|c| c.no_audio),
+        no_gps: cli.no_gps || conf.as_ref().is_some_and(|c| c.no_gps),
+        no_tofu: cli.no_tofu,
+        data_dir: cli.data_dir,
     };
-    ghostcam::quic::send_hello(&mut control_send, &hello).await?;
-    info!("sent device hello");
 
-    // Send loop
-    let mut video_ts: u64 = 0;
-    let mut audio_ts: u64 = 0;
-    let timestamp_step = 1_000_000u64 / args.fps as u64;
-    let open_uni_timeout = Duration::from_secs(5);
+    // Ensure data directory exists
+    std::fs::create_dir_all(&camera_config.data_dir)?;
 
-    loop {
-        let msg = match capture_rx.recv().await {
-            Some(msg) => msg,
-            None => anyhow::bail!("capture channel closed"),
-        };
+    // Load or create device certificate
+    let cert_path = Path::new(&camera_config.data_dir).join("device.crt");
+    let key_path = Path::new(&camera_config.data_dir).join("device.key");
+    let (device_cert, device_key) = certs::load_or_create_device_cert(&cert_path, &key_path)?;
 
-        match msg {
-            CaptureMessage::VideoNal { nal_data, nal_type } => {
-                let uni = tokio::time::timeout(open_uni_timeout, connection.open_uni())
-                    .await
-                    .map_err(|_| anyhow::anyhow!("open_uni timeout"))??;
-                stream::send_video_frame(uni, video_ts, &nal_data).await?;
+    // Load user association cert (if enrolled)
+    let user_cert_path = Path::new(&camera_config.data_dir).join("user.crt");
+    let user_key_path = Path::new(&camera_config.data_dir).join("user.key");
+    let mut user_cert = certs::load_user_cert(&user_cert_path, &user_key_path)?;
 
-                // Advance timestamp only for VCL NALs
-                if nal_type == 1 || nal_type == 5 {
-                    video_ts += timestamp_step;
+    let fingerprint = ghostcam::pki::cert_fingerprint(&device_cert);
+    tracing::info!(fingerprint = %fingerprint, "device identity loaded");
+
+    // Handle enrollment if not yet enrolled
+    if user_cert.is_none() {
+        if let Some(jwt) = &cli.enrollment_jwt {
+            tracing::info!("enrollment JWT provided via CLI");
+            match enrollment::parse_enrollment_jwt(jwt) {
+                Ok(enrollment_data) => {
+                    match enrollment::enroll(&enrollment_data, &device_cert, &device_key).await {
+                        Ok(result) => {
+                            enrollment::store_enrollment(
+                                Path::new(&camera_config.data_dir),
+                                &result,
+                                &enrollment_data.server_addr,
+                            )
+                            .await?;
+                            tracing::info!("enrollment complete");
+                            // Reload the user cert now that enrollment stored it
+                            user_cert = certs::load_user_cert(&user_cert_path, &user_key_path)?;
+                        }
+                        Err(e) => {
+                            tracing::error!("enrollment failed: {e}");
+                            return Err(e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("invalid enrollment JWT: {e}");
+                    return Err(e);
                 }
             }
-            CaptureMessage::Audio { opus_data } => {
-                let uni = tokio::time::timeout(open_uni_timeout, connection.open_uni())
-                    .await
-                    .map_err(|_| anyhow::anyhow!("open_uni timeout"))??;
-                stream::send_audio_frame(uni, audio_ts, &opus_data).await?;
-                audio_ts += 20_000; // 20ms per Opus frame
-            }
-            CaptureMessage::Telemetry { msgpack_data } => {
-                let uni = tokio::time::timeout(open_uni_timeout, connection.open_uni())
-                    .await
-                    .map_err(|_| anyhow::anyhow!("open_uni timeout"))??;
-                let ts = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_micros() as u64;
-                stream::send_telemetry_frame(uni, ts, &msgpack_data).await?;
-            }
+        } else {
+            tracing::warn!("no user association certificate — enrollment required");
+            tracing::warn!("use --enrollment-jwt to enroll this camera");
         }
     }
-}
 
-/// Start test source producers: loop H.264 file + Opus silence.
-fn start_test_sources(args: &Args, tx: mpsc::Sender<CaptureMessage>) -> Result<()> {
-    let nal_units = h264::parse_h264_file(&args.test_file)?;
-    info!(nal_count = nal_units.len(), "parsed H.264 test file");
+    // Load telemetry buffer
+    let buffer_path = Path::new(&camera_config.data_dir).join("telemetry.buf");
+    let telemetry_buffer = TelemetryBuffer::load(&buffer_path)?;
 
-    let fps = args.fps;
+    let cancel = CancellationToken::new();
 
-    // Video NAL loop
-    let tx_video = tx.clone();
-    tokio::spawn(async move {
-        let frame_interval = Duration::from_micros(1_000_000 / fps as u64);
-        loop {
-            for nal in &nal_units {
-                let nal_type = if nal.is_empty() { 0 } else { nal[0] & 0x1F };
-                if tx_video
-                    .send(CaptureMessage::VideoNal {
-                        nal_data: nal.clone(),
-                        nal_type,
-                    })
-                    .await
-                    .is_err()
-                {
+    // Start capture pipeline
+    let capture_rx = capture::start_capture(&camera_config, cancel.clone()).await?;
+
+    // Fan out capture messages to video and audio channels
+    let (video_tx, video_rx) = mpsc::channel::<CaptureMessage>(256);
+    let (audio_tx, audio_rx) = mpsc::channel::<CaptureMessage>(256);
+    let fanout_cancel = cancel.clone();
+    tokio::spawn(fanout_capture(
+        capture_rx,
+        video_tx,
+        audio_tx,
+        fanout_cancel,
+    ));
+
+    // Telemetry loop with connection watch
+    let (conn_tx, conn_rx) = watch::channel::<Option<quinn::Connection>>(None);
+    let telem_no_gps = camera_config.no_gps;
+    let telem_buffer_path = buffer_path.clone();
+    tokio::spawn({
+        let cancel = cancel.clone();
+        async move {
+            let buffer = match TelemetryBuffer::load(&telem_buffer_path) {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::error!("failed to load telemetry buffer for loop: {e}");
                     return;
                 }
-                // Sleep only for VCL NALs
-                if nal_type == 1 || nal_type == 5 {
-                    tokio::time::sleep(frame_interval).await;
+            };
+            let config = CameraConfig {
+                server_addr: String::new(),
+                test_source: true,
+                test_video: String::new(),
+                no_audio: camera_config.no_audio,
+                no_gps: telem_no_gps,
+                no_tofu: true,
+                data_dir: String::new(),
+            };
+            if let Err(e) = telemetry::run_telemetry_loop(conn_rx, &buffer, &config, cancel).await {
+                tracing::warn!("telemetry loop ended: {e}");
+            }
+        }
+    });
+
+    // Shutdown signal handler
+    tokio::spawn(shutdown_signal(cancel.clone()));
+
+    // Connection loop
+    run_connection_loop(
+        &camera_config,
+        &device_cert,
+        &device_key,
+        user_cert.as_ref().map(|(c, _)| c.as_slice()),
+        &telemetry_buffer,
+        &fingerprint.0,
+        video_rx,
+        audio_rx,
+        conn_tx,
+        cancel,
+    )
+    .await?;
+
+    // Flush telemetry buffer on shutdown
+    telemetry_buffer.flush_to_disk().await?;
+    tracing::info!("goodbye");
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_connection_loop(
+    config: &CameraConfig,
+    device_cert: &[u8],
+    device_key: &[u8],
+    user_cert: Option<&[u8]>,
+    telemetry_buffer: &TelemetryBuffer,
+    device_fingerprint: &str,
+    video_rx: mpsc::Receiver<CaptureMessage>,
+    audio_rx: mpsc::Receiver<CaptureMessage>,
+    conn_tx: watch::Sender<Option<quinn::Connection>>,
+    cancel: CancellationToken,
+) -> Result<()> {
+    let mut backoff = Duration::from_secs(RECONNECT_BACKOFF_INITIAL_SECS);
+    let mut video_rx = video_rx;
+    let mut audio_rx = audio_rx;
+
+    loop {
+        if cancel.is_cancelled() {
+            break;
+        }
+
+        tracing::info!(addr = %config.server_addr, "connecting to server");
+
+        match try_connect_and_run(
+            config,
+            device_cert,
+            device_key,
+            user_cert,
+            telemetry_buffer,
+            device_fingerprint,
+            &mut video_rx,
+            &mut audio_rx,
+            &conn_tx,
+            &cancel,
+        )
+        .await
+        {
+            Ok(()) => break,
+            Err(e) => {
+                let _ = conn_tx.send(None);
+
+                tracing::warn!("connection lost: {e}");
+                tracing::info!("reconnecting in {:?}", backoff);
+                tokio::select! {
+                    _ = tokio::time::sleep(backoff) => {}
+                    _ = cancel.cancelled() => break,
+                }
+                backoff = (backoff * 2).min(Duration::from_secs(RECONNECT_BACKOFF_MAX_SECS));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn try_connect_and_run(
+    config: &CameraConfig,
+    device_cert: &[u8],
+    device_key: &[u8],
+    user_cert: Option<&[u8]>,
+    telemetry_buffer: &TelemetryBuffer,
+    device_fingerprint: &str,
+    video_rx: &mut mpsc::Receiver<CaptureMessage>,
+    audio_rx: &mut mpsc::Receiver<CaptureMessage>,
+    conn_tx: &watch::Sender<Option<quinn::Connection>>,
+    cancel: &CancellationToken,
+) -> Result<()> {
+    let endpoint = quic::build_client_endpoint(
+        device_cert,
+        device_key,
+        user_cert,
+        config.no_tofu,
+        std::path::Path::new(&config.data_dir),
+    )?;
+    let connection = quic::connect(&endpoint, &config.server_addr).await?;
+
+    tracing::info!("connected to server");
+    let _ = conn_tx.send(Some(connection.clone()));
+
+    let session_cancel = cancel.child_token();
+    let data_dir = std::path::PathBuf::from(&config.data_dir);
+    let sess = session::Session::establish(
+        connection,
+        telemetry_buffer,
+        session_cancel,
+        data_dir,
+        device_fingerprint.to_string(),
+    )
+    .await?;
+
+    // Mark healthy for watchdog
+    firmware::mark_healthy(std::path::Path::new(&config.data_dir)).await;
+
+    // Bridge the persistent capture channels into per-session channels.
+    let (vid_tx, vid_rx) = mpsc::channel(256);
+    let (aud_tx, aud_rx) = mpsc::channel(256);
+
+    let mut sess_handle = tokio::spawn(async move { sess.run(vid_rx, aud_rx).await });
+
+    // Drain loop: forward frames into the session's channels.
+    // Exits when the session finishes (success or error) or when the global cancel fires.
+    let result = loop {
+        tokio::select! {
+            _ = cancel.cancelled() => break Ok(()),
+            result = &mut sess_handle => {
+                break match result {
+                    Ok(Ok(_)) => Ok(()),
+                    Ok(Err(e)) => Err(e),
+                    Err(e) => Err(anyhow::anyhow!("session task panicked: {e}")),
+                };
+            }
+            msg = video_rx.recv() => {
+                if let Some(m) = msg {
+                    let _ = vid_tx.send(m).await;
+                } else {
+                    break Ok(());
                 }
             }
-            info!("looped test file, continuing");
-        }
-    });
-
-    // Audio silence loop
-    let tx_audio = tx;
-    tokio::spawn(async move {
-        const OPUS_FRAME_DURATION: Duration = Duration::from_millis(20);
-        loop {
-            if tx_audio
-                .send(CaptureMessage::Audio {
-                    opus_data: Bytes::from_static(stream::OPUS_SILENCE),
-                })
-                .await
-                .is_err()
-            {
-                return;
+            msg = audio_rx.recv() => {
+                if let Some(m) = msg {
+                    let _ = aud_tx.send(m).await;
+                } else {
+                    break Ok(());
+                }
             }
-            tokio::time::sleep(OPUS_FRAME_DURATION).await;
         }
-    });
-
-    // No telemetry in test source mode
-    Ok(())
-}
-
-/// Start real capture sources: rpicam-vid, cpal audio, system telemetry.
-async fn start_real_sources(args: &Args, tx: mpsc::Sender<CaptureMessage>) -> Result<()> {
-    // Video capture
-    let video_config = capture::video::VideoCaptureConfig {
-        width: args.width,
-        height: args.height,
-        fps: args.fps,
-        bitrate: args.bitrate,
-        keyframe_interval: args.keyframe_interval,
     };
-    let _video = capture::video::VideoCapture::start(video_config, tx.clone()).await?;
-    // Leak the handle to keep it alive for the lifetime of the process.
-    // The child process will be killed on Drop if we ever add proper shutdown.
-    std::mem::forget(_video);
-
-    // Audio capture
-    if !args.no_audio {
-        match capture::audio::start(tx.clone()) {
-            Ok(()) => info!("audio capture started"),
-            Err(e) => warn!(error = %e, "audio capture unavailable, continuing without audio"),
-        }
-    }
-
-    // Telemetry capture
-    if !args.no_telemetry {
-        let telemetry_config = capture::telemetry::TelemetryCaptureConfig {
-            enable_gps: args.enable_gps,
-            ..Default::default()
-        };
-        capture::telemetry::start(telemetry_config, tx);
-        info!("telemetry capture started");
-    }
-
-    Ok(())
+    result
 }
 
-/// Drain capture messages during backoff delay (discard frames while disconnected).
-async fn drain_during_delay(rx: &mut mpsc::Receiver<CaptureMessage>, delay: Duration) {
-    let deadline = tokio::time::Instant::now() + delay;
+/// Fan out capture messages to separate video and audio channels.
+async fn fanout_capture(
+    mut rx: mpsc::Receiver<CaptureMessage>,
+    video_tx: mpsc::Sender<CaptureMessage>,
+    audio_tx: mpsc::Sender<CaptureMessage>,
+    cancel: CancellationToken,
+) {
     loop {
         tokio::select! {
-            _ = tokio::time::sleep_until(deadline) => break,
+            _ = cancel.cancelled() => break,
             msg = rx.recv() => {
-                if msg.is_none() {
-                    break; // channel closed
+                match msg {
+                    Some(m @ CaptureMessage::VideoNal(_)) => {
+                        let _ = video_tx.send(m).await;
+                    }
+                    Some(m @ CaptureMessage::AudioFrame(_)) => {
+                        let _ = audio_tx.send(m).await;
+                    }
+                    None => break,
                 }
-                // Discard
             }
         }
     }
+}
+
+async fn shutdown_signal(cancel: CancellationToken) {
+    let ctrl_c = tokio::signal::ctrl_c();
+
+    #[cfg(unix)]
+    {
+        let mut sigterm =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).unwrap();
+
+        tokio::select! {
+            _ = ctrl_c => tracing::info!("SIGINT received"),
+            _ = sigterm.recv() => tracing::info!("SIGTERM received"),
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = ctrl_c.await;
+        tracing::info!("SIGINT received");
+    }
+
+    cancel.cancel();
 }

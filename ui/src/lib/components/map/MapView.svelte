@@ -2,7 +2,10 @@
 	import { onMount } from 'svelte';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
+	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
+	import { fetchTelemetryRangeCached, nearestTelemetryEntryWithin } from '$lib/telemetry-history.js';
 	import CameraMarker from './CameraMarker.svelte';
+	import PlaybackTrailOverlay from './PlaybackTrailOverlay.svelte';
 	import { Locate, LocateFixed } from 'lucide-svelte';
 	import type * as Leaflet from 'leaflet';
 	import 'leaflet/dist/leaflet.css';
@@ -18,13 +21,39 @@
 	let tracking = $state<'all' | 'single' | 'off'>('off');
 	let trackedDeviceId = $state<string | null>(null);
 	let programmaticMove = false;
+	let playbackTrailsByDevice = $state<Record<string, [number, number][]>>({});
+	let playbackPointByDevice = $state<Record<string, [number, number] | null>>({});
+	let playbackFetchTimer: ReturnType<typeof setTimeout> | null = null;
+	const MAX_GPS_STALENESS_MS = 21600000;
 
-	// Cameras with GPS telemetry
+	// Cameras with live GPS telemetry
 	let gpsCameras = $derived(
 		cameraStore.cameras.filter((c) => c.telemetry?.gps)
 	);
 
+	// Marker source list: in playback, include cameras with historical playback points too.
+	let markerCameras = $derived.by(() => {
+		if (scrubberStore.mode !== 'playback') return gpsCameras;
+		return cameraStore.cameras.filter((c) => !!playbackPointByDevice[c.device_id] || !!c.telemetry?.gps);
+	});
+
 	let markerMode = $derived(settingsStore.markerMode);
+	let SHOW_PLAYBACK_DEBUG = $derived(settingsStore.debugMode);
+	let mapSourceDebug = $derived.by(() => {
+		return cameraStore.cameras.map((camera) => {
+			const playbackPoint = playbackPointByDevice[camera.device_id];
+			const hasLive = !!camera.telemetry?.gps;
+			const source = scrubberStore.mode === 'playback'
+				? (playbackPoint ? 'playback' : (hasLive ? 'live-fallback' : 'none'))
+				: (hasLive ? 'live' : 'none');
+			return {
+				deviceId: camera.device_id,
+				source,
+				hasPlaybackPoint: !!playbackPoint,
+				hasLive
+			};
+		});
+	});
 
 	// Padding accounts for marker size so fitBounds doesn't clip them
 	// dot: 12x12 center-anchored, detailed: 160x56 bottom-center, pip: 160x110 bottom-center
@@ -54,6 +83,77 @@
 		if (map && tileLayer && L) {
 			tileLayer.setUrl(url);
 		}
+	});
+
+	$effect(() => {
+		const mode = scrubberStore.mode;
+		const playheadTime = Math.floor(scrubberStore.playheadTime);
+		const cameraIds = cameraStore.cameras.map((c) => c.device_id);
+
+		if (mode !== 'playback' || cameraIds.length === 0) {
+			playbackTrailsByDevice = {};
+			playbackPointByDevice = {};
+			if (playbackFetchTimer) {
+				clearTimeout(playbackFetchTimer);
+				playbackFetchTimer = null;
+			}
+			return;
+		}
+
+		if (playbackFetchTimer) return;
+		playbackFetchTimer = setTimeout(async () => {
+			const targetMs = Math.floor(scrubberStore.playheadTime * 1000);
+			const nearRadiusMs = 20 * 60 * 1000;
+			const fallbackRadiusMs = 6 * 60 * 60 * 1000;
+			const fromMs = Math.max(0, targetMs - nearRadiusMs);
+			const toMs = targetMs + nearRadiusMs;
+			const nextTrails: Record<string, [number, number][]> = {};
+			const nextPoints: Record<string, [number, number] | null> = {};
+
+			await Promise.all(
+				cameraIds.map(async (deviceId) => {
+					try {
+						const nearEntries = await fetchTelemetryRangeCached(deviceId, fromMs, toMs, 1200);
+						let gpsEntries = nearEntries.filter(
+							(e) => typeof e.lat === 'number' && typeof e.lon === 'number',
+						);
+						let nearest = nearestTelemetryEntryWithin(
+							gpsEntries,
+							targetMs,
+							MAX_GPS_STALENESS_MS,
+						);
+						if (!nearest) {
+							const wideFrom = Math.max(0, targetMs - fallbackRadiusMs);
+							const wideTo = targetMs + fallbackRadiusMs;
+							const wideEntries = await fetchTelemetryRangeCached(deviceId, wideFrom, wideTo, 1200);
+							gpsEntries = wideEntries.filter(
+								(e) => typeof e.lat === 'number' && typeof e.lon === 'number',
+							);
+							nearest = nearestTelemetryEntryWithin(
+								gpsEntries,
+								targetMs,
+								MAX_GPS_STALENESS_MS,
+							);
+						}
+						if (!nearest) {
+							nextTrails[deviceId] = [];
+							nextPoints[deviceId] = null;
+							return;
+						}
+						nextTrails[deviceId] = gpsEntries.map((e) => [e.lat!, e.lon!] as [number, number]);
+						nextPoints[deviceId] = [nearest.lat!, nearest.lon!];
+					} catch {
+						nextTrails[deviceId] = [];
+						nextPoints[deviceId] = null;
+					}
+				}),
+			);
+
+			playbackTrailsByDevice = nextTrails;
+			playbackPointByDevice = nextPoints;
+			playbackFetchTimer = null;
+		}, 260);
+
 	});
 
 	// Auto-fit / pan effect
@@ -168,7 +268,7 @@
 <div class="relative isolate h-full w-full">
 	<div bind:this={mapContainer} class="h-full w-full"></div>
 
-	{#if ready && gpsCameras.length === 0}
+	{#if ready && markerCameras.length === 0}
 		<div class="absolute inset-0 flex items-center justify-center pointer-events-none">
 			<div class="bg-background/90 backdrop-blur rounded-lg px-6 py-4 text-center shadow-lg pointer-events-auto">
 				<p class="text-sm text-muted-foreground">No cameras with GPS data</p>
@@ -178,14 +278,33 @@
 	{/if}
 
 	{#if ready && map && L}
-		{#each gpsCameras as camera (camera.device_id)}
+		{#each markerCameras as camera (camera.device_id)}
+			{@const playbackPoint = playbackPointByDevice[camera.device_id]}
 			<CameraMarker
 				{map}
 				leaflet={L}
 				{camera}
+				gpsOverride={scrubberStore.mode === 'playback' && playbackPoint
+					? { latitude: playbackPoint[0], longitude: playbackPoint[1] }
+					: undefined}
 				selected={tracking === 'single' && trackedDeviceId === camera.device_id}
 				onMarkerClick={handleMarkerClick}
 			/>
+		{/each}
+	{/if}
+
+	{#if ready && map && L && scrubberStore.mode === 'playback'}
+		{#each markerCameras as camera (camera.device_id)}
+			{@const points = playbackTrailsByDevice[camera.device_id] ?? []}
+			{@const historicPoint = playbackPointByDevice[camera.device_id] ?? null}
+			{#if points.length > 0 || historicPoint}
+				<PlaybackTrailOverlay
+					{map}
+					leaflet={L}
+					{points}
+					{historicPoint}
+				/>
+			{/if}
 		{/each}
 	{/if}
 
@@ -213,6 +332,17 @@
 					<LocateFixed class="h-4 w-4 text-green-500" />
 				{/if}
 			</button>
+		</div>
+	{/if}
+
+	{#if SHOW_PLAYBACK_DEBUG}
+		<div class="absolute left-3 bottom-3 z-[1000] rounded-md bg-black/70 px-2 py-1 text-[10px] font-mono text-white/85 pointer-events-none">
+			<div>map-mode={scrubberStore.mode}</div>
+			{#each mapSourceDebug as item (item.deviceId)}
+				<div>
+					{item.deviceId.slice(0, 8)} src={item.source} live={item.hasLive ? '1' : '0'} pb={item.hasPlaybackPoint ? '1' : '0'}
+				</div>
+			{/each}
 		</div>
 	{/if}
 </div>

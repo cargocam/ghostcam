@@ -19,7 +19,7 @@
 	let cameras = $derived(cameraStore.cameras);
 
 	let sortedCameras = $derived.by(() => {
-		const cams = cameras;
+		const cams = [...cameras].sort((a, b) => (b.online ? 1 : 0) - (a.online ? 1 : 0));
 		if (gridLayout !== '1+5' || !cameraStore.selectedId) return cams;
 		const selected = cams.find((c) => c.device_id === cameraStore.selectedId);
 		if (!selected) return cams;
@@ -27,14 +27,13 @@
 	});
 </script>
 
-<div class="flex flex-col h-full overflow-hidden">
-	<div class="flex-1 min-h-0 overflow-y-auto p-2">
+<div class="h-full overflow-y-auto p-2">
 	<div class={cn("grid gap-3", gridClass)}>
 		{#each sortedCameras as camera, i (camera.device_id)}
 			<CameraCard
 				deviceId={camera.device_id}
-				name={cameraConfigStore.getDisplayName(camera.device_id)}
-				connected={camera.connected}
+				name={cameraConfigStore.getDisplayName(camera.device_id, camera.device_name)}
+				connected={camera.online}
 				featured={gridLayout === '1+5' && i === 0}
 			/>
 		{/each}
@@ -44,6 +43,5 @@
 				No cameras connected. Waiting for feeds...
 			</div>
 		{/if}
-	</div>
 	</div>
 </div>

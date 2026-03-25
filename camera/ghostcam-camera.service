@@ -1,0 +1,15 @@
+[Unit]
+Description=Ghostcam Camera Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ghostcam-watchdog.sh
+Restart=always
+RestartSec=5
+Environment=RUST_LOG=camera=info
+Environment=GHOSTCAM_DATA_DIR=/var/ghostcam
+
+[Install]
+WantedBy=multi-user.target

@@ -4,21 +4,62 @@ resolver = "2"
 
 [workspace.dependencies]
 ghostcam = { path = "ghostcam" }
-quinn = "0.11"
-rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
-rcgen = "0.13"
-tokio = { version = "1", features = ["full"] }
+
+# Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-uuid = { version = "1", features = ["v4"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-bytes = "1"
-clap = { version = "4", features = ["derive", "env"] }
-axum = { version = "0.7", features = ["macros"] }
-tower-http = { version = "0.6", features = ["cors", "fs"] }
-str0m = "0.6"
-anyhow = "1"
 rmp-serde = "1"
-cpal = "0.15"
-opus = "0.3"
+
+# Crypto / TLS
+rcgen = { version = "0.13", features = ["pem", "x509-parser"] }
+rustls = { version = "0.23", features = ["ring", "std"], default-features = false }
+ring = "0.17"
+x509-parser = "0.16"
+jsonwebtoken = "9"
+pem = "3"
+
+# QUIC
+quinn = "0.11"
+
+# Async
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+async-trait = "0.1"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio"] }
+
+# Auth
+argon2 = "0.5"
+rand = "0.8"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+
+# Logging
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Date/time
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+
+# HTTP
+axum = "0.7"
+axum-extra = { version = "0.9", features = ["cookie"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+
+# Redis
+redis = { version = "0.27", features = ["tokio-comp", "streams"] }
+
+# WebRTC
+str0m = "0.6"
+
+# Utilities
+bytes = "1"
+tokio-stream = { version = "0.1", features = ["sync"] }
