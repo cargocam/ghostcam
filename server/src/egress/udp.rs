@@ -40,21 +40,21 @@ impl SharedWebRtcSocket {
     /// incoming packets addressed to that session.
     pub async fn register(&self, ufrag: String) -> mpsc::UnboundedReceiver<UdpPacket> {
         let (tx, rx) = mpsc::unbounded_channel();
-        self.routing.lock().unwrap().insert(ufrag, tx);
+        self.routing.lock().expect("udp routing lock poisoned").insert(ufrag, tx);
         rx
     }
 
     /// Unregister a session and remove all cached source-address mappings for it.
     pub async fn unregister(&self, ufrag: &str) {
-        self.routing.lock().unwrap().remove(ufrag);
+        self.routing.lock().expect("udp routing lock poisoned").remove(ufrag);
         // Clean up fast-path entries that pointed to this ufrag.
-        let mut connected = self.connected.lock().unwrap();
+        let mut connected = self.connected.lock().expect("udp connected lock poisoned");
         connected.retain(|_, u| u != ufrag);
     }
 
     /// Cache a confirmed source-address → ufrag mapping for future fast-path lookups.
     pub async fn connect(&self, src: SocketAddr, ufrag: String) {
-        self.connected.lock().unwrap().insert(src, ufrag);
+        self.connected.lock().expect("udp connected lock poisoned").insert(src, ufrag);
     }
 
     /// Spawn the dispatch loop in its own Tokio task.
@@ -81,7 +81,7 @@ impl SharedWebRtcSocket {
             tracing::debug!(src = %src, len, "udp packet received");
 
             // Fast path: known source address.
-            let ufrag_opt = self.connected.lock().unwrap().get(&src).cloned();
+            let ufrag_opt = self.connected.lock().expect("udp connected lock poisoned").get(&src).cloned();
 
             let ufrag = if let Some(u) = ufrag_opt {
                 tracing::debug!(src = %src, ufrag = %u, "fast-path routing");
@@ -92,7 +92,7 @@ impl SharedWebRtcSocket {
                     Some(u) => {
                         tracing::debug!(src = %src, ufrag = %u, "stun routing, caching");
                         // Cache for future fast-path lookups.
-                        self.connected.lock().unwrap().insert(src, u.clone());
+                        self.connected.lock().expect("udp connected lock poisoned").insert(src, u.clone());
                         u
                     }
                     None => {
@@ -102,7 +102,7 @@ impl SharedWebRtcSocket {
                 }
             };
 
-            let routing = self.routing.lock().unwrap();
+            let routing = self.routing.lock().expect("udp routing lock poisoned");
             if let Some(tx) = routing.get(&ufrag) {
                 let _ = tx.send((src, data));
             } else {

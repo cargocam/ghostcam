@@ -15,7 +15,7 @@ use super::auth::AuthUser;
 use super::state::AppState;
 use crate::ingest::slot::SegmentState;
 
-pub fn normalize_manifest_for_browser(manifest: &str) -> String {
+pub(crate) fn normalize_manifest_for_browser(manifest: &str) -> String {
     manifest
         .lines()
         .map(|line| {

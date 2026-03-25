@@ -3,8 +3,8 @@
 ///
 /// str0m handles FU-A fragmentation — we feed it complete access units.
 ///
-/// Uses a single contiguous buffer with offset tracking to avoid per-NAL
-/// allocations. The buffer is reused across access units.
+/// Uses a single contiguous buffer to accumulate non-VCL NALs, avoiding
+/// per-NAL heap allocations within an access unit.
 pub struct NalAccumulator {
     /// Single buffer holding pending non-VCL NALs in Annex-B format
     /// (start code + NAL data, concatenated).
