@@ -68,13 +68,13 @@ pub async fn enroll(
         device_key,
         None,
         true, // no_tofu: enrollment is the initial trust establishment
-        Path::new("/var/ghostcam"), // not used when no_tofu=true
+        Path::new(""), // unused when no_tofu=true
     )?;
     let connection = crate::quic::connect(&endpoint, &enrollment.server_addr).await?;
 
     tracing::info!("connected to server for enrollment");
 
-    // Get server fingerprint (TOFU)
+    // Extract server fingerprint — stored later by store_enrollment()
     let server_fingerprint = crate::tofu::get_peer_fingerprint(&connection)?;
 
     // Open bidirectional control stream

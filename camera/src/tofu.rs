@@ -27,11 +27,14 @@ impl TofuServerCertVerifier {
         let cached = match std::fs::read_to_string(&fp_path) {
             Ok(s) => {
                 let s = s.trim().to_string();
-                if s.is_empty() {
-                    None
-                } else {
+                if s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()) {
                     tracing::info!("loaded stored server fingerprint for TOFU verification");
                     Some(s)
+                } else if s.is_empty() {
+                    None
+                } else {
+                    tracing::warn!("stored server fingerprint has unexpected format — treating as unpinned");
+                    None
                 }
             }
             Err(_) => None,
@@ -79,19 +82,21 @@ impl ServerCertVerifier for TofuServerCertVerifier {
             }
             None => {
                 // First connection — TOFU: accept and store
-                tracing::info!(fingerprint = %actual, "TOFU: pinning server fingerprint on first connect");
-                *cached = Some(actual.clone());
-
-                // Store to disk (best-effort — verifier can't return anyhow errors)
                 let fp_path = self.data_dir.join("server_fingerprint");
                 if let Err(e) = std::fs::write(&fp_path, &actual) {
                     tracing::error!(
                         path = %fp_path.display(),
                         error = %e,
-                        "failed to write server fingerprint to disk"
+                        "failed to write server fingerprint to disk — rejecting connection"
                     );
+                    return Err(TlsError::General(format!(
+                        "TOFU: cannot persist server fingerprint to {}: {e}",
+                        fp_path.display()
+                    )));
                 }
 
+                tracing::info!(fingerprint = %actual, "TOFU: pinning server fingerprint on first connect");
+                *cached = Some(actual.clone());
                 Ok(ServerCertVerified::assertion())
             }
         }
@@ -154,7 +159,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tofu_first_connect_stores_fingerprint() {
+    fn tofu_initial_state_no_file_is_unpinned() {
         let dir = tempfile::tempdir().unwrap();
         let verifier = TofuServerCertVerifier::new(dir.path());
 
@@ -256,5 +261,46 @@ mod tests {
         let err = result.unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("fingerprint mismatch"), "error should mention mismatch: {msg}");
+    }
+
+    #[test]
+    fn tofu_invalid_format_treated_as_unpinned() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Too short
+        std::fs::write(dir.path().join("server_fingerprint"), "abcdef").unwrap();
+        let verifier = TofuServerCertVerifier::new(dir.path());
+        assert!(verifier.cached_fingerprint.lock().unwrap().is_none());
+
+        // Non-hex characters
+        std::fs::write(
+            dir.path().join("server_fingerprint"),
+            "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+        )
+        .unwrap();
+        let verifier = TofuServerCertVerifier::new(dir.path());
+        assert!(verifier.cached_fingerprint.lock().unwrap().is_none());
+    }
+
+    #[test]
+    fn tofu_first_connect_rejects_on_disk_write_failure() {
+        // Use a non-existent directory so write fails
+        let dir = Path::new("/nonexistent/tofu/test");
+        let verifier = TofuServerCertVerifier::new(dir);
+
+        let fake_cert = CertificateDer::from(vec![1, 2, 3, 4, 5]);
+        let server_name = ServerName::try_from("ghostcam").unwrap();
+
+        let result = verifier.verify_server_cert(
+            &fake_cert,
+            &[],
+            &server_name,
+            &[],
+            UnixTime::now(),
+        );
+        assert!(result.is_err(), "should reject when fingerprint can't be persisted");
+
+        let msg = format!("{}", result.unwrap_err());
+        assert!(msg.contains("cannot persist"), "error should mention persist failure: {msg}");
     }
 }
