@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ghostcam::types::{DeviceId, UserId};
 use tokio::sync::RwLock;
@@ -23,7 +23,7 @@ pub struct SessionManager {
 struct SessionInner {
     by_id: HashMap<String, SessionEntry>,
     /// Reverse index: DeviceId → set of session IDs.
-    by_device: HashMap<DeviceId, Vec<String>>,
+    by_device: HashMap<DeviceId, HashSet<String>>,
 }
 
 impl SessionManager {
@@ -50,7 +50,7 @@ impl SessionManager {
             .by_device
             .entry(device_id.clone())
             .or_default()
-            .push(session_id.clone());
+            .insert(session_id.clone());
         inner.by_id.insert(
             session_id,
             SessionEntry {
@@ -68,7 +68,7 @@ impl SessionManager {
         if let Some(entry) = inner.by_id.remove(session_id) {
             // Remove from reverse index.
             if let Some(ids) = inner.by_device.get_mut(&entry.device_id) {
-                ids.retain(|id| id != session_id);
+                ids.remove(session_id);
                 if ids.is_empty() {
                     inner.by_device.remove(&entry.device_id);
                 }
