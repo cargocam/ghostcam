@@ -239,9 +239,9 @@ pub async fn register(
         return (StatusCode::BAD_REQUEST, "invalid email address").into_response();
     }
 
-    // Validate password length
-    if body.password.len() < 8 {
-        return (StatusCode::BAD_REQUEST, "password must be at least 8 characters").into_response();
+    // Validate password length (max 128 to prevent Argon2 CPU exhaustion)
+    if body.password.len() < 8 || body.password.len() > 128 {
+        return (StatusCode::BAD_REQUEST, "password must be 8-128 characters").into_response();
     }
 
     // Check if email is already taken
@@ -265,11 +265,15 @@ pub async fn register(
         }
     };
 
-    // Create user
+    // Create user (handle concurrent duplicate email via DB unique constraint)
     let display_name = body.display_name.as_deref().unwrap_or("User");
     let user_id = match state.db.create_user(&body.email, &hash, display_name).await {
         Ok(id) => id,
         Err(e) => {
+            let msg = e.to_string();
+            if msg.contains("23505") || msg.contains("unique") || msg.contains("duplicate") {
+                return (StatusCode::CONFLICT, "email already registered").into_response();
+            }
             tracing::error!("failed to create user: {e}");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }

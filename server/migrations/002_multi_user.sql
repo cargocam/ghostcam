@@ -43,18 +43,18 @@ DO $$ BEGIN
 END $$;
 
 -- 4. Backfill existing rows to the migrated owner
-UPDATE cameras SET user_id = (SELECT user_id FROM users LIMIT 1) WHERE user_id IS NULL;
-UPDATE sessions SET user_id = (SELECT user_id FROM users LIMIT 1) WHERE user_id IS NULL;
-UPDATE api_tokens SET user_id = (SELECT user_id FROM users LIMIT 1) WHERE user_id IS NULL;
-UPDATE enrollment_tokens SET user_id = (SELECT user_id FROM users LIMIT 1) WHERE user_id IS NULL;
+-- Note: on upgrade from single-owner, the migrated user gets a deterministic
+-- 'u-' prefixed ID. New users get UUID v4 IDs. Both are valid TEXT primary keys.
+UPDATE cameras SET user_id = (SELECT user_id FROM users ORDER BY created_at LIMIT 1) WHERE user_id IS NULL;
+UPDATE sessions SET user_id = (SELECT user_id FROM users ORDER BY created_at LIMIT 1) WHERE user_id IS NULL;
+UPDATE api_tokens SET user_id = (SELECT user_id FROM users ORDER BY created_at LIMIT 1) WHERE user_id IS NULL;
+UPDATE enrollment_tokens SET user_id = (SELECT user_id FROM users ORDER BY created_at LIMIT 1) WHERE user_id IS NULL;
 
--- 5. Make user_id NOT NULL (idempotent — SET NOT NULL on already-NOT-NULL is a no-op)
-DO $$ BEGIN
-    ALTER TABLE cameras ALTER COLUMN user_id SET NOT NULL;
-    ALTER TABLE sessions ALTER COLUMN user_id SET NOT NULL;
-    ALTER TABLE api_tokens ALTER COLUMN user_id SET NOT NULL;
-EXCEPTION WHEN others THEN NULL;
-END $$;
+-- 5. Make user_id NOT NULL (SET NOT NULL on already-NOT-NULL is a no-op in PostgreSQL)
+ALTER TABLE cameras ALTER COLUMN user_id SET NOT NULL;
+ALTER TABLE sessions ALTER COLUMN user_id SET NOT NULL;
+ALTER TABLE api_tokens ALTER COLUMN user_id SET NOT NULL;
+ALTER TABLE enrollment_tokens ALTER COLUMN user_id SET NOT NULL;
 
 -- 6. Indexes for user-scoped queries
 CREATE INDEX IF NOT EXISTS idx_cameras_user_id ON cameras(user_id);
