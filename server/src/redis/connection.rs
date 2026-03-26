@@ -69,10 +69,7 @@ impl RedisManager {
 
     /// Check if Redis is connected.
     pub fn is_connected(&self) -> bool {
-        self.conn
-            .try_read()
-            .map(|g| g.is_some())
-            .unwrap_or(false)
+        self.conn.try_read().map(|g| g.is_some()).unwrap_or(false)
     }
 
     /// Increment the write error counter.
