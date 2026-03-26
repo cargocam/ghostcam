@@ -9,6 +9,7 @@ pub struct CameraConfig {
     pub server_addr: String,
     pub test_source: bool,
     pub test_video: String,
+    pub segment_dir: String,
     pub no_audio: bool,
     pub no_gps: bool,
     pub no_tofu: bool,
@@ -22,8 +23,11 @@ pub struct CameraConfigFile {
     pub server_addr: Option<String>,
     pub test_source: Option<bool>,
     pub test_video: Option<String>,
+    pub segment_dir: Option<String>,
     pub no_audio: Option<bool>,
     pub no_gps: Option<bool>,
+    /// Security flag — only settable via CLI, never from config file.
+    #[serde(skip)]
     pub no_tofu: Option<bool>,
     pub data_dir: Option<String>,
 }
@@ -78,12 +82,21 @@ impl CameraConfig {
 
         let no_gps = cli.no_gps || file_conf.no_gps.unwrap_or(false);
 
-        let no_tofu = cli.no_tofu || file_conf.no_tofu.unwrap_or(false);
+        // no_tofu is CLI-only (intentional security decision — never from config file)
+        let no_tofu = cli.no_tofu;
+
+        let segment_dir = cli
+            .segment_dir
+            .clone()
+            .or_else(|| env_opt("GHOSTCAM_SEGMENT_DIR"))
+            .or(file_conf.segment_dir)
+            .unwrap_or_else(|| format!("{data_dir}/segments"));
 
         let config = CameraConfig {
             server_addr,
             test_source,
             test_video,
+            segment_dir,
             no_audio,
             no_gps,
             no_tofu,

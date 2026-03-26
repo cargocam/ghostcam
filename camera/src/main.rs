@@ -165,6 +165,7 @@ async fn main() -> Result<()> {
                 server_addr: String::new(),
                 test_source: true,
                 test_video: String::new(),
+                segment_dir: String::new(),
                 no_audio: camera_config.no_audio,
                 no_gps: telem_no_gps,
                 no_tofu: true,
@@ -282,11 +283,13 @@ async fn try_connect_and_run(
 
     let session_cancel = cancel.child_token();
     let data_dir = std::path::PathBuf::from(&config.data_dir);
+    let segment_dir = std::path::PathBuf::from(&config.segment_dir);
     let sess = session::Session::establish(
         connection,
         telemetry_buffer,
         session_cancel,
         data_dir,
+        segment_dir,
         device_fingerprint.to_string(),
     )
     .await?;
