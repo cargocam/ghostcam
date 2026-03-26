@@ -14,11 +14,25 @@ Auto-reconnects to the server with exponential backoff (1s → 30s).
 - `libopus-dev` (Linux) or `brew install opus` (macOS, cross-compilation)
 - Optional: `gpsd` on `localhost:2947` for GPS
 
-## CLI Flags
+## Configuration
+
+Supports TOML config files, environment variables, and CLI flags with layered resolution: defaults -> config file -> env vars -> CLI flags. Config files are optional.
+
+### Config File Search Order
+
+1. `--config <path>` CLI flag
+2. `$GHOSTCAM_CONFIG_FILE` (env var)
+3. `$GHOSTCAM_DATA_DIR/camera.toml`
+4. `/boot/ghostcam.conf` (backward compatible -- valid TOML key=value format)
+
+See `camera.example.toml` in the repo root for all available settings with comments.
+
+### CLI Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--server-addr` | _(from enrollment / conf file)_ | Server QUIC address `host:port` |
+| `--config` | _(none)_ | Path to TOML config file |
+| `--server-addr` | _(from config / enrollment)_ | Server QUIC address `host:port` |
 | `--test-source` | off | Use test H.264 file + synthetic audio |
 | `--test-video` | `test-data/test.h264` | H.264 file for `--test-source` |
 | `--data-dir` | `/var/ghostcam` | Device cert, config, and enrollment state |
@@ -28,7 +42,15 @@ Auto-reconnects to the server with exponential backoff (1s → 30s).
 | `--enrollment-jwt` | _(none)_ | JWT for enrollment |
 | `--no-tofu` | off | Disable TOFU server fingerprint verification (dev/testing) |
 
-Server address resolution precedence: `--server-addr` CLI flag → `ghostcam.conf` → `/etc/ghostcam/server.addr` (written during enrollment) → hardcoded default.
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GHOSTCAM_CONFIG_FILE` | _(none)_ | Explicit path to TOML config file |
+| `GHOSTCAM_DATA_DIR` | `/var/ghostcam` | Data directory |
+| `GHOSTCAM_SERVER_ADDR` | _(from enrollment)_ | Server QUIC address |
+
+Server address resolution precedence: `--server-addr` CLI flag -> `GHOSTCAM_SERVER_ADDR` env var -> config file -> `server.addr` file (written during enrollment) -> hardcoded default.
 
 ## How It Works
 
@@ -47,7 +69,7 @@ Server address resolution precedence: `--server-addr` CLI flag → `ghostcam.con
 | Module | Purpose |
 |--------|---------|
 | `main` | CLI, reconnect loop, top-level task orchestration |
-| `config` | Config struct, resolution from CLI / conf file / enrollment |
+| `config` | `CameraConfig` + `CameraConfigFile`, layered TOML/env/CLI resolution |
 | `session` | Active QUIC session: alert stream, command stream, video/audio enabled atomics |
 | `enrollment` | JWT parsing, enrollment handshake with server PKI |
 | `tofu` | Server fingerprint pinning on first connect |

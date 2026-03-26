@@ -9,7 +9,7 @@ use ghostcam::config::MAX_REQUEST_BODY_BYTES;
 use super::auth::auth_middleware;
 use super::rate_limit::{api_rate_limit, login_rate_limit, ApiRateLimiter, LoginRateLimiter};
 use super::state::AppState;
-use super::{audit, auth, cameras, health, hls, sse, tokens, watch};
+use super::{admin, audit, auth, cameras, health, hls, sse, tokens, watch};
 use crate::redis::telemetry_api;
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -50,6 +50,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/hls/:device_id/:segment_id", get(hls::get_segment))
         // Audit
         .route("/api/v1/audit", get(audit::query))
+        // Admin
+        .route("/api/v1/admin/reload", post(admin::reload_config))
         // Auth (protected - logout, change password)
         .route("/api/v1/auth/logout", post(auth::logout))
         .route("/api/v1/auth/password", patch(auth::change_password))

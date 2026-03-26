@@ -32,6 +32,8 @@ pub struct Session {
     cancel: CancellationToken,
     /// Data directory for cert storage etc
     data_dir: PathBuf,
+    /// Directory for fMP4 recording segments
+    segment_dir: PathBuf,
     /// Device fingerprint (used as stable identity for segments)
     device_fingerprint: String,
 }
@@ -47,6 +49,7 @@ impl Session {
         telemetry_buffer: &TelemetryBuffer,
         cancel: CancellationToken,
         data_dir: PathBuf,
+        segment_dir: PathBuf,
         device_fingerprint: String,
     ) -> Result<Self> {
         // 1. Open bidirectional stream for control
@@ -87,6 +90,7 @@ impl Session {
             audio_enabled: Arc::new(AtomicBool::new(false)),
             cancel,
             data_dir,
+            segment_dir,
             device_fingerprint,
         })
     }
@@ -114,7 +118,7 @@ impl Session {
         let (signal_tx, mut signal_rx) = mpsc::channel::<CommandSignal>(1);
 
         // --- Recording pipeline setup ---
-        let segment_dir = self.data_dir.join("segments");
+        let segment_dir = self.segment_dir.clone();
         tokio::fs::create_dir_all(&segment_dir).await?;
 
         let (seg_event_tx, mut seg_event_rx) = mpsc::channel::<SegmentEvent>(64);

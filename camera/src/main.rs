@@ -26,42 +26,46 @@ use crate::telemetry::buffer::TelemetryBuffer;
 
 #[derive(Parser)]
 #[command(name = "ghostcam-camera")]
-struct Cli {
+pub struct Cli {
+    /// Path to TOML config file
+    #[arg(long)]
+    pub config: Option<String>,
+
     /// Server QUIC address (host:port)
     #[arg(long)]
-    server_addr: Option<String>,
+    pub server_addr: Option<String>,
 
     /// Use test video + audio sources instead of real capture
     #[arg(long)]
-    test_source: bool,
+    pub test_source: bool,
 
     /// Path to test H.264 file
-    #[arg(long, default_value = "test-data/test.h264")]
-    test_video: String,
+    #[arg(long)]
+    pub test_video: Option<String>,
 
     /// Directory for fMP4 ring buffer
-    #[arg(long, default_value = "/var/ghostcam/segments")]
-    segment_dir: String,
+    #[arg(long)]
+    pub segment_dir: Option<String>,
 
     /// Disable audio capture
     #[arg(long)]
-    no_audio: bool,
+    pub no_audio: bool,
 
     /// Disable GPS even if gpsd is available
     #[arg(long)]
-    no_gps: bool,
+    pub no_gps: bool,
 
     /// Data directory
-    #[arg(long, default_value = "/var/ghostcam")]
-    data_dir: String,
+    #[arg(long)]
+    pub data_dir: Option<String>,
 
     /// Enrollment JWT (bypasses QR scanning for registration)
     #[arg(long)]
-    enrollment_jwt: Option<String>,
+    pub enrollment_jwt: Option<String>,
 
     /// Disable TOFU server fingerprint verification
     #[arg(long)]
-    no_tofu: bool,
+    pub no_tofu: bool,
 }
 
 #[tokio::main]
@@ -70,25 +74,7 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
-    // Read optional ghostcam.conf
-    let conf = config::read_ghostcam_conf(Path::new("/boot/ghostcam.conf")).unwrap_or(None);
-
-    // Resolve server address
-    let server_addr = config::resolve_server_addr(
-        cli.server_addr.as_deref(),
-        conf.as_ref().and_then(|c| c.server_addr.as_deref()),
-        Path::new(&format!("{}/server.addr", cli.data_dir)),
-    );
-
-    let camera_config = CameraConfig {
-        server_addr,
-        test_source: cli.test_source,
-        test_video: cli.test_video,
-        no_audio: cli.no_audio || conf.as_ref().is_some_and(|c| c.no_audio),
-        no_gps: cli.no_gps || conf.as_ref().is_some_and(|c| c.no_gps),
-        no_tofu: cli.no_tofu,
-        data_dir: cli.data_dir,
-    };
+    let camera_config = CameraConfig::load(&cli)?;
 
     // Ensure data directory exists
     std::fs::create_dir_all(&camera_config.data_dir)?;
@@ -179,6 +165,7 @@ async fn main() -> Result<()> {
                 server_addr: String::new(),
                 test_source: true,
                 test_video: String::new(),
+                segment_dir: String::new(),
                 no_audio: camera_config.no_audio,
                 no_gps: telem_no_gps,
                 no_tofu: true,
@@ -296,11 +283,13 @@ async fn try_connect_and_run(
 
     let session_cancel = cancel.child_token();
     let data_dir = std::path::PathBuf::from(&config.data_dir);
+    let segment_dir = std::path::PathBuf::from(&config.segment_dir);
     let sess = session::Session::establish(
         connection,
         telemetry_buffer,
         session_cancel,
         data_dir,
+        segment_dir,
         device_fingerprint.to_string(),
     )
     .await?;

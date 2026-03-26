@@ -1,0 +1,48 @@
+# Ghostcam Server Configuration
+#
+# Copy to one of:
+#   $GHOSTCAM_CONFIG_FILE (env var)
+#   $GHOSTCAM_DATA_DIR/server.toml
+#   /etc/ghostcam/server.toml
+#
+# All fields are optional. Environment variables override config file values.
+# Sensitive fields (database_url, admin_password) can only be set via env vars.
+
+# Data directory: CA keys, server cert, HLS segments
+# Env: GHOSTCAM_DATA_DIR
+# data_dir = "/var/ghostcam"
+
+# HTTP API + static viewer port
+# Env: GHOSTCAM_HTTP_PORT
+# http_port = 3000
+
+# QUIC ingest port (cameras connect here)
+# Env: GHOSTCAM_QUIC_PORT
+# quic_port = 4433
+
+# WebRTC UDP port (shared across all viewer sessions)
+# Env: GHOSTCAM_WEBRTC_PORT
+# webrtc_port = 3478
+
+# Redis connection URL. If unset, telemetry history is disabled.
+# Env: GHOSTCAM_REDIS_URL
+# redis_url = "redis://127.0.0.1:6379"
+
+# Public IP for WebRTC ICE candidates. Must be a reachable LAN/WAN IP.
+# 127.0.0.1 breaks Firefox (it binds UDP on the LAN interface).
+# If unset, derived from the HTTP Host header.
+# Env: GHOSTCAM_PUBLIC_IP (also reads FLY_PUBLIC_IP for Fly.io)
+# public_ip = "192.168.1.100"
+
+# Address embedded in enrollment JWTs. Defaults to <public_ip>:<quic_port>.
+# Override when cameras and browsers use different network paths (e.g. Docker).
+# Env: GHOSTCAM_ENROLLMENT_ADDR
+# enrollment_addr = "server:4433"
+
+# Admin account email (used on first-run bootstrap)
+# Env: GHOSTCAM_ADMIN_EMAIL
+# admin_email = "admin@localhost"
+
+# --- Sensitive (env vars only, cannot be set in this file) ---
+# GHOSTCAM_DATABASE_URL=postgres://ghostcam:password@localhost:5432/ghostcam  (required)
+# GHOSTCAM_ADMIN_PASSWORD=<preset-password>  (optional, auto-generated if unset)

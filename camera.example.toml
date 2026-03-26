@@ -1,0 +1,39 @@
+# Ghostcam Camera Configuration
+#
+# Copy to one of:
+#   --config <path>  (CLI flag)
+#   $GHOSTCAM_CONFIG_FILE (env var)
+#   $GHOSTCAM_DATA_DIR/camera.toml
+#   /boot/ghostcam.conf (backward compatible)
+#
+# All fields are optional. Precedence: defaults < config file < env vars < CLI flags.
+
+# Server QUIC address (host:port)
+# CLI: --server-addr
+# Env: GHOSTCAM_SERVER_ADDR
+# server_addr = "10.0.0.1:4433"
+
+# Use test H.264 file + synthetic audio instead of real capture
+# CLI: --test-source
+# test_source = false
+
+# Path to test H.264 file (only used with test_source)
+# CLI: --test-video
+# test_video = "test-data/test.h264"
+
+# Data directory: device cert, enrollment state, telemetry buffer
+# CLI: --data-dir
+# Env: GHOSTCAM_DATA_DIR
+# data_dir = "/var/ghostcam"
+
+# Disable audio capture
+# CLI: --no-audio
+# no_audio = false
+
+# Disable GPS (even if gpsd is available)
+# CLI: --no-gps
+# no_gps = false
+
+# Disable TOFU server fingerprint verification (dev/testing only)
+# CLI: --no-tofu
+# no_tofu = false
