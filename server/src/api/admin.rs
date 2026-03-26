@@ -87,10 +87,10 @@ pub fn do_reload(state: &AppState) -> anyhow::Result<String> {
     }
 
     if warnings.is_empty() {
-        Ok("configuration reloaded successfully".to_string())
+        Ok("configuration validated and published; hot-reloadable settings updated, non-reloadable settings take effect on restart".to_string())
     } else {
         Ok(format!(
-            "configuration reloaded with warnings: {}",
+            "configuration validated; restart required for: {}",
             warnings.join("; ")
         ))
     }

@@ -151,11 +151,24 @@ impl ServerConfig {
     /// 3. Config file `public_ip` field.
     fn parse_public_ip(file_value: Option<&str>) -> Option<IpAddr> {
         for var in ["GHOSTCAM_PUBLIC_IP", "FLY_PUBLIC_IP"] {
-            if let Some(ip) = env_opt(var).and_then(|s| s.parse::<IpAddr>().ok()) {
-                return Some(ip);
+            if let Some(raw) = env_opt(var) {
+                match raw.parse::<IpAddr>() {
+                    Ok(ip) => return Some(ip),
+                    Err(_) => {
+                        tracing::warn!(var, value = %raw, "invalid IP address, ignoring");
+                    }
+                }
             }
         }
-        file_value.and_then(|s| s.parse::<IpAddr>().ok())
+        if let Some(raw) = file_value {
+            match raw.parse::<IpAddr>() {
+                Ok(ip) => return Some(ip),
+                Err(_) => {
+                    tracing::warn!(value = %raw, "invalid public_ip in config file, ignoring");
+                }
+            }
+        }
+        None
     }
 
     fn validate(&self) -> Result<()> {

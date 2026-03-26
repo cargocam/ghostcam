@@ -87,12 +87,18 @@ pub fn load_toml<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
 }
 
 /// Read an environment variable, falling back to a default if unset or empty.
+/// Logs a warning if the variable is set but cannot be parsed.
 pub fn env_or<T: std::str::FromStr>(var: &str, default: T) -> T {
-    std::env::var(var)
-        .ok()
-        .filter(|s| !s.is_empty())
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(default)
+    match std::env::var(var) {
+        Ok(s) if !s.is_empty() => match s.parse() {
+            Ok(v) => v,
+            Err(_) => {
+                tracing::warn!(var, value = %s, "could not parse env var, using default");
+                default
+            }
+        },
+        _ => default,
+    }
 }
 
 /// Read an optional environment variable. Returns `None` if unset or empty.

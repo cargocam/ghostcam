@@ -40,13 +40,12 @@ impl CameraConfig {
         let file_conf = Self::find_and_load_config_file(cli)?;
 
         // Resolve data_dir: CLI -> env -> file -> default
-        let data_dir = if cli.data_dir_provided() {
-            cli.data_dir.clone()
-        } else {
-            env_opt("GHOSTCAM_DATA_DIR")
-                .or(file_conf.data_dir)
-                .unwrap_or_else(|| "/var/ghostcam".to_string())
-        };
+        let data_dir = cli
+            .data_dir
+            .clone()
+            .or_else(|| env_opt("GHOSTCAM_DATA_DIR"))
+            .or(file_conf.data_dir)
+            .unwrap_or_else(|| "/var/ghostcam".to_string());
 
         // Resolve server_addr: CLI -> env -> file -> stored addr file -> default
         let server_addr = if cli.server_addr.is_some() {
@@ -69,13 +68,11 @@ impl CameraConfig {
 
         let test_source = cli.test_source || file_conf.test_source.unwrap_or(false);
 
-        let test_video = if cli.test_video_provided() {
-            cli.test_video.clone()
-        } else {
-            file_conf
-                .test_video
-                .unwrap_or_else(|| "test-data/test.h264".to_string())
-        };
+        let test_video = cli
+            .test_video
+            .clone()
+            .or(file_conf.test_video)
+            .unwrap_or_else(|| "test-data/test.h264".to_string());
 
         let no_audio = cli.no_audio || file_conf.no_audio.unwrap_or(false);
 

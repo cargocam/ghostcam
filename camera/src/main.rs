@@ -40,12 +40,12 @@ pub struct Cli {
     pub test_source: bool,
 
     /// Path to test H.264 file
-    #[arg(long, default_value = "test-data/test.h264")]
-    pub test_video: String,
+    #[arg(long)]
+    pub test_video: Option<String>,
 
     /// Directory for fMP4 ring buffer
-    #[arg(long, default_value = "/var/ghostcam/segments")]
-    pub segment_dir: String,
+    #[arg(long)]
+    pub segment_dir: Option<String>,
 
     /// Disable audio capture
     #[arg(long)]
@@ -56,8 +56,8 @@ pub struct Cli {
     pub no_gps: bool,
 
     /// Data directory
-    #[arg(long, default_value = "/var/ghostcam")]
-    pub data_dir: String,
+    #[arg(long)]
+    pub data_dir: Option<String>,
 
     /// Enrollment JWT (bypasses QR scanning for registration)
     #[arg(long)]
@@ -66,23 +66,6 @@ pub struct Cli {
     /// Disable TOFU server fingerprint verification
     #[arg(long)]
     pub no_tofu: bool,
-}
-
-impl Cli {
-    /// Returns true if `--data-dir` was explicitly passed on the command line.
-    pub fn data_dir_provided(&self) -> bool {
-        // If env var or CLI was explicitly set, clap stores the value.
-        // We detect explicit CLI use by checking if matches source is CommandLine.
-        // Since we can't easily access ArgMatches here, we use a heuristic:
-        // the default value is "/var/ghostcam", so if it differs, it was provided.
-        // This isn't perfect but covers the common case.
-        self.data_dir != "/var/ghostcam"
-    }
-
-    /// Returns true if `--test-video` was explicitly passed on the command line.
-    pub fn test_video_provided(&self) -> bool {
-        self.test_video != "test-data/test.h264"
-    }
 }
 
 #[tokio::main]
