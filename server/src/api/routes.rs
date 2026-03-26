@@ -1,15 +1,21 @@
 use std::sync::Arc;
 
+use axum::extract::DefaultBodyLimit;
 use axum::middleware;
 use axum::routing::{delete, get, patch, post};
 use axum::Router;
+use ghostcam::config::MAX_REQUEST_BODY_BYTES;
 
 use super::auth::auth_middleware;
+use super::rate_limit::{api_rate_limit, login_rate_limit, ApiRateLimiter, LoginRateLimiter};
 use super::state::AppState;
 use super::{auth, cameras, health, hls, sse, tokens, watch};
 use crate::redis::telemetry_api;
 
 pub fn build_router(state: Arc<AppState>) -> Router {
+    let api_limiter = ApiRateLimiter::new();
+    let login_limiter = LoginRateLimiter::new();
+
     let protected = Router::new()
         // Cameras
         .route("/api/v1/cameras", get(cameras::list).post(cameras::enroll))
@@ -48,16 +54,26 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(api_limiter, api_rate_limit));
+
+    // Login endpoint with its own stricter rate limit (5 req/min per IP).
+    let login = Router::new()
+        .route("/api/v1/auth/login", post(auth::login))
+        .layer(middleware::from_fn_with_state(
+            login_limiter,
+            login_rate_limit,
         ));
 
     let public = Router::new()
         .route("/healthz", get(health::healthz))
         .route("/readyz", get(health::readyz))
-        .route("/api/v1/auth/login", post(auth::login))
+        .merge(login)
         .route("/api/v1/auth/register", post(auth::register));
 
     Router::new()
         .merge(protected)
         .merge(public)
+        .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
         .with_state(state)
 }

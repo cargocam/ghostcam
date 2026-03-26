@@ -14,7 +14,7 @@ const PURGE_INTERVAL_SECS: u64 = 60 * 60;
 /// Purge all Redis data for a device: telemetry stream and manifest.
 /// Called when a device is unregistered.
 pub async fn purge_device_data(redis: &RedisManager, device_id: &DeviceId) {
-    let Some(mut conn) = redis.get_conn().await else {
+    let Some(mut conn) = redis.get_conn() else {
         tracing::debug!(device_id = %device_id, "redis unavailable — skipping purge");
         return;
     };
@@ -31,7 +31,7 @@ pub async fn purge_device_data(redis: &RedisManager, device_id: &DeviceId) {
 /// on each to evict stale entries. This covers cameras that have gone offline and
 /// are no longer writing (where the inline MINID trim on XADD would not fire).
 pub async fn purge_old_telemetry(redis: &RedisManager) {
-    let Some(mut conn) = redis.get_conn().await else {
+    let Some(mut conn) = redis.get_conn() else {
         tracing::debug!("redis unavailable — skipping telemetry purge");
         return;
     };

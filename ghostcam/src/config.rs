@@ -50,5 +50,25 @@ pub const RECONNECT_BACKOFF_INITIAL_SECS: u64 = 1;
 /// Maximum reconnect backoff.
 pub const RECONNECT_BACKOFF_MAX_SECS: u64 = 30;
 
+/// Maximum concurrent bidirectional QUIC streams per connection.
+/// Cameras use 1 (alerts). Small headroom for protocol evolution.
+pub const QUIC_MAX_BIDI_STREAMS: u32 = 4;
+
+/// Maximum concurrent unidirectional QUIC streams per connection.
+/// Cameras open Video + Audio (persistent) + upload streams (transient).
+pub const QUIC_MAX_UNI_STREAMS: u32 = 16;
+
+/// Maximum concurrent QUIC connections the server will accept.
+pub const QUIC_MAX_CONNECTIONS: u32 = 256;
+
+/// Maximum HTTP request body size in bytes (1 MB).
+pub const MAX_REQUEST_BODY_BYTES: usize = 1_048_576;
+
+/// Telemetry batch flush interval (seconds).
+pub const TELEMETRY_BATCH_INTERVAL_SECS: u64 = 5;
+
+/// Maximum WebRTC sessions per user.
+pub const MAX_SESSIONS_PER_USER: usize = 20;
+
 /// Wire protocol version.
 pub const PROTOCOL_VERSION: u32 = 1;

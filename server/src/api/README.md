@@ -79,3 +79,14 @@ Axum HTTP router. Authentication is enforced via middleware on all protected rou
 | `sse.rs` | SSE handler — upgrades HTTP connection to event stream |
 | `tokens.rs` | API token management |
 | `health.rs` | Health and readiness probes |
+| `rate_limit.rs` | Per-IP login rate limiter (5 req/min) and per-user API rate limiter (60 req/min) using `governor` |
+
+## Rate Limiting
+
+- **Login** (`/api/v1/auth/login`): 5 requests per 60 seconds per source IP. Returns `429 Too Many Requests` with `retry-after` header.
+- **Authenticated API**: 60 requests per minute per user. Applied to all protected routes.
+- **Session limit**: `POST /api/v1/watch` returns `429` when a user exceeds `MAX_SESSIONS_PER_USER` (20) active WebRTC sessions.
+
+## Request Body Limit
+
+All routes enforce a `MAX_REQUEST_BODY_BYTES` (1 MB) default body size limit via `DefaultBodyLimit`.

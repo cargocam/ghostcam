@@ -23,7 +23,7 @@ pub async fn get_latest(
     redis: &RedisManager,
     device_id: &DeviceId,
 ) -> Result<Option<TelemetryEntry>> {
-    let Some(mut conn) = redis.get_conn().await else {
+    let Some(mut conn) = redis.get_conn() else {
         anyhow::bail!("redis unavailable");
     };
 
@@ -69,7 +69,7 @@ pub async fn query_range(
     cursor: Option<&str>,
     limit: Option<usize>,
 ) -> Result<TelemetryPage> {
-    let Some(mut conn) = redis.get_conn().await else {
+    let Some(mut conn) = redis.get_conn() else {
         anyhow::bail!("redis unavailable");
     };
 

@@ -26,6 +26,7 @@ use crate::ingest::registry::RoutingRegistry;
 use crate::pki::bootstrap::bootstrap_pki;
 use crate::pki::revocation::RevocationCache;
 use crate::redis::connection::RedisManager;
+use crate::redis::telemetry::TelemetryBatcher;
 use crate::sse::SseEventBus;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::CorsLayer;
@@ -112,9 +113,10 @@ async fn main() -> anyhow::Result<()> {
 
     // --- Redis (optional) ---
     let cancel = CancellationToken::new();
-    let redis = if let Some(url) = &redis_url {
+    let (redis, telemetry_batcher) = if let Some(url) = &redis_url {
         let mgr = Arc::new(RedisManager::new(url).await);
-        mgr.spawn_reconnect_loop(cancel.clone());
+        // No manual reconnect loop needed — ConnectionManager handles reconnection.
+        let batcher = Arc::new(TelemetryBatcher::spawn(mgr.clone(), cancel.clone()));
         crate::redis::purge::spawn_telemetry_purge(mgr.clone(), cancel.clone());
         crate::redis::revocation::spawn_revocation_refresh(
             mgr.clone(),
@@ -122,10 +124,10 @@ async fn main() -> anyhow::Result<()> {
             cancel.clone(),
         );
         tracing::info!("redis connected");
-        Some(mgr)
+        (Some(mgr), Some(batcher))
     } else {
         tracing::info!("redis not configured, telemetry history disabled");
-        None
+        (None, None)
     };
 
     // --- Shared WebRTC UDP socket ---
@@ -171,6 +173,7 @@ async fn main() -> anyhow::Result<()> {
         ca.clone(),
         revocation_cache.clone(),
         redis.clone(),
+        telemetry_batcher,
         sse_bus.clone(),
         quic_cancel,
     ));

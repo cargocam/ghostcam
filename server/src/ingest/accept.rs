@@ -1,6 +1,8 @@
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use anyhow::Result;
+use ghostcam::config::QUIC_MAX_CONNECTIONS;
 use ghostcam::wire::alert::Alert;
 use ghostcam::wire::framing;
 use tokio_util::sync::CancellationToken;
@@ -13,6 +15,7 @@ use crate::frames::InboundStreamTag;
 use crate::pki::ca::CaManager;
 use crate::pki::revocation::RevocationCache;
 use crate::redis::connection::RedisManager;
+use crate::redis::telemetry::TelemetryBatcher;
 use crate::sse::SseEventBus;
 
 /// Run the QUIC accept loop, spawning a handler task per connection.
@@ -24,24 +27,41 @@ pub async fn run_accept_loop(
     ca: Arc<CaManager>,
     revocation_cache: Arc<RevocationCache>,
     redis: Option<Arc<RedisManager>>,
+    telemetry_batcher: Option<Arc<TelemetryBatcher>>,
     sse_bus: Arc<SseEventBus>,
     cancel: CancellationToken,
 ) -> Result<()> {
+    let active_connections = Arc::new(AtomicU32::new(0));
+
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
             incoming = endpoint.accept() => {
                 let Some(incoming) = incoming else { break };
+
+                // Enforce application-level connection limit (quinn 0.11 does
+                // not expose ServerConfig::concurrent_connections).
+                let current = active_connections.load(Ordering::Relaxed);
+                if current >= QUIC_MAX_CONNECTIONS {
+                    tracing::warn!(current, limit = QUIC_MAX_CONNECTIONS, "connection limit reached — refusing");
+                    incoming.refuse();
+                    continue;
+                }
+
                 let registry = registry.clone();
                 let db = db.clone();
                 let ca = ca.clone();
                 let revocation_cache = revocation_cache.clone();
                 let redis = redis.clone();
+                let batcher = telemetry_batcher.clone();
                 let sse_bus = sse_bus.clone();
+                let conn_count = active_connections.clone();
+                conn_count.fetch_add(1, Ordering::Relaxed);
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(incoming, registry, db, ca, revocation_cache, redis, sse_bus).await {
+                    if let Err(e) = handle_connection(incoming, registry, db, ca, revocation_cache, redis, batcher, sse_bus).await {
                         tracing::warn!("connection failed: {e}");
                     }
+                    conn_count.fetch_sub(1, Ordering::Relaxed);
                 });
             }
         }
@@ -49,6 +69,7 @@ pub async fn run_accept_loop(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_connection(
     incoming: quinn::Incoming,
     registry: Arc<RoutingRegistry>,
@@ -56,6 +77,7 @@ async fn handle_connection(
     ca: Arc<CaManager>,
     revocation_cache: Arc<RevocationCache>,
     redis: Option<Arc<RedisManager>>,
+    telemetry_batcher: Option<Arc<TelemetryBatcher>>,
     sse_bus: Arc<SseEventBus>,
 ) -> Result<()> {
     let connection = incoming.await?;
@@ -184,6 +206,7 @@ async fn handle_connection(
         alerts_stream,
         commands_stream,
         redis,
+        telemetry_batcher,
     )
     .await;
 

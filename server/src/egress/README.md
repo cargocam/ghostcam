@@ -34,6 +34,6 @@ ICE candidate note: browser SDP offers may include mDNS-obfuscated candidates (F
 | File | Purpose |
 |------|---------|
 | `handle.rs` | `EgressHandle` — one per viewer×camera: WebRTC session lifecycle, UDP event loop, frame dispatch |
-| `sessions.rs` | `SessionManager` — concurrent map of `session_id → EgressHandle`, creation and teardown |
+| `sessions.rs` | `SessionManager` — concurrent map of `session_id → EgressHandle`, creation and teardown, per-user session counting (for MAX_SESSIONS_PER_USER limit) |
 | `rtp.rs` | H.264 NAL → RTP packetization (Single NAL ≤ 1188 bytes, FU-A fragmentation for larger). Timestamp conversion (µs → 90 kHz video, 48 kHz audio). |
 | `data_channel.rs` | `ClientMessage` — JSON messages sent to the viewer on the WebRTC data channel (telemetry, camera events) |

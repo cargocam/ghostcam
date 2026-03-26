@@ -33,11 +33,11 @@ On disconnect: slot is removed from registry, `SseEvent::CameraOffline` emitted.
 
 | File | Purpose |
 |------|---------|
-| `accept.rs` | `run_accept_loop` — QUIC endpoint accept loop, connection auth, slot creation |
+| `accept.rs` | `run_accept_loop` — QUIC endpoint accept loop, connection auth, slot creation, application-level connection limit (QUIC_MAX_CONNECTIONS) |
 | `slot.rs` | `IngestSlot` — per-camera state: broadcast channels (video/audio/telemetry), demand watch, segment ring buffer, HLS manifest |
 | `registry.rs` | `RoutingRegistry` — concurrent map of `DeviceId → IngestSlot`, used by egress and API handlers |
 | `alerts.rs` | Reads `Alert` messages from the persistent alerts QUIC stream; dispatches `RecordingSegment`, `Ack`, `CapabilityUpdate`, etc. |
 | `demand.rs` | `ClientMode` enum (Live/Playback) and subscriber demand tracking — cameras pause streaming when no viewers are watching |
 | `enrollment.rs` | Handles `Alert::Enrollment` — verifies JWT, issues signed device cert, writes camera record to DB |
 | `uploads.rs` | Accepts one-shot QUIC upload streams (fMP4 segments, init segments, manifests, telemetry buffers); buffers in slot |
-| `quic_config.rs` | `build_server_endpoint` — configures Quinn QUIC endpoint with mTLS using the server's CA |
+| `quic_config.rs` | `build_server_endpoint` — configures Quinn QUIC endpoint with mTLS using the server's CA. Limits concurrent bidi/uni streams per connection (QUIC_MAX_BIDI_STREAMS, QUIC_MAX_UNI_STREAMS) |

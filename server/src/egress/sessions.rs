@@ -24,6 +24,8 @@ struct SessionInner {
     by_id: HashMap<String, SessionEntry>,
     /// Reverse index: DeviceId → set of session IDs.
     by_device: HashMap<DeviceId, HashSet<String>>,
+    /// Reverse index: UserId → set of session IDs (for per-user limits).
+    by_user: HashMap<UserId, HashSet<String>>,
 }
 
 impl SessionManager {
@@ -32,6 +34,7 @@ impl SessionManager {
             sessions: RwLock::new(SessionInner {
                 by_id: HashMap::new(),
                 by_device: HashMap::new(),
+                by_user: HashMap::new(),
             }),
         }
     }
@@ -51,6 +54,11 @@ impl SessionManager {
             .entry(device_id.clone())
             .or_default()
             .insert(session_id.clone());
+        inner
+            .by_user
+            .entry(user_id.clone())
+            .or_default()
+            .insert(session_id.clone());
         inner.by_id.insert(
             session_id,
             SessionEntry {
@@ -66,11 +74,18 @@ impl SessionManager {
     pub async fn teardown(&self, session_id: &str) -> bool {
         let mut inner = self.sessions.write().await;
         if let Some(entry) = inner.by_id.remove(session_id) {
-            // Remove from reverse index.
+            // Remove from device reverse index.
             if let Some(ids) = inner.by_device.get_mut(&entry.device_id) {
                 ids.remove(session_id);
                 if ids.is_empty() {
                     inner.by_device.remove(&entry.device_id);
+                }
+            }
+            // Remove from user reverse index.
+            if let Some(ids) = inner.by_user.get_mut(&entry.user_id) {
+                ids.remove(session_id);
+                if ids.is_empty() {
+                    inner.by_user.remove(&entry.user_id);
                 }
             }
             entry.cancel.cancel();
@@ -87,11 +102,24 @@ impl SessionManager {
         if let Some(session_ids) = inner.by_device.remove(device_id) {
             for key in session_ids {
                 if let Some(entry) = inner.by_id.remove(&key) {
+                    // Remove from user reverse index.
+                    if let Some(ids) = inner.by_user.get_mut(&entry.user_id) {
+                        ids.remove(&key);
+                        if ids.is_empty() {
+                            inner.by_user.remove(&entry.user_id);
+                        }
+                    }
                     entry.cancel.cancel();
                     entry.handle.abort();
                 }
             }
         }
+    }
+
+    /// Count the number of active sessions for a user.
+    pub async fn count_by_user(&self, user_id: &UserId) -> usize {
+        let inner = self.sessions.read().await;
+        inner.by_user.get(user_id).map(|s| s.len()).unwrap_or(0)
     }
 
     /// Get the user_id for a session.
