@@ -71,6 +71,7 @@ async fn handle_init_upload(slot: &Arc<IngestSlot>, mut stream: quinn::RecvStrea
     );
 
     *slot.init_segment.write().await = Some(Bytes::from(data));
+    slot.init_notify.notify_waiters();
     Ok(())
 }
 
@@ -85,7 +86,8 @@ async fn handle_manifest_push(slot: &Arc<IngestSlot>, mut stream: quinn::RecvStr
         "manifest push received"
     );
 
-    *slot.manifest.write().await = Some(manifest.clone());
+    let normalized = crate::api::hls::normalize_manifest_for_browser(&manifest);
+    *slot.manifest_normalized.write().await = Some(normalized);
 
     if let Some(ref redis) = slot.redis {
         crate::redis::manifest::store_manifest(redis, &slot.device_id, &manifest).await;

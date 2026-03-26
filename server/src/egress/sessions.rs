@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use ghostcam::types::{DeviceId, UserId};
 use tokio::sync::RwLock;
@@ -13,14 +13,26 @@ struct SessionEntry {
 }
 
 /// Tracks active WebRTC sessions for teardown and scoping.
+///
+/// A reverse index (`by_device`) enables O(1) lookup of all sessions for a
+/// given camera, avoiding a full table scan on camera disconnect.
 pub struct SessionManager {
-    sessions: RwLock<HashMap<String, SessionEntry>>,
+    sessions: RwLock<SessionInner>,
+}
+
+struct SessionInner {
+    by_id: HashMap<String, SessionEntry>,
+    /// Reverse index: DeviceId → set of session IDs.
+    by_device: HashMap<DeviceId, HashSet<String>>,
 }
 
 impl SessionManager {
     pub fn new() -> Self {
         Self {
-            sessions: RwLock::new(HashMap::new()),
+            sessions: RwLock::new(SessionInner {
+                by_id: HashMap::new(),
+                by_device: HashMap::new(),
+            }),
         }
     }
 
@@ -33,8 +45,13 @@ impl SessionManager {
         cancel: CancellationToken,
         handle: JoinHandle<()>,
     ) {
-        let mut sessions = self.sessions.write().await;
-        sessions.insert(
+        let mut inner = self.sessions.write().await;
+        inner
+            .by_device
+            .entry(device_id.clone())
+            .or_default()
+            .insert(session_id.clone());
+        inner.by_id.insert(
             session_id,
             SessionEntry {
                 device_id,
@@ -47,8 +64,15 @@ impl SessionManager {
 
     /// Tear down a session by ID.
     pub async fn teardown(&self, session_id: &str) -> bool {
-        let mut sessions = self.sessions.write().await;
-        if let Some(entry) = sessions.remove(session_id) {
+        let mut inner = self.sessions.write().await;
+        if let Some(entry) = inner.by_id.remove(session_id) {
+            // Remove from reverse index.
+            if let Some(ids) = inner.by_device.get_mut(&entry.device_id) {
+                ids.remove(session_id);
+                if ids.is_empty() {
+                    inner.by_device.remove(&entry.device_id);
+                }
+            }
             entry.cancel.cancel();
             entry.handle.abort();
             true
@@ -59,24 +83,21 @@ impl SessionManager {
 
     /// Tear down all sessions for a device (called on camera disconnect).
     pub async fn teardown_by_device(&self, device_id: &DeviceId) {
-        let mut sessions = self.sessions.write().await;
-        let to_remove: Vec<String> = sessions
-            .iter()
-            .filter(|(_, e)| &e.device_id == device_id)
-            .map(|(k, _)| k.clone())
-            .collect();
-        for key in to_remove {
-            if let Some(entry) = sessions.remove(&key) {
-                entry.cancel.cancel();
-                entry.handle.abort();
+        let mut inner = self.sessions.write().await;
+        if let Some(session_ids) = inner.by_device.remove(device_id) {
+            for key in session_ids {
+                if let Some(entry) = inner.by_id.remove(&key) {
+                    entry.cancel.cancel();
+                    entry.handle.abort();
+                }
             }
         }
     }
 
     /// Get the user_id for a session.
     pub async fn get_user_id(&self, session_id: &str) -> Option<UserId> {
-        let sessions = self.sessions.read().await;
-        sessions.get(session_id).map(|e| e.user_id.clone())
+        let inner = self.sessions.read().await;
+        inner.by_id.get(session_id).map(|e| e.user_id.clone())
     }
 }
 

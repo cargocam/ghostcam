@@ -2,10 +2,16 @@
 /// arrives, then yields all together as Annex-B.
 ///
 /// str0m handles FU-A fragmentation — we feed it complete access units.
+///
+/// Uses a single contiguous buffer to accumulate non-VCL NALs, avoiding
+/// per-NAL heap allocations within an access unit.
 pub struct NalAccumulator {
-    /// Buffered non-VCL NALs (without start codes).
-    pending: Vec<Vec<u8>>,
+    /// Single buffer holding pending non-VCL NALs in Annex-B format
+    /// (start code + NAL data, concatenated).
+    pending: Vec<u8>,
 }
+
+const START_CODE: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
 
 impl NalAccumulator {
     pub fn new() -> Self {
@@ -28,20 +34,16 @@ impl NalAccumulator {
         let is_vcl = nal_type == 1 || nal_type == 5;
 
         if !is_vcl {
-            // Buffer non-VCL NALs (SPS=7, PPS=8, SEI=6, etc.)
-            self.pending.push(nal.to_vec());
+            // Append non-VCL NAL in Annex-B format to the single buffer.
+            self.pending.extend_from_slice(&START_CODE);
+            self.pending.extend_from_slice(nal);
             return None;
         }
 
-        // VCL NAL: emit all pending + this NAL as one Annex-B access unit
-        let start_code = [0x00, 0x00, 0x00, 0x01];
-        let mut au = Vec::new();
-
-        for pending_nal in self.pending.drain(..) {
-            au.extend_from_slice(&start_code);
-            au.extend_from_slice(&pending_nal);
-        }
-        au.extend_from_slice(&start_code);
+        // VCL NAL: emit all pending + this NAL as one Annex-B access unit.
+        // Take ownership of the buffer and replace it with a fresh one.
+        let mut au = std::mem::take(&mut self.pending);
+        au.extend_from_slice(&START_CODE);
         au.extend_from_slice(nal);
 
         Some(au)

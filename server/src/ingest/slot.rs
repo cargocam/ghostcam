@@ -10,7 +10,7 @@ use ghostcam::types::{DeviceId, UserId};
 use ghostcam::wire::alert::StreamKind;
 use ghostcam::wire::command::Command;
 use ghostcam::wire::framing;
-use tokio::sync::{broadcast, mpsc, oneshot, RwLock};
+use tokio::sync::{broadcast, mpsc, oneshot, Notify, RwLock};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
@@ -42,11 +42,13 @@ pub struct IngestSlot {
     pub audio_tx: broadcast::Sender<AudioFrame>,
     pub telemetry_tx: broadcast::Sender<TelemetryDatagram>,
 
-    /// Latest HLS manifest (pushed by camera)
-    pub manifest: Arc<RwLock<Option<String>>>,
+    /// Pre-normalized manifest for browser serving (avoids per-request processing).
+    pub manifest_normalized: Arc<RwLock<Option<String>>>,
 
     /// Latest init segment (pushed by camera)
     pub init_segment: Arc<RwLock<Option<Bytes>>>,
+    /// Notified when init_segment is set (replaces polling in HLS handler).
+    pub init_notify: Arc<Notify>,
 
     /// Send commands to the camera
     pub commands_tx: mpsc::Sender<Command>,
@@ -98,8 +100,9 @@ impl IngestSlot {
             video_tx: video_tx.clone(),
             audio_tx: audio_tx.clone(),
             telemetry_tx: telemetry_tx.clone(),
-            manifest: Arc::new(RwLock::new(None)),
+            manifest_normalized: Arc::new(RwLock::new(None)),
             init_segment: Arc::new(RwLock::new(None)),
+            init_notify: Arc::new(Notify::new()),
             commands_tx,
             video_subscribers: Arc::new(AtomicUsize::new(0)),
             audio_subscribers: Arc::new(AtomicUsize::new(0)),
@@ -276,16 +279,19 @@ impl IngestSlot {
                         Ok(data) => {
                             match rmp_serde::from_slice::<TelemetryDatagram>(&data) {
                                 Ok(datagram) => {
-                                    // Write to Redis concurrently (non-blocking)
+                                    // Broadcast before Redis spawn so viewer latency
+                                    // is not gated behind the spawn overhead.
                                     if let Some(ref redis) = redis {
                                         let r = redis.clone();
                                         let d = device_id.clone();
                                         let dg = datagram.clone();
+                                        let _ = tx.send(datagram);
                                         tokio::spawn(async move {
                                             crate::redis::telemetry::write_telemetry(&r, &d, &dg).await;
                                         });
+                                    } else {
+                                        let _ = tx.send(datagram);
                                     }
-                                    let _ = tx.send(datagram);
                                 }
                                 Err(e) => {
                                     tracing::warn!("telemetry decode error: {e}");
@@ -411,8 +417,9 @@ pub fn test_slot(device_id: &str, user_id: &str) -> Arc<IngestSlot> {
         video_tx,
         audio_tx,
         telemetry_tx,
-        manifest: Arc::new(RwLock::new(None)),
+        manifest_normalized: Arc::new(RwLock::new(None)),
         init_segment: Arc::new(RwLock::new(None)),
+        init_notify: Arc::new(Notify::new()),
         commands_tx,
         video_subscribers: Arc::new(AtomicUsize::new(0)),
         audio_subscribers: Arc::new(AtomicUsize::new(0)),
@@ -441,8 +448,9 @@ pub fn test_slot_with_commands(
         video_tx,
         audio_tx,
         telemetry_tx,
-        manifest: Arc::new(RwLock::new(None)),
+        manifest_normalized: Arc::new(RwLock::new(None)),
         init_segment: Arc::new(RwLock::new(None)),
+        init_notify: Arc::new(Notify::new()),
         commands_tx,
         video_subscribers: Arc::new(AtomicUsize::new(0)),
         audio_subscribers: Arc::new(AtomicUsize::new(0)),

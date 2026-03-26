@@ -100,7 +100,7 @@ impl EgressHandle {
             .ok_or_else(|| anyhow::anyhow!("no ice-ufrag in SDP answer"))?;
 
         // 6. Register with the shared socket — get a receiver for incoming packets.
-        let udp_rx = shared_socket.register(local_ufrag.clone()).await;
+        let udp_rx = shared_socket.register(local_ufrag.clone());
 
         // 7. Find the video and audio mids from the answer SDP.
         let (video_mid, audio_mid, telemetry_channel) =
@@ -157,9 +157,7 @@ impl EgressHandle {
                         let _ = self.shared_socket.send_to(&transmit.contents, dest).await;
                         // Register the destination as a fast-path source for future
                         // packets arriving from that address.
-                        self.shared_socket
-                            .connect(dest, self.local_ufrag.clone())
-                            .await;
+                        self.shared_socket.connect(dest, self.local_ufrag.clone());
                         polls_since_yield += 1;
                         if polls_since_yield >= 64 {
                             polls_since_yield = 0;
@@ -250,7 +248,7 @@ impl EgressHandle {
         }
 
         // Unregister from the shared socket.
-        self.shared_socket.unregister(&self.local_ufrag).await;
+        self.shared_socket.unregister(&self.local_ufrag);
 
         // Decrement subscriber counts on exit.
         let _ = update_subscriber_demand(&self.slot, Some(self.client_mode), ClientMode::Map).await;

@@ -15,7 +15,7 @@ use super::auth::AuthUser;
 use super::state::AppState;
 use crate::ingest::slot::SegmentState;
 
-fn normalize_manifest_for_browser(manifest: &str) -> String {
+pub(crate) fn normalize_manifest_for_browser(manifest: &str) -> String {
     manifest
         .lines()
         .map(|line| {
@@ -104,11 +104,11 @@ pub async fn get_manifest(
         _ => return StatusCode::NOT_FOUND.into_response(),
     }
 
-    // Try live slot first
+    // Try live slot first (pre-normalized cache avoids per-request processing)
     if let Some(slot) = state.registry.get_slot(&device_id).await {
-        let manifest = slot.manifest.read().await;
-        if let Some(m) = manifest.as_ref() {
-            return manifest_response(normalize_manifest_for_browser(m));
+        let normalized = slot.manifest_normalized.read().await;
+        if let Some(m) = normalized.as_ref() {
+            return manifest_response(m.clone());
         }
     }
 
@@ -149,6 +149,14 @@ pub async fn get_init(
         None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
 
+    // Register the waiter *before* the cache check so notify_waiters()
+    // cannot fire in the gap between the check and the await.
+    // enable() registers immediately without polling, so the waiter is
+    // visible to notify_waiters() even before we reach the await point.
+    let notified = slot.init_notify.notified();
+    tokio::pin!(notified);
+    notified.as_mut().enable();
+
     // Check if init segment is already cached
     {
         let init = slot.init_segment.read().await;
@@ -164,18 +172,19 @@ pub async fn get_init(
         })
         .await;
 
-    // Wait for init segment to arrive (with timeout)
-    let deadline = Duration::from_secs(10);
-    let start = tokio::time::Instant::now();
-    loop {
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        let init = slot.init_segment.read().await;
-        if let Some(data) = init.as_ref() {
-            return init_response(data.clone());
+    // Wait for init segment to arrive (event-driven, no polling)
+    match timeout(Duration::from_secs(10), &mut notified).await {
+        Ok(_) => {
+            let init = slot.init_segment.read().await;
+            match init.as_ref() {
+                Some(data) => init_response(data.clone()),
+                None => {
+                    tracing::warn!(device_id = %device_id, "init_notify fired but init_segment is None");
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
+            }
         }
-        if start.elapsed() > deadline {
-            return StatusCode::GATEWAY_TIMEOUT.into_response();
-        }
+        Err(_) => StatusCode::GATEWAY_TIMEOUT.into_response(),
     }
 }
 
@@ -283,9 +292,9 @@ pub async fn get_coverage(
     let slot = state.registry.get_slot(&device_id).await;
     let online = slot.is_some();
 
-    // Read manifest: live slot → Redis fallback
+    // Read manifest: live slot (pre-normalized) → Redis fallback
     let manifest_text = if let Some(ref slot) = slot {
-        slot.manifest.read().await.clone()
+        slot.manifest_normalized.read().await.clone()
     } else {
         None
     };
