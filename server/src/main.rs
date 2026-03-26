@@ -114,8 +114,7 @@ async fn main() -> anyhow::Result<()> {
     // --- Redis (optional) ---
     let cancel = CancellationToken::new();
     let (redis, telemetry_batcher) = if let Some(url) = &redis_url {
-        let mgr = Arc::new(RedisManager::new(url).await);
-        // No manual reconnect loop needed — ConnectionManager handles reconnection.
+        let mgr = RedisManager::new(url, cancel.clone()).await;
         let batcher = Arc::new(TelemetryBatcher::spawn(mgr.clone(), cancel.clone()));
         crate::redis::purge::spawn_telemetry_purge(mgr.clone(), cancel.clone());
         crate::redis::revocation::spawn_revocation_refresh(
@@ -123,7 +122,6 @@ async fn main() -> anyhow::Result<()> {
             revocation_cache.clone(),
             cancel.clone(),
         );
-        tracing::info!("redis connected");
         (Some(mgr), Some(batcher))
     } else {
         tracing::info!("redis not configured, telemetry history disabled");
@@ -189,8 +187,11 @@ async fn main() -> anyhow::Result<()> {
 
     let http_cancel = cancel.clone();
     let http_handle = tokio::spawn(async move {
-        axum::serve(listener, router)
-            .with_graceful_shutdown(async move { http_cancel.cancelled().await })
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { http_cancel.cancelled().await })
             .await
     });
 

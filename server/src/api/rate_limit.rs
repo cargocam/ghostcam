@@ -1,8 +1,8 @@
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use axum::extract::State;
-use axum::http::{Request, StatusCode};
+use axum::extract::{ConnectInfo, State};
+use axum::http::{HeaderMap, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use governor::clock::DefaultClock;
@@ -15,6 +15,33 @@ pub type KeyedLimiter<K> = Arc<RateLimiter<K, DefaultKeyedStateStore<K>, Default
 /// Build a keyed rate limiter.
 fn keyed_limiter<K: Clone + Eq + std::hash::Hash>(quota: Quota) -> KeyedLimiter<K> {
     Arc::new(RateLimiter::keyed(quota))
+}
+
+/// Extract client IP from request, checking X-Forwarded-For and X-Real-IP
+/// headers before falling back to the socket address from ConnectInfo.
+fn client_ip(headers: &HeaderMap, extensions: &axum::http::Extensions) -> IpAddr {
+    // 1. X-Forwarded-For (first entry is the original client)
+    if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
+        if let Some(first) = xff.split(',').next() {
+            if let Ok(ip) = first.trim().parse::<IpAddr>() {
+                return ip;
+            }
+        }
+    }
+
+    // 2. X-Real-IP
+    if let Some(real_ip) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
+        if let Ok(ip) = real_ip.trim().parse::<IpAddr>() {
+            return ip;
+        }
+    }
+
+    // 3. ConnectInfo socket address
+    if let Some(addr) = extensions.get::<ConnectInfo<std::net::SocketAddr>>() {
+        return addr.0.ip();
+    }
+
+    IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED)
 }
 
 // ---- Login rate limiter (keyed by client IP) ----
@@ -38,11 +65,7 @@ pub async fn login_rate_limit(
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    let ip = req
-        .extensions()
-        .get::<std::net::SocketAddr>()
-        .map(|a| a.ip())
-        .unwrap_or(IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED));
+    let ip = client_ip(req.headers(), req.extensions());
 
     match limiter.0.check_key(&ip) {
         Ok(_) => next.run(req).await,
@@ -52,10 +75,7 @@ pub async fn login_rate_limit(
                 .as_secs();
             (
                 StatusCode::TOO_MANY_REQUESTS,
-                [
-                    ("retry-after", wait.to_string()),
-                    ("x-ratelimit-after", wait.to_string()),
-                ],
+                [("retry-after", wait.to_string())],
                 "Too Many Requests",
             )
                 .into_response()
@@ -98,10 +118,7 @@ pub async fn api_rate_limit(
                 .as_secs();
             (
                 StatusCode::TOO_MANY_REQUESTS,
-                [
-                    ("retry-after", wait.to_string()),
-                    ("x-ratelimit-after", wait.to_string()),
-                ],
+                [("retry-after", wait.to_string())],
                 "Too Many Requests",
             )
                 .into_response()

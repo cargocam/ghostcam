@@ -42,12 +42,6 @@ pub async fn create_session(
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 
-    // Enforce per-user session limit
-    let session_count = state.sessions.count_by_user(&user.user_id).await;
-    if session_count >= ghostcam::config::MAX_SESSIONS_PER_USER {
-        return (StatusCode::TOO_MANY_REQUESTS, "too many active sessions").into_response();
-    }
-
     // Look up slot
     let slot = match state.registry.get_slot(&device_id).await {
         Some(s) => s,
@@ -88,11 +82,14 @@ pub async fn create_session(
         }
     });
 
-    // Register session
-    state
+    // Register session (enforces per-user limit atomically under write lock)
+    if !state
         .sessions
         .register(session_id.clone(), device_id, user.user_id, cancel, handle)
-        .await;
+        .await
+    {
+        return (StatusCode::TOO_MANY_REQUESTS, "too many active sessions").into_response();
+    }
 
     Json(WatchResponse {
         session_id,

@@ -44,40 +44,6 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-/// Write a single telemetry datagram to Redis.
-/// Retained for direct writes (e.g. tests); live path uses TelemetryBatcher.
-#[allow(dead_code)]
-pub async fn write_telemetry(
-    redis: &RedisManager,
-    device_id: &DeviceId,
-    datagram: &TelemetryDatagram,
-) {
-    let Some(mut conn) = redis.get_conn() else {
-        tracing::debug!(device_id = %device_id, "redis unavailable — dropping telemetry write");
-        return;
-    };
-
-    let key = format!("{}{}", TELEMETRY_KEY_PREFIX, device_id.0);
-    let server_ts = now_ms();
-    let min_id = server_ts.saturating_sub(RETENTION_MS);
-    let fields = datagram_to_fields(datagram, server_ts);
-
-    let result: Result<String, redis::RedisError> = redis::cmd("XADD")
-        .arg(&key)
-        .arg("MINID")
-        .arg("~")
-        .arg(min_id)
-        .arg("*")
-        .arg(&fields)
-        .query_async(&mut conn)
-        .await;
-
-    if let Err(e) = result {
-        redis.record_write_error();
-        tracing::debug!(device_id = %device_id, "redis telemetry write error: {e}");
-    }
-}
-
 /// Write a batch of buffered telemetry datagrams to Redis.
 pub async fn write_telemetry_batch(
     redis: &RedisManager,

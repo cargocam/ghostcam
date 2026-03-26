@@ -40,6 +40,8 @@ impl SessionManager {
     }
 
     /// Register a new session. The provided task handle is the egress event loop.
+    /// Returns `false` if the per-user session limit is exceeded (caller should
+    /// return 429 and clean up the egress handle).
     pub async fn register(
         &self,
         session_id: String,
@@ -47,8 +49,15 @@ impl SessionManager {
         user_id: UserId,
         cancel: CancellationToken,
         handle: JoinHandle<()>,
-    ) {
+    ) -> bool {
         let mut inner = self.sessions.write().await;
+
+        // Enforce per-user session limit under the write lock to avoid TOCTOU races.
+        let user_count = inner.by_user.get(&user_id).map(|s| s.len()).unwrap_or(0);
+        if user_count >= ghostcam::config::MAX_SESSIONS_PER_USER {
+            return false;
+        }
+
         inner
             .by_device
             .entry(device_id.clone())
@@ -68,6 +77,7 @@ impl SessionManager {
                 handle,
             },
         );
+        true
     }
 
     /// Tear down a session by ID.
@@ -114,12 +124,6 @@ impl SessionManager {
                 }
             }
         }
-    }
-
-    /// Count the number of active sessions for a user.
-    pub async fn count_by_user(&self, user_id: &UserId) -> usize {
-        let inner = self.sessions.read().await;
-        inner.by_user.get(user_id).map(|s| s.len()).unwrap_or(0)
     }
 
     /// Get the user_id for a session.
