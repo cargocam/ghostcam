@@ -137,6 +137,20 @@ async fn main() -> anyhow::Result<()> {
     webrtc_socket.clone().spawn_dispatch();
     tracing::info!(port = webrtc_port, "WebRTC UDP listening");
 
+    // --- Audit logger ---
+    let audit_hmac_key =
+        std::env::var("GHOSTCAM_HMAC_KEY").unwrap_or_else(|_| "dev-hmac-key".to_string());
+    let audit_log_path = std::path::PathBuf::from(&data_dir).join("audit.jsonl");
+    let audit = Arc::new(crate::audit::AuditLogger::start_with_db(
+        &audit_hmac_key,
+        audit_log_path,
+        db.clone(),
+    ));
+    audit.log(crate::audit::AuditEvent::ServerStarted {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    });
+    tracing::info!("audit logger started");
+
     // --- Shared state ---
     let hmac_secret = db.get_hmac_secret().await?;
     let registry = Arc::new(RoutingRegistry::new());
@@ -152,6 +166,7 @@ async fn main() -> anyhow::Result<()> {
         ca: ca.clone(),
         revocation_cache: revocation_cache.clone(),
         hmac_secret,
+        audit: audit.clone(),
         public_ip_override,
         enrollment_addr,
         webrtc_socket,
@@ -173,6 +188,7 @@ async fn main() -> anyhow::Result<()> {
         redis.clone(),
         telemetry_batcher,
         sse_bus.clone(),
+        audit.clone(),
         quic_cancel,
     ));
 

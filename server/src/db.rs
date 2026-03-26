@@ -1,7 +1,7 @@
 use crate::auth;
 use crate::db_trait::{
-    ApiTokenRecord, CameraRecord, CameraUpdate, Database, NewApiToken, NewCameraRecord,
-    NewEnrollmentToken, NewSession, SessionRecord, UserRecord, UserUpdate,
+    ApiTokenRecord, AuditLogRecord, CameraRecord, CameraUpdate, Database, NewApiToken,
+    NewCameraRecord, NewEnrollmentToken, NewSession, SessionRecord, UserRecord, UserUpdate,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -481,6 +481,10 @@ impl Database for PostgresDatabase {
             .execute(&self.pool)
             .await
             .context("failed to run migration 002")?;
+        sqlx::raw_sql(include_str!("../migrations/003_audit_log.sql"))
+            .execute(&self.pool)
+            .await
+            .context("failed to run migration 003")?;
         Ok(())
     }
 
@@ -550,6 +554,70 @@ impl Database for PostgresDatabase {
             verified_at: r.get::<Option<i64>, _>("verified_at").map(|v| v as u64),
             disabled_at: r.get::<Option<i64>, _>("disabled_at").map(|v| v as u64),
         }))
+    }
+
+    // --- Audit log ---
+
+    async fn insert_audit_entry(
+        &self,
+        timestamp: &str,
+        event_type: &str,
+        event_data: &serde_json::Value,
+        hmac: &str,
+    ) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO audit_log (timestamp, event_type, event_data, hmac) VALUES ($1::timestamptz, $2, $3, $4)",
+        )
+        .bind(timestamp)
+        .bind(event_type)
+        .bind(event_data)
+        .bind(hmac)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn query_audit_log(
+        &self,
+        event_type: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<AuditLogRecord>, i64)> {
+        let rows = sqlx::query(
+            "SELECT id, timestamp::text, event_type, event_data, hmac, \
+             COUNT(*) OVER() AS total_count \
+             FROM audit_log \
+             WHERE ($1::text IS NULL OR event_type = $1) \
+             AND ($2::timestamptz IS NULL OR timestamp >= $2::timestamptz) \
+             AND ($3::timestamptz IS NULL OR timestamp <= $3::timestamptz) \
+             ORDER BY timestamp DESC \
+             LIMIT $4 OFFSET $5",
+        )
+        .bind(event_type)
+        .bind(since)
+        .bind(until)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let total = rows
+            .first()
+            .map(|r| r.get::<i64, _>("total_count"))
+            .unwrap_or(0);
+        let entries = rows
+            .into_iter()
+            .map(|r| AuditLogRecord {
+                id: r.get("id"),
+                timestamp: r.get("timestamp"),
+                event_type: r.get("event_type"),
+                event_data: r.get("event_data"),
+                hmac: r.get("hmac"),
+            })
+            .collect();
+        Ok((entries, total))
     }
 
     async fn update_user(&self, user_id: &UserId, update: &UserUpdate) -> Result<()> {

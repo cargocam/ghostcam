@@ -14,6 +14,7 @@ Configured entirely via environment variables — no config file.
 | `GHOSTCAM_HTTP_PORT` | `3000` | HTTP API + static assets |
 | `GHOSTCAM_QUIC_PORT` | `4433` | QUIC ingest for cameras |
 | `GHOSTCAM_REDIS_URL` | _(none)_ | Redis connection URL. If unset or empty, telemetry storage and the telemetry API are disabled. |
+| `GHOSTCAM_HMAC_KEY` | `dev-hmac-key` | Secret key for HMAC-SHA256 audit log signing. Set to a strong random value in production. |
 
 On first start the server creates `GHOSTCAM_DATA_DIR`, runs PostgreSQL migrations, generates a CA keypair, self-signs a server TLS certificate, and prints an initial password for the `admin` account.
 

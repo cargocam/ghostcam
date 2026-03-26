@@ -99,6 +99,17 @@ pub struct UserUpdate {
     pub password_hash: Option<String>,
 }
 
+/// An audit log record from the database.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct AuditLogRecord {
+    pub id: i64,
+    pub timestamp: String,
+    pub event_type: String,
+    pub event_data: serde_json::Value,
+    pub hmac: String,
+}
+
 /// Async database trait. PostgreSQL implementation in db.rs.
 #[async_trait]
 pub trait Database: Send + Sync + 'static {
@@ -161,6 +172,25 @@ pub trait Database: Send + Sync + 'static {
     async fn get_user(&self, user_id: &UserId) -> Result<Option<UserRecord>>;
     #[allow(dead_code)]
     async fn update_user(&self, user_id: &UserId, update: &UserUpdate) -> Result<()>;
+
+    // --- Audit log ---
+    async fn insert_audit_entry(
+        &self,
+        timestamp: &str,
+        event_type: &str,
+        event_data: &serde_json::Value,
+        hmac: &str,
+    ) -> Result<()>;
+
+    /// Returns `(entries, total)` in a single query using `COUNT(*) OVER()`.
+    async fn query_audit_log(
+        &self,
+        event_type: Option<&str>,
+        since: Option<&str>,
+        until: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<AuditLogRecord>, i64)>;
 }
 
 #[cfg(test)]
