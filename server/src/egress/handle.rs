@@ -157,8 +157,7 @@ impl EgressHandle {
                         let _ = self.shared_socket.send_to(&transmit.contents, dest).await;
                         // Register the destination as a fast-path source for future
                         // packets arriving from that address.
-                        self.shared_socket
-                            .connect(dest, self.local_ufrag.clone());
+                        self.shared_socket.connect(dest, self.local_ufrag.clone());
                         polls_since_yield += 1;
                         if polls_since_yield >= 64 {
                             polls_since_yield = 0;
