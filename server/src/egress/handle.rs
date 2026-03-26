@@ -266,18 +266,22 @@ impl EgressHandle {
         if nals.is_empty() {
             // Treat as a single raw NAL
             if let Some(au) = self.nal_acc.push(&frame.data) {
-                self.write_video_au(&au);
+                self.write_video_au(au);
             }
         } else {
             for nal in nals {
                 if let Some(au) = self.nal_acc.push(nal) {
-                    self.write_video_au(&au);
+                    self.write_video_au(au);
                 }
             }
         }
     }
 
-    fn write_video_au(&mut self, au: &[u8]) {
+    /// Write an access unit to the str0m RTP writer.
+    ///
+    /// Takes `Vec<u8>` by value because str0m's `Writer::write()` consumes
+    /// a `Vec<u8>`, so passing ownership avoids a `.to_vec()` copy.
+    fn write_video_au(&mut self, au: Vec<u8>) {
         let now = std::time::Instant::now();
         let elapsed_us = self.rtp_start.elapsed().as_micros() as u64;
         let rtp_time = MediaTime::from_90khz((elapsed_us * 90 + 500) / 1000);
@@ -287,10 +291,11 @@ impl EgressHandle {
             .writer(self.video_mid)
             .and_then(|w| w.payload_params().next().map(|pp| pp.pt()));
         if let Some(pt) = pt {
+            let au_len = au.len();
             if let Some(writer) = self.rtc.writer(self.video_mid) {
-                match writer.write(pt, now, rtp_time, au.to_vec()) {
+                match writer.write(pt, now, rtp_time, au) {
                     Ok(_) => {
-                        tracing::trace!(session = %self.session_id, au_len = au.len(), "wrote video AU to str0m");
+                        tracing::trace!(session = %self.session_id, au_len, "wrote video AU to str0m");
                     }
                     Err(e) => {
                         tracing::debug!(session = %self.session_id, "str0m write error: {e}");

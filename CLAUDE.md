@@ -130,7 +130,7 @@ Camera presence is delivered via **Server-Sent Events** (`/events`). Each camera
 ## ghostcam Library Structure
 
 ```
-config.rs     Port/size constants (QUIC_PORT=4433, HTTP_PORT=3000, BROADCAST_CAPACITY=2048, ...)
+config.rs     Port/size/limit constants (QUIC_PORT, HTTP_PORT, BROADCAST_CAPACITY, QUIC_MAX_*, MAX_REQUEST_BODY_BYTES, MAX_SESSIONS_PER_USER, TELEMETRY_BATCH_INTERVAL_SECS, ...)
 types.rs      DeviceId, UserId, SessionId, TokenId, CertFingerprint, Seq newtypes
 telemetry.rs  TelemetryDatagram — sparse MessagePack payload (cpu, temp, mem, gps, ...)
 pki.rs        generate_key_pair(), create_self_signed_ca() — rcgen 0.13 wrappers
@@ -167,11 +167,11 @@ db.rs         PostgresDatabase — sqlx PostgreSQL implementation
 auth.rs       Token hashing, HMAC, session validation
 audit.rs      AuditLogger — HMAC-SHA256 signed audit trail
 sse.rs        SseEventBus — per-user broadcast for Server-Sent Events
-api/          Axum routes (see server/src/api/README.md)
+api/          Axum routes, rate limiting (see server/src/api/README.md)
 ingest/       QUIC accept loop, IngestSlot, RoutingRegistry (see server/src/ingest/README.md)
 egress/       EgressHandle, SessionManager, RTP packetizer (see server/src/egress/README.md)
 pki/          CA bootstrap, device enrollment, revocation (see server/src/pki/README.md)
-redis/        Telemetry write/query via Redis Streams (see server/src/redis/README.md)
+redis/        Telemetry write/query via Redis Streams, ConnectionManager, TelemetryBatcher (see server/src/redis/README.md)
 ```
 
 ## Viewer Structure
@@ -310,7 +310,8 @@ GET    /readyz                             200 when ready (no auth)
 | `rustls` | 0.23 | TLS for QUIC |
 | `rcgen` | 0.13 | Cert generation. `KeyPair::generate()`, `CertificateParams::self_signed(&kp)` |
 | `sqlx` | 0.8 | PostgreSQL async |
-| `redis` | 0.27 | Redis Streams for telemetry |
+| `redis` | 0.27 | Redis Streams for telemetry (with `connection-manager` feature) |
+| `governor` | 0.10 | Token-bucket rate limiting |
 | `argon2` | 0.5 | Password hashing |
 | `rmp-serde` | 1 | MessagePack for telemetry wire format |
 | `tokio` | 1 | Async runtime |

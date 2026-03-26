@@ -16,6 +16,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::frames::{AudioFrame, InboundStreamTag, VideoFrame};
 use crate::redis::connection::RedisManager;
+use crate::redis::telemetry::TelemetryBatcher;
 
 /// State of a segment upload for request coalescing.
 #[derive(Debug)]
@@ -66,6 +67,11 @@ pub struct IngestSlot {
     /// Redis manager for telemetry persistence (None in tests without Redis)
     pub redis: Option<Arc<RedisManager>>,
 
+    /// Telemetry batcher for batched Redis writes (None in tests without Redis).
+    /// Stored here for lifetime management; the batcher Arc is passed to telemetry_reader.
+    #[allow(dead_code)]
+    pub telemetry_batcher: Option<Arc<TelemetryBatcher>>,
+
     /// Cancellation token for coordinated teardown
     cancel: CancellationToken,
 }
@@ -85,6 +91,7 @@ impl IngestSlot {
         alerts_stream: quinn::RecvStream,
         commands_stream: quinn::SendStream,
         redis: Option<Arc<RedisManager>>,
+        telemetry_batcher: Option<Arc<TelemetryBatcher>>,
     ) -> (Arc<Self>, JoinHandle<()>) {
         let (video_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let (audio_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
@@ -109,6 +116,7 @@ impl IngestSlot {
             seq: Arc::new(AtomicU64::new(1)),
             segments: Arc::new(RwLock::new(HashMap::new())),
             redis: redis.clone(),
+            telemetry_batcher: telemetry_batcher.clone(),
             cancel: cancel.clone(),
         });
 
@@ -127,7 +135,7 @@ impl IngestSlot {
                 slot_clone.device_id.clone(),
                 telemetry_tx,
                 conn.clone(),
-                redis,
+                telemetry_batcher,
                 cancel.clone(),
             ));
             let command_task = tokio::spawn(Self::command_writer(
@@ -227,6 +235,8 @@ impl IngestSlot {
                 result = framing::read_frame(&mut stream) => {
                     match result {
                         Ok(Some(data)) => {
+                            // Bytes::from(Vec<u8>) is zero-copy: it takes ownership of the
+                            // Vec's heap allocation without copying the buffer contents.
                             let _ = tx.send(VideoFrame { data: Bytes::from(data) });
                         }
                         Ok(None) => break,
@@ -251,6 +261,7 @@ impl IngestSlot {
                 result = framing::read_frame(&mut stream) => {
                     match result {
                         Ok(Some(data)) => {
+                            // Bytes::from(Vec<u8>) is zero-copy: see video_reader comment.
                             let _ = tx.send(AudioFrame { data: Bytes::from(data) });
                         }
                         Ok(None) => break,
@@ -268,7 +279,7 @@ impl IngestSlot {
         device_id: DeviceId,
         tx: broadcast::Sender<TelemetryDatagram>,
         connection: quinn::Connection,
-        redis: Option<Arc<RedisManager>>,
+        batcher: Option<Arc<TelemetryBatcher>>,
         cancel: CancellationToken,
     ) {
         loop {
@@ -279,19 +290,13 @@ impl IngestSlot {
                         Ok(data) => {
                             match rmp_serde::from_slice::<TelemetryDatagram>(&data) {
                                 Ok(datagram) => {
-                                    // Broadcast before Redis spawn so viewer latency
-                                    // is not gated behind the spawn overhead.
-                                    if let Some(ref redis) = redis {
-                                        let r = redis.clone();
-                                        let d = device_id.clone();
-                                        let dg = datagram.clone();
-                                        let _ = tx.send(datagram);
-                                        tokio::spawn(async move {
-                                            crate::redis::telemetry::write_telemetry(&r, &d, &dg).await;
-                                        });
-                                    } else {
-                                        let _ = tx.send(datagram);
+                                    // Broadcast to viewers immediately (low latency).
+                                    // Enqueue to batcher for batched Redis persistence
+                                    // (avoids per-datagram tokio::spawn + Redis round-trip).
+                                    if let Some(ref batcher) = batcher {
+                                        batcher.send(device_id.clone(), datagram.clone());
                                     }
+                                    let _ = tx.send(datagram);
                                 }
                                 Err(e) => {
                                     tracing::warn!("telemetry decode error: {e}");
@@ -426,6 +431,7 @@ pub fn test_slot(device_id: &str, user_id: &str) -> Arc<IngestSlot> {
         seq: Arc::new(AtomicU64::new(1)),
         segments: Arc::new(RwLock::new(HashMap::new())),
         redis: None,
+        telemetry_batcher: None,
         cancel: CancellationToken::new(),
     })
 }
@@ -457,6 +463,7 @@ pub fn test_slot_with_commands(
         seq: Arc::new(AtomicU64::new(1)),
         segments: Arc::new(RwLock::new(HashMap::new())),
         redis: None,
+        telemetry_batcher: None,
         cancel: CancellationToken::new(),
     });
 

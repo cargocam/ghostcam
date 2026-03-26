@@ -25,8 +25,8 @@ The retention window is controlled by `ghostcam::config::TELEMETRY_RETENTION_SEC
 
 | File | Purpose |
 |------|---------|
-| `connection.rs` | `RedisManager` — connection pool, `Option` wrapper (disabled when no URL configured) |
-| `telemetry.rs` | `write_telemetry` / `write_telemetry_batch` — XADD a `TelemetryDatagram` to the camera's stream with inline MINID trim |
+| `connection.rs` | `RedisManager` — wraps `redis::aio::ConnectionManager` (auto-reconnecting, Clone, no lock needed) |
+| `telemetry.rs` | `write_telemetry` / `write_telemetry_batch` — XADD a `TelemetryDatagram`; `TelemetryBatcher` — accumulates entries and flushes as a Redis pipeline every 5 seconds |
 | `telemetry_query.rs` | `query_range` — XRANGE/XREVRANGE with time bounds and limit; `query_latest` — XREVRANGE count 1 |
 | `telemetry_api.rs` | Axum handlers: `handle_range` (query params → JSON array), `handle_latest` (single entry) |
 | `manifest.rs` | Store and serve HLS manifests via Redis for cross-node HLS serving |

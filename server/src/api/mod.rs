@@ -2,6 +2,7 @@ pub mod auth;
 pub mod cameras;
 pub mod health;
 pub mod hls;
+pub mod rate_limit;
 pub mod routes;
 pub mod sse;
 pub mod state;

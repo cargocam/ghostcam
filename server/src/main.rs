@@ -26,6 +26,7 @@ use crate::ingest::registry::RoutingRegistry;
 use crate::pki::bootstrap::bootstrap_pki;
 use crate::pki::revocation::RevocationCache;
 use crate::redis::connection::RedisManager;
+use crate::redis::telemetry::TelemetryBatcher;
 use crate::sse::SseEventBus;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::CorsLayer;
@@ -112,20 +113,19 @@ async fn main() -> anyhow::Result<()> {
 
     // --- Redis (optional) ---
     let cancel = CancellationToken::new();
-    let redis = if let Some(url) = &redis_url {
-        let mgr = Arc::new(RedisManager::new(url).await);
-        mgr.spawn_reconnect_loop(cancel.clone());
+    let (redis, telemetry_batcher) = if let Some(url) = &redis_url {
+        let mgr = RedisManager::new(url, cancel.clone()).await;
+        let batcher = Arc::new(TelemetryBatcher::spawn(mgr.clone(), cancel.clone()));
         crate::redis::purge::spawn_telemetry_purge(mgr.clone(), cancel.clone());
         crate::redis::revocation::spawn_revocation_refresh(
             mgr.clone(),
             revocation_cache.clone(),
             cancel.clone(),
         );
-        tracing::info!("redis connected");
-        Some(mgr)
+        (Some(mgr), Some(batcher))
     } else {
         tracing::info!("redis not configured, telemetry history disabled");
-        None
+        (None, None)
     };
 
     // --- Shared WebRTC UDP socket ---
@@ -171,6 +171,7 @@ async fn main() -> anyhow::Result<()> {
         ca.clone(),
         revocation_cache.clone(),
         redis.clone(),
+        telemetry_batcher,
         sse_bus.clone(),
         quic_cancel,
     ));
@@ -186,9 +187,12 @@ async fn main() -> anyhow::Result<()> {
 
     let http_cancel = cancel.clone();
     let http_handle = tokio::spawn(async move {
-        axum::serve(listener, router)
-            .with_graceful_shutdown(async move { http_cancel.cancelled().await })
-            .await
+        axum::serve(
+            listener,
+            router.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        )
+        .with_graceful_shutdown(async move { http_cancel.cancelled().await })
+        .await
     });
 
     // --- Shutdown ---

@@ -24,6 +24,8 @@ struct SessionInner {
     by_id: HashMap<String, SessionEntry>,
     /// Reverse index: DeviceId → set of session IDs.
     by_device: HashMap<DeviceId, HashSet<String>>,
+    /// Reverse index: UserId → set of session IDs (for per-user limits).
+    by_user: HashMap<UserId, HashSet<String>>,
 }
 
 impl SessionManager {
@@ -32,11 +34,14 @@ impl SessionManager {
             sessions: RwLock::new(SessionInner {
                 by_id: HashMap::new(),
                 by_device: HashMap::new(),
+                by_user: HashMap::new(),
             }),
         }
     }
 
     /// Register a new session. The provided task handle is the egress event loop.
+    /// Returns `false` if the per-user session limit is exceeded (caller should
+    /// return 429 and clean up the egress handle).
     pub async fn register(
         &self,
         session_id: String,
@@ -44,11 +49,23 @@ impl SessionManager {
         user_id: UserId,
         cancel: CancellationToken,
         handle: JoinHandle<()>,
-    ) {
+    ) -> bool {
         let mut inner = self.sessions.write().await;
+
+        // Enforce per-user session limit under the write lock to avoid TOCTOU races.
+        let user_count = inner.by_user.get(&user_id).map(|s| s.len()).unwrap_or(0);
+        if user_count >= ghostcam::config::MAX_SESSIONS_PER_USER {
+            return false;
+        }
+
         inner
             .by_device
             .entry(device_id.clone())
+            .or_default()
+            .insert(session_id.clone());
+        inner
+            .by_user
+            .entry(user_id.clone())
             .or_default()
             .insert(session_id.clone());
         inner.by_id.insert(
@@ -60,17 +77,25 @@ impl SessionManager {
                 handle,
             },
         );
+        true
     }
 
     /// Tear down a session by ID.
     pub async fn teardown(&self, session_id: &str) -> bool {
         let mut inner = self.sessions.write().await;
         if let Some(entry) = inner.by_id.remove(session_id) {
-            // Remove from reverse index.
+            // Remove from device reverse index.
             if let Some(ids) = inner.by_device.get_mut(&entry.device_id) {
                 ids.remove(session_id);
                 if ids.is_empty() {
                     inner.by_device.remove(&entry.device_id);
+                }
+            }
+            // Remove from user reverse index.
+            if let Some(ids) = inner.by_user.get_mut(&entry.user_id) {
+                ids.remove(session_id);
+                if ids.is_empty() {
+                    inner.by_user.remove(&entry.user_id);
                 }
             }
             entry.cancel.cancel();
@@ -87,6 +112,13 @@ impl SessionManager {
         if let Some(session_ids) = inner.by_device.remove(device_id) {
             for key in session_ids {
                 if let Some(entry) = inner.by_id.remove(&key) {
+                    // Remove from user reverse index.
+                    if let Some(ids) = inner.by_user.get_mut(&entry.user_id) {
+                        ids.remove(&key);
+                        if ids.is_empty() {
+                            inner.by_user.remove(&entry.user_id);
+                        }
+                    }
                     entry.cancel.cancel();
                     entry.handle.abort();
                 }

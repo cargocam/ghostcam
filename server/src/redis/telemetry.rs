@@ -44,45 +44,13 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-/// Write a single telemetry datagram to Redis.
-pub async fn write_telemetry(
-    redis: &RedisManager,
-    device_id: &DeviceId,
-    datagram: &TelemetryDatagram,
-) {
-    let Some(mut conn) = redis.get_conn().await else {
-        tracing::debug!(device_id = %device_id, "redis unavailable — dropping telemetry write");
-        return;
-    };
-
-    let key = format!("{}{}", TELEMETRY_KEY_PREFIX, device_id.0);
-    let server_ts = now_ms();
-    let min_id = server_ts.saturating_sub(RETENTION_MS);
-    let fields = datagram_to_fields(datagram, server_ts);
-
-    let result: Result<String, redis::RedisError> = redis::cmd("XADD")
-        .arg(&key)
-        .arg("MINID")
-        .arg("~")
-        .arg(min_id)
-        .arg("*")
-        .arg(&fields)
-        .query_async(&mut conn)
-        .await;
-
-    if let Err(e) = result {
-        redis.record_write_error();
-        tracing::debug!(device_id = %device_id, "redis telemetry write error: {e}");
-    }
-}
-
 /// Write a batch of buffered telemetry datagrams to Redis.
 pub async fn write_telemetry_batch(
     redis: &RedisManager,
     device_id: &DeviceId,
     datagrams: &[TelemetryDatagram],
 ) {
-    let Some(mut conn) = redis.get_conn().await else {
+    let Some(mut conn) = redis.get_conn() else {
         tracing::debug!(device_id = %device_id, "redis unavailable — dropping telemetry batch");
         return;
     };
@@ -193,6 +161,120 @@ pub fn fields_to_entry(fields: &[(String, String)]) -> Result<TelemetryEntry> {
     }
 
     Ok(entry)
+}
+
+/// Batches telemetry writes into periodic Redis pipeline flushes.
+///
+/// Instead of spawning a `tokio::spawn` per datagram, callers send entries
+/// into an mpsc channel. A background task accumulates them and flushes every
+/// `TELEMETRY_BATCH_INTERVAL_SECS` as a single pipeline, reducing Redis
+/// round-trips and task spawn overhead.
+pub struct TelemetryBatcher {
+    tx: tokio::sync::mpsc::Sender<(DeviceId, TelemetryDatagram)>,
+}
+
+impl TelemetryBatcher {
+    /// Create a batcher and spawn the background flush task.
+    pub fn spawn(
+        redis: std::sync::Arc<RedisManager>,
+        cancel: tokio_util::sync::CancellationToken,
+    ) -> Self {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<(DeviceId, TelemetryDatagram)>(4096);
+        let interval_duration =
+            std::time::Duration::from_secs(ghostcam::config::TELEMETRY_BATCH_INTERVAL_SECS);
+
+        tokio::spawn(async move {
+            let mut buffer: Vec<(DeviceId, TelemetryDatagram)> = Vec::with_capacity(256);
+            let mut interval = tokio::time::interval(interval_duration);
+            // The first tick fires immediately; skip it so we accumulate before the first flush.
+            interval.tick().await;
+
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        // Drain remaining entries before shutdown.
+                        while let Ok(item) = rx.try_recv() {
+                            buffer.push(item);
+                        }
+                        if !buffer.is_empty() {
+                            Self::flush(&redis, &mut buffer).await;
+                        }
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        // Drain the channel into the buffer.
+                        while let Ok(item) = rx.try_recv() {
+                            buffer.push(item);
+                        }
+                        if !buffer.is_empty() {
+                            Self::flush(&redis, &mut buffer).await;
+                        }
+                    }
+                    item = rx.recv() => {
+                        match item {
+                            Some(entry) => buffer.push(entry),
+                            None => {
+                                // Channel closed — flush and exit.
+                                if !buffer.is_empty() {
+                                    Self::flush(&redis, &mut buffer).await;
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        Self { tx }
+    }
+
+    /// Enqueue a telemetry datagram for batched writing. Non-blocking; drops
+    /// the entry if the channel is full (back-pressure).
+    pub fn send(&self, device_id: DeviceId, datagram: TelemetryDatagram) {
+        if self.tx.try_send((device_id, datagram)).is_err() {
+            tracing::debug!("telemetry batcher channel full — dropping entry");
+        }
+    }
+
+    async fn flush(redis: &RedisManager, buffer: &mut Vec<(DeviceId, TelemetryDatagram)>) {
+        let Some(mut conn) = redis.get_conn() else {
+            tracing::debug!(
+                "redis unavailable — dropping {} batched telemetry entries",
+                buffer.len()
+            );
+            buffer.clear();
+            return;
+        };
+
+        let server_ts = now_ms();
+        let min_id = server_ts.saturating_sub(RETENTION_MS);
+
+        let mut pipe = redis::pipe();
+        for (device_id, datagram) in buffer.iter() {
+            let key = format!("{}{}", TELEMETRY_KEY_PREFIX, device_id.0);
+            let fields = datagram_to_fields(datagram, server_ts);
+            pipe.cmd("XADD")
+                .arg(&key)
+                .arg("MINID")
+                .arg("~")
+                .arg(min_id)
+                .arg("*")
+                .arg(&fields);
+        }
+
+        let count = buffer.len();
+        let result: std::result::Result<Vec<String>, redis::RedisError> =
+            pipe.query_async(&mut conn).await;
+        if let Err(e) = result {
+            redis.record_write_error();
+            tracing::debug!(count, "redis telemetry batch flush error: {e}");
+        } else {
+            tracing::trace!(count, "telemetry batch flushed");
+        }
+
+        buffer.clear();
+    }
 }
 
 #[cfg(test)]

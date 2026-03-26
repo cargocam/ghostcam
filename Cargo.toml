@@ -55,10 +55,13 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
 
 # Redis
-redis = { version = "0.27", features = ["tokio-comp", "streams"] }
+redis = { version = "0.27", features = ["tokio-comp", "streams", "connection-manager"] }
 
 # WebRTC
 str0m = "0.6"
+
+# Rate limiting
+governor = "0.10"
 
 # Utilities
 bytes = "1"

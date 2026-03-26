@@ -215,25 +215,19 @@ pub async fn get_segment(
         None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
     };
 
-    // Check if segment is already buffered
-    {
-        let segments = slot.segments.read().await;
-        if let Some(SegmentState::Buffered { data, .. }) = segments.get(&segment_id) {
-            return segment_response(data.clone());
-        }
-    }
-
-    // Set up waiter or join existing upload
-    let rx = {
+    // Single write-lock handles all three cases: Buffered (return immediately),
+    // Uploading (add waiter), None (insert Uploading and request upload from camera).
+    // This avoids a read→write lock upgrade race where the state could change between locks.
+    let (rx, needs_command) = {
         let mut segments = slot.segments.write().await;
         match segments.get_mut(&segment_id) {
+            Some(SegmentState::Buffered { data, .. }) => {
+                return segment_response(data.clone());
+            }
             Some(SegmentState::Uploading { waiters }) => {
                 let (tx, rx) = oneshot::channel();
                 waiters.push(tx);
-                rx
-            }
-            Some(SegmentState::Buffered { data, .. }) => {
-                return segment_response(data.clone());
+                (rx, false)
             }
             None => {
                 let (tx, rx) = oneshot::channel();
@@ -241,18 +235,20 @@ pub async fn get_segment(
                     segment_id.clone(),
                     SegmentState::Uploading { waiters: vec![tx] },
                 );
-
-                let _ = slot
-                    .send_command(Command::UploadSegment {
-                        seq: slot.next_seq(),
-                        segment_id: segment_id.clone(),
-                    })
-                    .await;
-
-                rx
+                (rx, true)
             }
         }
     };
+
+    // Send command outside the lock scope to avoid holding the lock across an await.
+    if needs_command {
+        let _ = slot
+            .send_command(Command::UploadSegment {
+                seq: slot.next_seq(),
+                segment_id: segment_id.clone(),
+            })
+            .await;
+    }
 
     match timeout(Duration::from_secs(30), rx).await {
         Ok(Ok(Ok(data))) => segment_response(data),

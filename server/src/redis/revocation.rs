@@ -40,7 +40,7 @@ pub fn spawn_revocation_refresh(
 }
 
 async fn refresh_cache(redis: &RedisManager, cache: &RevocationCache) -> Result<()> {
-    let Some(mut conn) = redis.get_conn().await else {
+    let Some(mut conn) = redis.get_conn() else {
         anyhow::bail!("redis unavailable");
     };
 
@@ -53,7 +53,7 @@ async fn refresh_cache(redis: &RedisManager, cache: &RevocationCache) -> Result<
 
 /// Add a serial number to the Redis revocation set.
 pub async fn revoke_cert(redis: &RedisManager, serial: &str) -> Result<()> {
-    let Some(mut conn) = redis.get_conn().await else {
+    let Some(mut conn) = redis.get_conn() else {
         anyhow::bail!("redis unavailable for revocation — this is critical");
     };
 

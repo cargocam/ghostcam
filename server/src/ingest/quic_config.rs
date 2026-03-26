@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use ghostcam::config::KEEPALIVE_INTERVAL_SECS;
+use ghostcam::config::{KEEPALIVE_INTERVAL_SECS, QUIC_MAX_BIDI_STREAMS, QUIC_MAX_UNI_STREAMS};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::DistinguishedName;
@@ -92,6 +92,9 @@ pub fn build_server_endpoint(
     // Enable QUIC datagram support (RFC 9221) so cameras can send telemetry datagrams.
     // Without this, max_datagram_frame_size is not advertised and send_datagram() fails.
     transport.datagram_receive_buffer_size(Some(65536));
+    // Limit concurrent streams per connection to prevent resource exhaustion.
+    transport.max_concurrent_bidi_streams(QUIC_MAX_BIDI_STREAMS.into());
+    transport.max_concurrent_uni_streams(QUIC_MAX_UNI_STREAMS.into());
 
     let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(
         quinn::crypto::rustls::QuicServerConfig::try_from(tls_config)

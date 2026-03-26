@@ -16,6 +16,12 @@ Compile-time constants shared across crates:
 | `MAX_FRAME_SIZE` | 4 MB | Maximum inbound QUIC frame payload |
 | `TELEMETRY_POLL_INTERVAL` | 2s | Sensor read cadence on camera |
 | `TELEMETRY_FULL_INTERVAL` | 30s | Full heartbeat cadence on camera |
+| `QUIC_MAX_BIDI_STREAMS` | 4 | Max concurrent bidi QUIC streams per connection |
+| `QUIC_MAX_UNI_STREAMS` | 16 | Max concurrent uni QUIC streams per connection |
+| `QUIC_MAX_CONNECTIONS` | 256 | Max concurrent QUIC connections (application-level) |
+| `MAX_REQUEST_BODY_BYTES` | 1 MB | HTTP request body size limit |
+| `TELEMETRY_BATCH_INTERVAL_SECS` | 5 | Telemetry Redis flush interval |
+| `MAX_SESSIONS_PER_USER` | 20 | Maximum concurrent WebRTC sessions per user |
 
 ### `types`
 
