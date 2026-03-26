@@ -101,6 +101,7 @@ pub struct UserUpdate {
 
 /// An audit log record from the database.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AuditLogRecord {
     pub id: i64,
     pub timestamp: String,
@@ -181,6 +182,7 @@ pub trait Database: Send + Sync + 'static {
         hmac: &str,
     ) -> Result<()>;
 
+    /// Returns `(entries, total)` in a single query using `COUNT(*) OVER()`.
     async fn query_audit_log(
         &self,
         event_type: Option<&str>,
@@ -188,14 +190,7 @@ pub trait Database: Send + Sync + 'static {
         until: Option<&str>,
         limit: i64,
         offset: i64,
-    ) -> Result<Vec<AuditLogRecord>>;
-
-    async fn count_audit_log(
-        &self,
-        event_type: Option<&str>,
-        since: Option<&str>,
-        until: Option<&str>,
-    ) -> Result<i64>;
+    ) -> Result<(Vec<AuditLogRecord>, i64)>;
 }
 
 #[cfg(test)]

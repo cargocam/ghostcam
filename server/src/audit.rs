@@ -131,7 +131,10 @@ fn event_type_tag(event: &AuditEvent) -> &'static str {
 /// Audit logger that writes HMAC-chained JSON lines via an async channel.
 /// Optionally persists entries to the database.
 pub struct AuditLogger {
-    tx: tokio::sync::Mutex<Option<mpsc::Sender<AuditEvent>>>,
+    /// std::sync::Mutex is intentional: `log()` only calls `try_send()` which is
+    /// non-blocking, so the lock is never held across an `.await`. This eliminates
+    /// the `try_lock()` failure mode that `tokio::sync::Mutex` would introduce.
+    tx: std::sync::Mutex<Option<mpsc::Sender<AuditEvent>>>,
     /// Handle to the background writer task for clean shutdown.
     #[allow(dead_code)]
     handle: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
@@ -228,14 +231,14 @@ impl AuditLogger {
         });
 
         Self {
-            tx: tokio::sync::Mutex::new(Some(tx)),
+            tx: std::sync::Mutex::new(Some(tx)),
             handle: tokio::sync::Mutex::new(Some(handle)),
         }
     }
 
     /// Log an audit event (non-blocking). Drops the event if the channel is full.
     pub fn log(&self, event: AuditEvent) {
-        if let Ok(guard) = self.tx.try_lock() {
+        if let Ok(guard) = self.tx.lock() {
             if let Some(ref tx) = *guard {
                 if tx.try_send(event).is_err() {
                     tracing::warn!("audit channel full — dropping event");
@@ -247,8 +250,10 @@ impl AuditLogger {
     /// Shut down the logger: close the channel and wait for all pending events to flush.
     #[allow(dead_code)]
     pub async fn shutdown(&self) {
-        // Drop the sender to close the channel
-        self.tx.lock().await.take();
+        // Drop the sender to close the channel (std::sync::Mutex — held briefly, no await)
+        if let Ok(mut guard) = self.tx.lock() {
+            guard.take();
+        }
         // Wait for the background task to finish processing remaining events
         if let Some(handle) = self.handle.lock().await.take() {
             let _ = handle.await;
@@ -259,6 +264,12 @@ impl AuditLogger {
 /// Extract the client IP from request headers.
 /// Checks X-Forwarded-For first, then X-Real-IP, then falls back to "unknown".
 /// Extracted values are validated as IP addresses to prevent log injection.
+///
+/// Trust assumption: X-Forwarded-For / X-Real-IP are only trustworthy when
+/// the server sits behind a reverse proxy that overwrites these headers.
+/// A direct client can spoof them freely. In production, this should be
+/// restricted to accept these headers only from known trusted proxy IPs.
+/// Same trust model as rate_limit.rs.
 pub fn client_ip(headers: &axum::http::HeaderMap) -> String {
     if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
         if let Some(first) = xff.split(',').next() {

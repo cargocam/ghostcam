@@ -584,9 +584,11 @@ impl Database for PostgresDatabase {
         until: Option<&str>,
         limit: i64,
         offset: i64,
-    ) -> Result<Vec<AuditLogRecord>> {
+    ) -> Result<(Vec<AuditLogRecord>, i64)> {
         let rows = sqlx::query(
-            "SELECT id, timestamp::text, event_type, event_data, hmac FROM audit_log \
+            "SELECT id, timestamp::text, event_type, event_data, hmac, \
+             COUNT(*) OVER() AS total_count \
+             FROM audit_log \
              WHERE ($1::text IS NULL OR event_type = $1) \
              AND ($2::timestamptz IS NULL OR timestamp >= $2::timestamptz) \
              AND ($3::timestamptz IS NULL OR timestamp <= $3::timestamptz) \
@@ -601,7 +603,11 @@ impl Database for PostgresDatabase {
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows
+        let total = rows
+            .first()
+            .map(|r| r.get::<i64, _>("total_count"))
+            .unwrap_or(0);
+        let entries = rows
             .into_iter()
             .map(|r| AuditLogRecord {
                 id: r.get("id"),
@@ -610,27 +616,8 @@ impl Database for PostgresDatabase {
                 event_data: r.get("event_data"),
                 hmac: r.get("hmac"),
             })
-            .collect())
-    }
-
-    async fn count_audit_log(
-        &self,
-        event_type: Option<&str>,
-        since: Option<&str>,
-        until: Option<&str>,
-    ) -> Result<i64> {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM audit_log \
-             WHERE ($1::text IS NULL OR event_type = $1) \
-             AND ($2::timestamptz IS NULL OR timestamp >= $2::timestamptz) \
-             AND ($3::timestamptz IS NULL OR timestamp <= $3::timestamptz)",
-        )
-        .bind(event_type)
-        .bind(since)
-        .bind(until)
-        .fetch_one(&self.pool)
-        .await?;
-        Ok(count)
+            .collect();
+        Ok((entries, total))
     }
 
     async fn update_user(&self, user_id: &UserId, update: &UserUpdate) -> Result<()> {

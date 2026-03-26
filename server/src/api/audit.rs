@@ -31,7 +31,8 @@ pub struct AuditEntryResponse {
     pub timestamp: String,
     pub event_type: String,
     pub event_data: serde_json::Value,
-    pub hmac: String,
+    // Note: HMAC chain is stored in DB for tamper-evidence verification tooling
+    // but intentionally not exposed via API to prevent forgery by DB-compromised attackers.
 }
 
 #[derive(Serialize)]
@@ -71,7 +72,7 @@ pub async fn query(
         }
     }
 
-    let entries = match state
+    let (entries, total) = match state
         .db
         .query_audit_log(
             params.event_type.as_deref(),
@@ -82,34 +83,20 @@ pub async fn query(
         )
         .await
     {
-        Ok(records) => records
-            .into_iter()
-            .map(|r| AuditEntryResponse {
-                id: r.id,
-                timestamp: r.timestamp,
-                event_type: r.event_type,
-                event_data: r.event_data,
-                hmac: r.hmac,
-            })
-            .collect(),
+        Ok((records, total)) => {
+            let entries = records
+                .into_iter()
+                .map(|r| AuditEntryResponse {
+                    id: r.id,
+                    timestamp: r.timestamp,
+                    event_type: r.event_type,
+                    event_data: r.event_data,
+                })
+                .collect();
+            (entries, total)
+        }
         Err(e) => {
             tracing::error!("audit query error: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-
-    let total = match state
-        .db
-        .count_audit_log(
-            params.event_type.as_deref(),
-            params.since.as_deref(),
-            params.until.as_deref(),
-        )
-        .await
-    {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::error!("audit count error: {e}");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };

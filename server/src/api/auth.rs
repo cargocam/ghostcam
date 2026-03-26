@@ -253,6 +253,13 @@ pub async fn change_password(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
+    // TODO: Emit a dedicated PasswordChanged audit event once the variant exists.
+    // For now, log as AuthSuccess to capture that an authenticated action occurred.
+    state.audit.log(crate::audit::AuditEvent::AuthSuccess {
+        user_id: user.user_id.0.clone(),
+        ip: "password-change".to_string(),
+    });
+
     StatusCode::OK.into_response()
 }
 
