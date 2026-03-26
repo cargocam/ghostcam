@@ -66,10 +66,17 @@ Axum HTTP router. Authentication is enforced via middleware on all protected rou
 | `POST` | `/api/v1/tokens` | `tokens::create` | Create a new API token |
 | `DELETE` | `/api/v1/tokens/:id` | `tokens::revoke` | Revoke a token |
 
+### Audit Log
+
+| Method | Path | Handler | Description |
+|--------|------|---------|-------------|
+| `GET` | `/api/v1/audit` | `audit::query` | Query audit log entries. Params: `type` (event type filter), `since`/`until` (RFC3339 timestamps), `limit` (default 100, max 1000), `offset`. Returns `{ entries: [...], total: N }` |
+
 ## Files
 
 | File | Purpose |
 |------|---------|
+| `audit.rs` | Audit log query endpoint |
 | `routes.rs` | Router construction — merges protected and public sub-routers |
 | `state.rs` | `AppState` — shared across all handlers: DB, Redis, PKI, session manager, SSE bus |
 | `auth.rs` | Login, logout, password change, auth middleware |

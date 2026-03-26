@@ -87,7 +87,7 @@ pub async fn create_session(
         .sessions
         .register(
             session_id.clone(),
-            device_id,
+            device_id.clone(),
             user.user_id,
             cancel.clone(),
             handle,
@@ -98,6 +98,13 @@ pub async fn create_session(
         cancel.cancel();
         return (StatusCode::TOO_MANY_REQUESTS, "too many active sessions").into_response();
     }
+
+    let viewer_ip = crate::audit::client_ip(&headers);
+    state.audit.log(crate::audit::AuditEvent::SessionCreated {
+        session_id: session_id.clone(),
+        device_id: device_id.0,
+        viewer_ip,
+    });
 
     Json(WatchResponse {
         session_id,
@@ -120,6 +127,11 @@ pub async fn teardown_session(
     }
 
     state.sessions.teardown(&session_id).await;
+
+    state.audit.log(crate::audit::AuditEvent::SessionDestroyed {
+        session_id: session_id.clone(),
+    });
+
     StatusCode::OK.into_response()
 }
 

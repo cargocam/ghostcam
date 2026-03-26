@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::audit::AuditLogger;
 use crate::db_trait::Database;
 use crate::egress::sessions::SessionManager;
 use crate::egress::udp::SharedWebRtcSocket;
@@ -19,6 +20,7 @@ pub struct AppState {
     pub ca: Arc<CaManager>,
     pub revocation_cache: Arc<RevocationCache>,
     pub hmac_secret: Vec<u8>,
+    pub audit: Arc<AuditLogger>,
     /// Explicit public IP override (from `GHOSTCAM_PUBLIC_IP`). When set, all
     /// ICE candidates use this IP. When `None`, the server derives the ICE
     /// candidate IP from the HTTP request's `Host` header so that the browser

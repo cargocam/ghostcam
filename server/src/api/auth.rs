@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::State;
-use axum::http::{Request, StatusCode};
+use axum::http::{HeaderMap, Request, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
@@ -91,16 +91,28 @@ pub struct LoginResponse {
 }
 
 /// POST /api/v1/auth/login
-pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginRequest>) -> Response {
+pub async fn login(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(body): Json<LoginRequest>,
+) -> Response {
     // Cap password length to prevent Argon2 CPU exhaustion
     if body.password.len() > 128 {
         return (StatusCode::BAD_REQUEST, "password must be 8-128 characters").into_response();
     }
 
+    let ip = crate::audit::client_ip(&headers);
+
     // Look up user by email
     let user = match state.db.get_user_by_email(&body.email).await {
         Ok(Some(u)) => u,
-        Ok(None) => return StatusCode::UNAUTHORIZED.into_response(),
+        Ok(None) => {
+            state.audit.log(crate::audit::AuditEvent::AuthFailure {
+                username: body.email.clone(),
+                ip,
+            });
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
         Err(e) => {
             tracing::error!("failed to look up user: {e}");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
@@ -109,6 +121,10 @@ pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginReq
 
     // Check if user is disabled
     if user.disabled_at.is_some() {
+        state.audit.log(crate::audit::AuditEvent::AuthFailure {
+            username: body.email.clone(),
+            ip,
+        });
         return StatusCode::UNAUTHORIZED.into_response();
     }
 
@@ -119,7 +135,13 @@ pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginReq
         .await
     {
         Ok(true) => {}
-        _ => return StatusCode::UNAUTHORIZED.into_response(),
+        _ => {
+            state.audit.log(crate::audit::AuditEvent::AuthFailure {
+                username: body.email.clone(),
+                ip,
+            });
+            return StatusCode::UNAUTHORIZED.into_response();
+        }
     }
 
     // Create session
@@ -134,6 +156,11 @@ pub async fn login(State(state): State<Arc<AppState>>, Json(body): Json<LoginReq
         tracing::error!("failed to create session: {e}");
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
+
+    state.audit.log(crate::audit::AuditEvent::AuthSuccess {
+        user_id: user.user_id.0.clone(),
+        ip,
+    });
 
     let cookie = format!(
         "ghostcam-session={}; Path=/; HttpOnly; SameSite=Strict; Max-Age={}",

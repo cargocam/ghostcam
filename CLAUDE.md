@@ -162,10 +162,10 @@ telemetry/       sensors.rs (/proc, /sys, gpsd), buffer.rs (batch upload)
 
 ```
 main.rs       Env-var config, PKI bootstrap, task spawning, Axum bind
-db_trait.rs   Database trait + record types (CameraRecord, SessionRecord, ApiTokenRecord, ...)
+db_trait.rs   Database trait + record types (CameraRecord, SessionRecord, ApiTokenRecord, AuditLogRecord, ...)
 db.rs         PostgresDatabase — sqlx PostgreSQL implementation
 auth.rs       Token hashing, HMAC, session validation
-audit.rs      AuditLogger — HMAC-SHA256 signed audit trail
+audit.rs      AuditLogger — HMAC-SHA256 signed audit trail (file + DB dual-write, wired into AppState)
 sse.rs        SseEventBus — per-user broadcast for Server-Sent Events
 api/          Axum routes, rate limiting (see server/src/api/README.md)
 ingest/       QUIC accept loop, IngestSlot, RoutingRegistry (see server/src/ingest/README.md)
@@ -268,6 +268,8 @@ GET    /api/v1/tokens                      List API tokens
 POST   /api/v1/tokens                      Create token
 DELETE /api/v1/tokens/:id                  Revoke token
 
+GET    /api/v1/audit                       Audit log query (?type=&since=&until=&limit=&offset=)
+
 GET    /healthz                            Always 200 (no auth)
 GET    /readyz                             200 when ready (no auth)
 ```
@@ -298,6 +300,7 @@ GET    /readyz                             200 when ready (no auth)
 - **QUIC refused**: Verify port 4433/udp is open and the server started successfully.
 - **Telemetry API 503**: `GHOSTCAM_REDIS_URL` is unset or empty — Redis is required for telemetry history.
 - **Camera offline after server restart**: Cameras auto-reconnect with backoff (1s → 30s). Wait or restart cameras manually.
+- **Audit log**: Set `GHOSTCAM_HMAC_KEY` to a secret key for HMAC-SHA256 signing (default: `dev-hmac-key`). Entries are written to `{data_dir}/audit.jsonl` and the `audit_log` PostgreSQL table. Query via `GET /api/v1/audit`.
 - **str0m API**: Pinned at 0.6.x. Key methods: `Rtc::builder().set_ice_lite(true)`, `sdp_api().accept_offer(offer)`, `rtc.writer(mid)`, `channel.write(binary, data)`.
 
 ## Key Dependencies

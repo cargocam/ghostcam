@@ -98,6 +98,13 @@ pub async fn enroll(
         }
     };
 
+    state
+        .audit
+        .log(crate::audit::AuditEvent::EnrollmentStarted {
+            device_id: jti.clone(),
+            owner_id: user.user_id.0.clone(),
+        });
+
     Json(EnrollResponse { token, expires_at }).into_response()
 }
 
@@ -208,6 +215,14 @@ pub async fn delete(
         Ok(_) => {
             // Teardown any WebRTC sessions
             state.sessions.teardown_by_device(&device_id).await;
+
+            state
+                .audit
+                .log(crate::audit::AuditEvent::CameraUnregistered {
+                    device_id: device_id.0,
+                    initiated_by: user.user_id.0,
+                });
+
             StatusCode::OK.into_response()
         }
         Err(e) => {
