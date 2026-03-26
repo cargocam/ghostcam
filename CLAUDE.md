@@ -99,6 +99,62 @@ RUST_LOG=server=debug,str0m=warn ./target/release/server
 RUST_LOG=camera=debug ./target/release/camera --test-source ...
 ```
 
+## Configuration
+
+Both server and camera support TOML config files with layered resolution. Environment variables and CLI flags always take precedence. Config files are **optional** -- the env-var-only workflow still works (Docker uses this).
+
+### Layering Order
+
+**Server**: defaults -> config file -> env vars
+**Camera**: defaults -> config file -> env vars -> CLI flags
+
+### Config File Search Paths
+
+**Server** (first found wins):
+1. `$GHOSTCAM_CONFIG_FILE`
+2. `$GHOSTCAM_DATA_DIR/server.toml`
+3. `/etc/ghostcam/server.toml`
+
+**Camera** (first found wins):
+1. `--config <path>` CLI flag
+2. `$GHOSTCAM_CONFIG_FILE`
+3. `$GHOSTCAM_DATA_DIR/camera.toml`
+4. `/boot/ghostcam.conf` (backward compatible -- valid TOML key=value format)
+
+### Example Files
+
+- `server.example.toml` -- all server knobs with comments
+- `camera.example.toml` -- all camera knobs with comments
+
+### Sensitive Fields
+
+`database_url` and `admin_password` are **env-var only** (`#[serde(skip)]`). They cannot be set in the TOML config file.
+
+### Runtime Reload
+
+The server supports reloading config without restart:
+- **SIGHUP**: `kill -HUP <pid>` re-reads the config file
+- **API**: `POST /api/v1/admin/reload` (requires auth)
+
+Settings that require restart (ports, database_url, data_dir) log warnings on reload but don't take effect until restart.
+
+### Key Environment Variables
+
+| Variable | Binary | Default | Description |
+|----------|--------|---------|-------------|
+| `GHOSTCAM_CONFIG_FILE` | both | _(none)_ | Explicit config file path |
+| `GHOSTCAM_DATA_DIR` | both | `/var/ghostcam` | Data directory |
+| `GHOSTCAM_DATABASE_URL` | server | _(required)_ | PostgreSQL URL |
+| `GHOSTCAM_REDIS_URL` | server | _(none)_ | Redis URL |
+| `GHOSTCAM_PUBLIC_IP` | server | _(none)_ | ICE candidate IP |
+| `GHOSTCAM_HTTP_PORT` | server | `3000` | HTTP port |
+| `GHOSTCAM_QUIC_PORT` | server | `4433` | QUIC port |
+| `GHOSTCAM_WEBRTC_PORT` | server | `3478` | WebRTC UDP port |
+| `GHOSTCAM_ENROLLMENT_ADDR` | server | `<public_ip>:<quic_port>` | Enrollment JWT address |
+| `GHOSTCAM_ADMIN_EMAIL` | server | `admin@localhost` | Admin email |
+| `GHOSTCAM_ADMIN_PASSWORD` | server | _(auto-generated)_ | Preset admin password |
+| `GHOSTCAM_SERVER_ADDR` | camera | _(from enrollment)_ | Server QUIC address |
+
 ## Architecture
 
 The server is a protocol translator, not an SFU. It forwards encoded frames from camera ingest slots to viewer egress handles without transcoding or mixing.
@@ -130,7 +186,7 @@ Camera presence is delivered via **Server-Sent Events** (`/events`). Each camera
 ## ghostcam Library Structure
 
 ```
-config.rs     Port/size/limit constants (QUIC_PORT, HTTP_PORT, BROADCAST_CAPACITY, QUIC_MAX_*, MAX_REQUEST_BODY_BYTES, MAX_SESSIONS_PER_USER, TELEMETRY_BATCH_INTERVAL_SECS, ...)
+config.rs     Port/size/limit constants (QUIC_PORT, HTTP_PORT, BROADCAST_CAPACITY, QUIC_MAX_*, MAX_REQUEST_BODY_BYTES, MAX_SESSIONS_PER_USER, TELEMETRY_BATCH_INTERVAL_SECS, ...) + helpers: load_toml(), env_or(), env_opt()
 types.rs      DeviceId, UserId, SessionId, TokenId, CertFingerprint, Seq newtypes
 telemetry.rs  TelemetryDatagram — sparse MessagePack payload (cpu, temp, mem, gps, ...)
 pki.rs        generate_key_pair(), create_self_signed_ca() — rcgen 0.13 wrappers
@@ -146,7 +202,7 @@ wire/
 
 ```
 main.rs          CLI, reconnect loop with exponential backoff
-config.rs        Config resolution: CLI → ghostcam.conf → /etc/ghostcam/server.addr → default
+config.rs        CameraConfig + CameraConfigFile, layered TOML/env/CLI resolution
 session.rs       Active QUIC session: alerts stream, command gate atomics
 enrollment.rs    JWT enrollment handshake
 tofu.rs          Server fingerprint pinning (first connect)
@@ -161,7 +217,8 @@ telemetry/       sensors.rs (/proc, /sys, gpsd), buffer.rs (batch upload)
 ## Server Structure
 
 ```
-main.rs       Env-var config, PKI bootstrap, task spawning, Axum bind
+main.rs       Config load, PKI bootstrap, task spawning, SIGHUP reload, Axum bind
+config.rs     ServerConfig + ServerConfigFile, layered TOML/env resolution
 db_trait.rs   Database trait + record types (CameraRecord, SessionRecord, ApiTokenRecord, AuditLogRecord, ...)
 db.rs         PostgresDatabase — sqlx PostgreSQL implementation
 auth.rs       Token hashing, HMAC, session validation
@@ -269,6 +326,7 @@ POST   /api/v1/tokens                      Create token
 DELETE /api/v1/tokens/:id                  Revoke token
 
 GET    /api/v1/audit                       Audit log query (?type=&since=&until=&limit=&offset=)
+POST   /api/v1/admin/reload                Reload config from disk
 
 GET    /healthz                            Always 200 (no auth)
 GET    /readyz                             200 when ready (no auth)
@@ -317,6 +375,7 @@ GET    /readyz                             200 when ready (no auth)
 | `governor` | 0.10 | Token-bucket rate limiting |
 | `argon2` | 0.5 | Password hashing |
 | `rmp-serde` | 1 | MessagePack for telemetry wire format |
+| `toml` | 0.8 | Config file parsing |
 | `tokio` | 1 | Async runtime |
 | `svelte` | 5 | Frontend. Runes: `$state`, `$derived`, `$effect` |
 | `tailwindcss` | 4 | OKLCH color system, `@import "tailwindcss"` |

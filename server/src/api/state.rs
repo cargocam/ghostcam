@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::audit::AuditLogger;
+use crate::config::ServerConfig;
 use crate::db_trait::Database;
 use crate::egress::sessions::SessionManager;
 use crate::egress::udp::SharedWebRtcSocket;
@@ -32,4 +33,6 @@ pub struct AppState {
     pub enrollment_addr: String,
     /// Shared UDP socket for all WebRTC sessions (demultiplexed by STUN ufrag).
     pub webrtc_socket: Arc<SharedWebRtcSocket>,
+    /// Watch channel for runtime config reloads. `None` if reload is not supported.
+    pub config_tx: Option<tokio::sync::watch::Sender<ServerConfig>>,
 }

@@ -1,6 +1,7 @@
 mod api;
 mod audit;
 mod auth;
+mod config;
 mod db;
 mod db_trait;
 mod egress;
@@ -10,12 +11,12 @@ mod pki;
 mod redis;
 mod sse;
 
-use anyhow::Context;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
 use crate::api::routes::build_router;
 use crate::api::state::AppState;
+use crate::config::ServerConfig;
 use crate::db::PostgresDatabase;
 use crate::db_trait::Database;
 use crate::egress::sessions::SessionManager;
@@ -36,67 +37,37 @@ use tower_http::trace::TraceLayer;
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
-    // --- Configuration from env ---
-    let data_dir =
-        std::env::var("GHOSTCAM_DATA_DIR").unwrap_or_else(|_| "/var/ghostcam".to_string());
-    std::fs::create_dir_all(&data_dir)?;
+    // --- Configuration ---
+    let cfg = ServerConfig::load()?;
 
-    let http_port: u16 = std::env::var("GHOSTCAM_HTTP_PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(ghostcam::config::HTTP_PORT);
-    let quic_port: u16 = std::env::var("GHOSTCAM_QUIC_PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(ghostcam::config::QUIC_PORT);
-    let redis_url = std::env::var("GHOSTCAM_REDIS_URL")
-        .ok()
-        .filter(|s| !s.is_empty());
-    let public_ip_override = parse_public_ip_env();
-    if let Some(ip) = public_ip_override {
+    std::fs::create_dir_all(&cfg.data_dir)?;
+
+    if let Some(ip) = cfg.public_ip {
         tracing::info!(ip = %ip, "explicit public IP override");
     } else {
         tracing::info!(
             "no GHOSTCAM_PUBLIC_IP set; ICE candidate IP will be derived from HTTP Host header"
         );
     }
-    // enrollment_addr is embedded in enrollment JWTs. Defaults to
-    // <public_ip_override>:<quic_port> but can be overridden when cameras and
-    // viewers use different network paths (e.g. Docker: cameras reach the
-    // server via service DNS, not the LAN IP).
-    let enrollment_addr = std::env::var("GHOSTCAM_ENROLLMENT_ADDR")
-        .ok()
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| {
-            let ip =
-                public_ip_override.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST));
-            format!("{ip}:{quic_port}")
-        });
+    let enrollment_addr = cfg.resolved_enrollment_addr();
 
     // --- Database ---
-    let database_url =
-        std::env::var("GHOSTCAM_DATABASE_URL").context("GHOSTCAM_DATABASE_URL is required")?;
-    let db = PostgresDatabase::connect(&database_url).await?;
-    let preset_password = std::env::var("GHOSTCAM_ADMIN_PASSWORD")
-        .ok()
-        .filter(|s| !s.is_empty());
-    let admin_email =
-        std::env::var("GHOSTCAM_ADMIN_EMAIL").unwrap_or_else(|_| "admin@localhost".to_string());
+    let db = PostgresDatabase::connect(&cfg.database_url).await?;
     if let Some(initial_password) = db
-        .initialize(preset_password.as_deref(), &admin_email)
+        .initialize(cfg.admin_password.as_deref(), &cfg.admin_email)
         .await?
     {
         println!("============================================================");
         println!("Ghostcam server first run");
         println!();
-        println!("Admin email: {admin_email}");
+        println!("Admin email: {}", cfg.admin_email);
         println!("Initial admin password: {initial_password}");
         println!();
-        if preset_password.is_none() {
+        if cfg.admin_password.is_none() {
             println!("Log in and change this password.");
             println!();
         }
-        println!("IMPORTANT: Back up {data_dir}/ca.key");
+        println!("IMPORTANT: Back up {}/ca.key", cfg.data_dir);
         println!("Losing this file requires re-enrolling all cameras.");
         println!("============================================================");
     }
@@ -104,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("database connected");
 
     // --- PKI ---
-    let pki = bootstrap_pki(std::path::Path::new(&data_dir)).await?;
+    let pki = bootstrap_pki(std::path::Path::new(&cfg.data_dir)).await?;
     let ca = Arc::new(pki.ca);
     tracing::info!(fingerprint = %pki.server_tls.fingerprint, "PKI ready");
 
@@ -113,7 +84,7 @@ async fn main() -> anyhow::Result<()> {
 
     // --- Redis (optional) ---
     let cancel = CancellationToken::new();
-    let (redis, telemetry_batcher) = if let Some(url) = &redis_url {
+    let (redis, telemetry_batcher) = if let Some(url) = &cfg.redis_url {
         let mgr = RedisManager::new(url, cancel.clone()).await;
         let batcher = Arc::new(TelemetryBatcher::spawn(mgr.clone(), cancel.clone()));
         crate::redis::purge::spawn_telemetry_purge(mgr.clone(), cancel.clone());
@@ -129,18 +100,17 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // --- Shared WebRTC UDP socket ---
-    let webrtc_port: u16 = std::env::var("GHOSTCAM_WEBRTC_PORT")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(3478);
-    let webrtc_socket = SharedWebRtcSocket::bind(webrtc_port).await?;
+    let webrtc_socket = SharedWebRtcSocket::bind(cfg.webrtc_port).await?;
     webrtc_socket.clone().spawn_dispatch();
-    tracing::info!(port = webrtc_port, "WebRTC UDP listening");
+    tracing::info!(port = cfg.webrtc_port, "WebRTC UDP listening");
+
+    // --- Config watch channel for runtime reloads ---
+    let (config_tx, _config_rx) = tokio::sync::watch::channel(cfg.clone());
 
     // --- Audit logger ---
     let audit_hmac_key =
         std::env::var("GHOSTCAM_HMAC_KEY").unwrap_or_else(|_| "dev-hmac-key".to_string());
-    let audit_log_path = std::path::PathBuf::from(&data_dir).join("audit.jsonl");
+    let audit_log_path = std::path::PathBuf::from(&cfg.data_dir).join("audit.jsonl");
     let audit = Arc::new(crate::audit::AuditLogger::start_with_db(
         &audit_hmac_key,
         audit_log_path,
@@ -167,13 +137,14 @@ async fn main() -> anyhow::Result<()> {
         revocation_cache: revocation_cache.clone(),
         hmac_secret,
         audit: audit.clone(),
-        public_ip_override,
+        public_ip_override: cfg.public_ip,
         enrollment_addr,
         webrtc_socket,
+        config_tx: Some(config_tx),
     });
 
     // --- QUIC listener ---
-    let quic_bind: SocketAddr = format!("0.0.0.0:{quic_port}").parse()?;
+    let quic_bind: SocketAddr = format!("0.0.0.0:{}", cfg.quic_port).parse()?;
     let endpoint =
         build_server_endpoint(&pki.server_tls.cert_der, &pki.server_tls.key_der, quic_bind)?;
     tracing::info!(%quic_bind, "QUIC listening");
@@ -193,11 +164,11 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     // --- HTTP server ---
-    let router = build_router(app_state)
+    let router = build_router(app_state.clone())
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive());
 
-    let http_bind: SocketAddr = format!("0.0.0.0:{http_port}").parse()?;
+    let http_bind: SocketAddr = format!("0.0.0.0:{}", cfg.http_port).parse()?;
     let listener = tokio::net::TcpListener::bind(http_bind).await?;
     tracing::info!(%http_bind, "HTTP listening");
 
@@ -211,6 +182,24 @@ async fn main() -> anyhow::Result<()> {
         .await
     });
 
+    // --- SIGHUP reload handler ---
+    #[cfg(unix)]
+    {
+        let reload_state = app_state.clone();
+        tokio::spawn(async move {
+            let mut sighup = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::hangup())
+                .expect("failed to register SIGHUP handler");
+            loop {
+                sighup.recv().await;
+                tracing::info!("SIGHUP received, reloading configuration");
+                match crate::api::admin::do_reload(&reload_state) {
+                    Ok(msg) => tracing::info!("config reload: {msg}"),
+                    Err(e) => tracing::error!("config reload failed: {e}"),
+                }
+            }
+        });
+    }
+
     // --- Shutdown ---
     tokio::signal::ctrl_c().await?;
     tracing::info!("shutting down");
@@ -219,25 +208,4 @@ async fn main() -> anyhow::Result<()> {
     let _ = tokio::join!(quic_handle, http_handle);
     tracing::info!("goodbye");
     Ok(())
-}
-
-/// Parse the public IP from environment variables, if available.
-///
-/// Priority:
-/// 1. `GHOSTCAM_PUBLIC_IP` — explicit override, always wins.
-/// 2. `FLY_PUBLIC_IP` — automatically set by Fly.io on each machine.
-///
-/// Returns `None` when neither is set, letting the watch handler derive the
-/// ICE candidate IP from the HTTP request's `Host` header instead.
-fn parse_public_ip_env() -> Option<std::net::IpAddr> {
-    for var in ["GHOSTCAM_PUBLIC_IP", "FLY_PUBLIC_IP"] {
-        if let Some(ip) = std::env::var(var)
-            .ok()
-            .filter(|s| !s.is_empty())
-            .and_then(|s| s.parse::<std::net::IpAddr>().ok())
-        {
-            return Some(ip);
-        }
-    }
-    None
 }

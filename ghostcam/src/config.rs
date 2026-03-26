@@ -1,3 +1,7 @@
+use std::path::Path;
+
+use anyhow::{Context, Result};
+
 /// QUIC listener port.
 pub const QUIC_PORT: u16 = 4433;
 
@@ -72,3 +76,67 @@ pub const MAX_SESSIONS_PER_USER: usize = 20;
 
 /// Wire protocol version.
 pub const PROTOCOL_VERSION: u32 = 1;
+
+/// Load and deserialize a TOML config file.
+///
+/// Returns `Ok(value)` on success, or an error with context describing the file path.
+pub fn load_toml<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
+    let contents =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    toml::from_str(&contents).with_context(|| format!("parsing {}", path.display()))
+}
+
+/// Read an environment variable, falling back to a default if unset or empty.
+pub fn env_or<T: std::str::FromStr>(var: &str, default: T) -> T {
+    std::env::var(var)
+        .ok()
+        .filter(|s| !s.is_empty())
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
+
+/// Read an optional environment variable. Returns `None` if unset or empty.
+pub fn env_opt(var: &str) -> Option<String> {
+    std::env::var(var).ok().filter(|s| !s.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn load_toml_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.toml");
+        std::fs::write(&path, "value = 42\n").unwrap();
+
+        #[derive(serde::Deserialize)]
+        struct TestConf {
+            value: u32,
+        }
+
+        let conf: TestConf = load_toml(&path).unwrap();
+        assert_eq!(conf.value, 42);
+    }
+
+    #[test]
+    fn load_toml_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("nonexistent.toml");
+
+        #[derive(serde::Deserialize)]
+        struct TestConf {
+            #[allow(dead_code)]
+            value: u32,
+        }
+
+        assert!(load_toml::<TestConf>(&path).is_err());
+    }
+
+    #[test]
+    fn env_or_uses_default() {
+        // Use a var name unlikely to be set
+        let val: u16 = env_or("GHOSTCAM_TEST_NONEXISTENT_12345", 99);
+        assert_eq!(val, 99);
+    }
+}
