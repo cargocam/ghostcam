@@ -87,7 +87,6 @@ async fn handle_manifest_push(slot: &Arc<IngestSlot>, mut stream: quinn::RecvStr
     );
 
     let normalized = crate::api::hls::normalize_manifest_for_browser(&manifest);
-    *slot.manifest.write().await = Some(manifest.clone());
     *slot.manifest_normalized.write().await = Some(normalized);
 
     if let Some(ref redis) = slot.redis {

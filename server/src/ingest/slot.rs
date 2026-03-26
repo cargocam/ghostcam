@@ -42,8 +42,6 @@ pub struct IngestSlot {
     pub audio_tx: broadcast::Sender<AudioFrame>,
     pub telemetry_tx: broadcast::Sender<TelemetryDatagram>,
 
-    /// Latest HLS manifest (pushed by camera)
-    pub manifest: Arc<RwLock<Option<String>>>,
     /// Pre-normalized manifest for browser serving (avoids per-request processing).
     pub manifest_normalized: Arc<RwLock<Option<String>>>,
 
@@ -102,7 +100,6 @@ impl IngestSlot {
             video_tx: video_tx.clone(),
             audio_tx: audio_tx.clone(),
             telemetry_tx: telemetry_tx.clone(),
-            manifest: Arc::new(RwLock::new(None)),
             manifest_normalized: Arc::new(RwLock::new(None)),
             init_segment: Arc::new(RwLock::new(None)),
             init_notify: Arc::new(Notify::new()),
@@ -420,7 +417,6 @@ pub fn test_slot(device_id: &str, user_id: &str) -> Arc<IngestSlot> {
         video_tx,
         audio_tx,
         telemetry_tx,
-        manifest: Arc::new(RwLock::new(None)),
         manifest_normalized: Arc::new(RwLock::new(None)),
         init_segment: Arc::new(RwLock::new(None)),
         init_notify: Arc::new(Notify::new()),
@@ -452,7 +448,6 @@ pub fn test_slot_with_commands(
         video_tx,
         audio_tx,
         telemetry_tx,
-        manifest: Arc::new(RwLock::new(None)),
         manifest_normalized: Arc::new(RwLock::new(None)),
         init_segment: Arc::new(RwLock::new(None)),
         init_notify: Arc::new(Notify::new()),

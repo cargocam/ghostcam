@@ -292,9 +292,9 @@ pub async fn get_coverage(
     let slot = state.registry.get_slot(&device_id).await;
     let online = slot.is_some();
 
-    // Read manifest: live slot → Redis fallback
+    // Read manifest: live slot (pre-normalized) → Redis fallback
     let manifest_text = if let Some(ref slot) = slot {
-        slot.manifest.read().await.clone()
+        slot.manifest_normalized.read().await.clone()
     } else {
         None
     };

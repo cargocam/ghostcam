@@ -38,7 +38,7 @@ impl SharedWebRtcSocket {
 
     /// Register a session by its local ICE ufrag. Returns a receiver for
     /// incoming packets addressed to that session.
-    pub async fn register(&self, ufrag: String) -> mpsc::UnboundedReceiver<UdpPacket> {
+    pub fn register(&self, ufrag: String) -> mpsc::UnboundedReceiver<UdpPacket> {
         let (tx, rx) = mpsc::unbounded_channel();
         self.routing
             .lock()
@@ -48,7 +48,7 @@ impl SharedWebRtcSocket {
     }
 
     /// Unregister a session and remove all cached source-address mappings for it.
-    pub async fn unregister(&self, ufrag: &str) {
+    pub fn unregister(&self, ufrag: &str) {
         self.routing
             .lock()
             .expect("udp routing lock poisoned")
@@ -59,7 +59,7 @@ impl SharedWebRtcSocket {
     }
 
     /// Cache a confirmed source-address → ufrag mapping for future fast-path lookups.
-    pub async fn connect(&self, src: SocketAddr, ufrag: String) {
+    pub fn connect(&self, src: SocketAddr, ufrag: String) {
         self.connected
             .lock()
             .expect("udp connected lock poisoned")

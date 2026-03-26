@@ -39,6 +39,12 @@ impl PostgresDatabase {
                 }
             })
             .unwrap_or(20);
+        let max_conns = if max_conns > 200 {
+            tracing::warn!("GHOSTCAM_DB_POOL_SIZE={max_conns} exceeds cap, clamping to 200");
+            200
+        } else {
+            max_conns
+        };
         let pool = PgPoolOptions::new()
             .max_connections(max_conns)
             .connect(url)
