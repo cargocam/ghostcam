@@ -104,9 +104,6 @@ async fn main() -> anyhow::Result<()> {
     webrtc_socket.clone().spawn_dispatch();
     tracing::info!(port = cfg.webrtc_port, "WebRTC UDP listening");
 
-    // --- Config watch channel for runtime reloads ---
-    let (config_tx, _config_rx) = tokio::sync::watch::channel(cfg.clone());
-
     // --- Audit logger ---
     let audit_hmac_key =
         std::env::var("GHOSTCAM_HMAC_KEY").unwrap_or_else(|_| "dev-hmac-key".to_string());
@@ -140,7 +137,6 @@ async fn main() -> anyhow::Result<()> {
         public_ip_override: cfg.public_ip,
         enrollment_addr,
         webrtc_socket,
-        config_tx: Some(config_tx),
     });
 
     // --- QUIC listener ---
