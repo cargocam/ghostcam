@@ -131,7 +131,10 @@ fn event_type_tag(event: &AuditEvent) -> &'static str {
 /// Audit logger that writes HMAC-chained JSON lines via an async channel.
 /// Optionally persists entries to the database.
 pub struct AuditLogger {
-    tx: mpsc::UnboundedSender<AuditEvent>,
+    tx: tokio::sync::Mutex<Option<mpsc::Sender<AuditEvent>>>,
+    /// Handle to the background writer task for clean shutdown.
+    #[allow(dead_code)]
+    handle: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl AuditLogger {
@@ -157,9 +160,9 @@ impl AuditLogger {
         db: Option<Arc<dyn Database>>,
     ) -> Self {
         let key = hmac::Key::new(hmac::HMAC_SHA256, hmac_key.as_bytes());
-        let (tx, mut rx) = mpsc::unbounded_channel::<AuditEvent>();
+        let (tx, mut rx) = mpsc::channel::<AuditEvent>(4096);
 
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             use tokio::io::AsyncWriteExt;
 
             let file = match tokio::fs::OpenOptions::new()
@@ -224,25 +227,50 @@ impl AuditLogger {
             }
         });
 
-        Self { tx }
+        Self {
+            tx: tokio::sync::Mutex::new(Some(tx)),
+            handle: tokio::sync::Mutex::new(Some(handle)),
+        }
     }
 
-    /// Log an audit event (non-blocking).
+    /// Log an audit event (non-blocking). Drops the event if the channel is full.
     pub fn log(&self, event: AuditEvent) {
-        let _ = self.tx.send(event);
+        if let Ok(guard) = self.tx.try_lock() {
+            if let Some(ref tx) = *guard {
+                if tx.try_send(event).is_err() {
+                    tracing::warn!("audit channel full — dropping event");
+                }
+            }
+        }
+    }
+
+    /// Shut down the logger: close the channel and wait for all pending events to flush.
+    #[allow(dead_code)]
+    pub async fn shutdown(&self) {
+        // Drop the sender to close the channel
+        self.tx.lock().await.take();
+        // Wait for the background task to finish processing remaining events
+        if let Some(handle) = self.handle.lock().await.take() {
+            let _ = handle.await;
+        }
     }
 }
 
 /// Extract the client IP from request headers.
 /// Checks X-Forwarded-For first, then X-Real-IP, then falls back to "unknown".
+/// Extracted values are validated as IP addresses to prevent log injection.
 pub fn client_ip(headers: &axum::http::HeaderMap) -> String {
     if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
         if let Some(first) = xff.split(',').next() {
-            return first.trim().to_string();
+            if first.trim().parse::<std::net::IpAddr>().is_ok() {
+                return first.trim().to_string();
+            }
         }
     }
     if let Some(xri) = headers.get("x-real-ip").and_then(|v| v.to_str().ok()) {
-        return xri.trim().to_string();
+        if xri.trim().parse::<std::net::IpAddr>().is_ok() {
+            return xri.trim().to_string();
+        }
     }
     "unknown".to_string()
 }
@@ -467,10 +495,8 @@ mod tests {
             ip: "1.2.3.4".into(),
         });
 
-        // Drop the logger to flush
-        drop(logger);
-        // Give the background task time to process and flush
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Shut down cleanly: close channel and await flush
+        logger.shutdown().await;
 
         let contents = tokio::fs::read_to_string(&log_path).await.unwrap();
         let lines: Vec<&str> = contents.lines().collect();
@@ -505,8 +531,7 @@ mod tests {
         });
         logger.log(AuditEvent::ServerStopped {});
 
-        drop(logger);
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        logger.shutdown().await;
 
         let contents = tokio::fs::read_to_string(&log_path).await.unwrap();
         let key = hmac::Key::new(hmac::HMAC_SHA256, hmac_key.as_bytes());
@@ -538,6 +563,21 @@ mod tests {
     #[test]
     fn client_ip_falls_back_to_unknown() {
         let headers = axum::http::HeaderMap::new();
+        assert_eq!(client_ip(&headers), "unknown");
+    }
+
+    #[test]
+    fn client_ip_rejects_invalid_xff() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-forwarded-for", "not-an-ip, 1.2.3.4".parse().unwrap());
+        // Invalid first entry is rejected, falls back to unknown
+        assert_eq!(client_ip(&headers), "unknown");
+    }
+
+    #[test]
+    fn client_ip_rejects_invalid_xri() {
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert("x-real-ip", "not-a-valid-ip".parse().unwrap());
         assert_eq!(client_ip(&headers), "unknown");
     }
 }

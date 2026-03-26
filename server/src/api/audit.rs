@@ -41,6 +41,8 @@ pub struct AuditQueryResponse {
 }
 
 /// GET /api/v1/audit
+// TODO: Restrict to admin role once a role system exists. Currently all
+// authenticated users can access audit logs (single-user system).
 pub async fn query(
     State(state): State<Arc<AppState>>,
     Extension(_user): Extension<AuthUser>,
@@ -49,21 +51,25 @@ pub async fn query(
     let limit = params.limit.unwrap_or(100).clamp(1, 1000);
     let offset = params.offset.unwrap_or(0).max(0);
 
-    let total = match state
-        .db
-        .count_audit_log(
-            params.event_type.as_deref(),
-            params.since.as_deref(),
-            params.until.as_deref(),
-        )
-        .await
-    {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::error!("audit count error: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    // Validate timestamps before hitting the database
+    if let Some(ref s) = params.since {
+        if chrono::DateTime::parse_from_rfc3339(s).is_err() {
+            return (
+                StatusCode::BAD_REQUEST,
+                "invalid 'since' timestamp (expected RFC3339)",
+            )
+                .into_response();
         }
-    };
+    }
+    if let Some(ref s) = params.until {
+        if chrono::DateTime::parse_from_rfc3339(s).is_err() {
+            return (
+                StatusCode::BAD_REQUEST,
+                "invalid 'until' timestamp (expected RFC3339)",
+            )
+                .into_response();
+        }
+    }
 
     let entries = match state
         .db
@@ -88,6 +94,22 @@ pub async fn query(
             .collect(),
         Err(e) => {
             tracing::error!("audit query error: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let total = match state
+        .db
+        .count_audit_log(
+            params.event_type.as_deref(),
+            params.since.as_deref(),
+            params.until.as_deref(),
+        )
+        .await
+    {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!("audit count error: {e}");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
