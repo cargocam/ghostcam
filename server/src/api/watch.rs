@@ -85,9 +85,17 @@ pub async fn create_session(
     // Register session (enforces per-user limit atomically under write lock)
     if !state
         .sessions
-        .register(session_id.clone(), device_id, user.user_id, cancel, handle)
+        .register(
+            session_id.clone(),
+            device_id,
+            user.user_id,
+            cancel.clone(),
+            handle,
+        )
         .await
     {
+        // Clean up the already-spawned egress task before rejecting.
+        cancel.cancel();
         return (StatusCode::TOO_MANY_REQUESTS, "too many active sessions").into_response();
     }
 

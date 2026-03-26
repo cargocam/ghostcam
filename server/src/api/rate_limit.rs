@@ -19,6 +19,12 @@ fn keyed_limiter<K: Clone + Eq + std::hash::Hash>(quota: Quota) -> KeyedLimiter<
 
 /// Extract client IP from request, checking X-Forwarded-For and X-Real-IP
 /// headers before falling back to the socket address from ConnectInfo.
+///
+/// NOTE: X-Forwarded-For and X-Real-IP are trusted unconditionally. This is
+/// acceptable because the server typically runs behind a known reverse proxy
+/// (nginx, Caddy, etc.) that overwrites these headers. A proper fix would be
+/// a trusted-proxy allowlist that only accepts forwarded headers from known
+/// proxy IPs and falls back to the socket address otherwise.
 fn client_ip(headers: &HeaderMap, extensions: &axum::http::Extensions) -> IpAddr {
     // 1. X-Forwarded-For (first entry is the original client)
     if let Some(xff) = headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()) {
@@ -104,6 +110,11 @@ pub async fn api_rate_limit(
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
+    // NOTE: Unauthenticated requests share a single "__anonymous__" bucket,
+    // meaning one unauthenticated client can exhaust the limit for all.
+    // This is acceptable because unauthenticated API endpoints are already
+    // covered by the per-IP login rate limiter; this middleware primarily
+    // targets authenticated traffic where per-user keying is meaningful.
     let user_key = req
         .extensions()
         .get::<super::auth::AuthUser>()

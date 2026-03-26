@@ -41,9 +41,12 @@ pub async fn run_accept_loop(
 
                 // Enforce application-level connection limit (quinn 0.11 does
                 // not expose ServerConfig::concurrent_connections).
-                let current = active_connections.load(Ordering::Relaxed);
-                if current >= QUIC_MAX_CONNECTIONS {
-                    tracing::warn!(current, limit = QUIC_MAX_CONNECTIONS, "connection limit reached — refusing");
+                // Use fetch_add-first to avoid a TOCTOU race between load()
+                // and fetch_add() that could overshoot the limit.
+                let prev = active_connections.fetch_add(1, Ordering::Relaxed);
+                if prev >= QUIC_MAX_CONNECTIONS {
+                    active_connections.fetch_sub(1, Ordering::Relaxed);
+                    tracing::warn!(current = prev, limit = QUIC_MAX_CONNECTIONS, "connection limit reached — refusing");
                     incoming.refuse();
                     continue;
                 }
@@ -56,7 +59,6 @@ pub async fn run_accept_loop(
                 let batcher = telemetry_batcher.clone();
                 let sse_bus = sse_bus.clone();
                 let conn_count = active_connections.clone();
-                conn_count.fetch_add(1, Ordering::Relaxed);
                 tokio::spawn(async move {
                     if let Err(e) = handle_connection(incoming, registry, db, ca, revocation_cache, redis, batcher, sse_bus).await {
                         tracing::warn!("connection failed: {e}");
