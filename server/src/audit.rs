@@ -82,6 +82,22 @@ pub enum AuditEvent {
         session_id: String,
     },
 
+    // Billing
+    SubscriptionChanged {
+        user_id: String,
+        old_tier: String,
+        new_tier: String,
+        status: String,
+    },
+    SubscriptionSuspended {
+        user_id: String,
+    },
+    CameraLimitBlocked {
+        user_id: String,
+        current: i64,
+        limit: u32,
+    },
+
     // Server
     ServerStarted {
         version: String,
@@ -123,6 +139,9 @@ fn event_type_tag(event: &AuditEvent) -> &'static str {
         AuditEvent::CameraGroupChanged { .. } => "camera_group_changed",
         AuditEvent::SessionCreated { .. } => "session_created",
         AuditEvent::SessionDestroyed { .. } => "session_destroyed",
+        AuditEvent::SubscriptionChanged { .. } => "subscription_changed",
+        AuditEvent::SubscriptionSuspended { .. } => "subscription_suspended",
+        AuditEvent::CameraLimitBlocked { .. } => "camera_limit_blocked",
         AuditEvent::ServerStarted { .. } => "server_started",
         AuditEvent::ServerStopped { .. } => "server_stopped",
     }
@@ -377,6 +396,20 @@ mod tests {
             AuditEvent::SessionDestroyed {
                 session_id: "s1".into(),
             },
+            AuditEvent::SubscriptionChanged {
+                user_id: "u1".into(),
+                old_tier: "free".into(),
+                new_tier: "pro".into(),
+                status: "active".into(),
+            },
+            AuditEvent::SubscriptionSuspended {
+                user_id: "u1".into(),
+            },
+            AuditEvent::CameraLimitBlocked {
+                user_id: "u1".into(),
+                current: 2,
+                limit: 2,
+            },
             AuditEvent::ServerStarted {
                 version: "0.1.0".into(),
             },
@@ -479,6 +512,20 @@ mod tests {
             },
             AuditEvent::SessionDestroyed {
                 session_id: "s".into(),
+            },
+            AuditEvent::SubscriptionChanged {
+                user_id: "u".into(),
+                old_tier: "f".into(),
+                new_tier: "p".into(),
+                status: "a".into(),
+            },
+            AuditEvent::SubscriptionSuspended {
+                user_id: "u".into(),
+            },
+            AuditEvent::CameraLimitBlocked {
+                user_id: "u".into(),
+                current: 2,
+                limit: 2,
             },
             AuditEvent::ServerStarted {
                 version: "v".into(),

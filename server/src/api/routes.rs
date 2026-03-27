@@ -9,7 +9,7 @@ use ghostcam::config::MAX_REQUEST_BODY_BYTES;
 use super::auth::auth_middleware;
 use super::rate_limit::{api_rate_limit, login_rate_limit, ApiRateLimiter, LoginRateLimiter};
 use super::state::AppState;
-use super::{admin, audit, auth, cameras, health, hls, sse, tokens, watch};
+use super::{admin, audit, auth, billing, cameras, health, hls, sse, tokens, watch};
 use crate::redis::telemetry_api;
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -48,6 +48,15 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/hls/:device_id/init.mp4", get(hls::get_init))
         .route("/hls/:device_id/playlist.m3u8", get(hls::get_manifest))
         .route("/hls/:device_id/:segment_id", get(hls::get_segment))
+        // Billing
+        .route(
+            "/api/v1/billing/subscription",
+            get(billing::get_subscription),
+        )
+        .route("/api/v1/billing/tiers", get(billing::list_tiers))
+        .route("/api/v1/billing/checkout", post(billing::create_checkout))
+        .route("/api/v1/billing/portal", post(billing::create_portal))
+        .route("/api/v1/billing/usage", get(billing::get_usage))
         // Audit
         .route("/api/v1/audit", get(audit::query))
         // Admin
@@ -73,7 +82,8 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/healthz", get(health::healthz))
         .route("/readyz", get(health::readyz))
         .merge(login)
-        .route("/api/v1/auth/register", post(auth::register));
+        .route("/api/v1/auth/register", post(auth::register))
+        .route("/api/v1/webhooks/stripe", post(billing::stripe_webhook));
 
     Router::new()
         .merge(protected)

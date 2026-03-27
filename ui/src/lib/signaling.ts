@@ -1,4 +1,4 @@
-import type { GroupInfo, CameraInfo } from '$lib/types.js';
+import type { GroupInfo, CameraInfo, SubscriptionInfo, TierInfo, UsageInfo } from '$lib/types.js';
 
 interface CoverageSegment {
 	id: string;
@@ -92,6 +92,54 @@ export async function fetchCoverage(deviceId: string): Promise<CoverageResponse>
 	if (!res.ok) throw new Error(`fetchCoverage failed: ${res.status}`);
 	return res.json();
 }
+
+// --- Billing ---
+
+export async function getSubscription(): Promise<SubscriptionInfo> {
+	const res = await fetch(`${API_BASE}/billing/subscription`, { credentials: 'include' });
+	if (!res.ok) throw new Error(`getSubscription failed: ${res.status}`);
+	return res.json();
+}
+
+export async function getTiers(): Promise<TierInfo[]> {
+	const res = await fetch(`${API_BASE}/billing/tiers`, { credentials: 'include' });
+	if (!res.ok) throw new Error(`getTiers failed: ${res.status}`);
+	return res.json();
+}
+
+export async function getUsage(): Promise<UsageInfo> {
+	const res = await fetch(`${API_BASE}/billing/usage`, { credentials: 'include' });
+	if (!res.ok) throw new Error(`getUsage failed: ${res.status}`);
+	return res.json();
+}
+
+export async function createCheckout(
+	tier: string,
+	successUrl: string,
+	cancelUrl: string,
+): Promise<{ url: string }> {
+	const res = await fetch(`${API_BASE}/billing/checkout`, {
+		method: 'POST',
+		headers: headers(),
+		body: JSON.stringify({ tier, success_url: successUrl, cancel_url: cancelUrl }),
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`createCheckout failed: ${res.status}`);
+	return res.json();
+}
+
+export async function createPortal(returnUrl: string): Promise<{ url: string }> {
+	const res = await fetch(`${API_BASE}/billing/portal`, {
+		method: 'POST',
+		headers: headers(),
+		body: JSON.stringify({ return_url: returnUrl }),
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`createPortal failed: ${res.status}`);
+	return res.json();
+}
+
+// --- Telemetry ---
 
 export async function fetchTelemetryRange(
 	deviceId: string,

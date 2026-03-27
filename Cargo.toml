@@ -63,6 +63,9 @@ str0m = "0.6"
 # Rate limiting
 governor = "0.10"
 
+# Stripe
+async-stripe = { version = "0.39", features = ["runtime-tokio-hyper", "checkout", "webhook-events", "connect"], default-features = false }
+
 # Utilities
 bytes = "1"
 toml = "0.8"

@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
 use crate::audit::AuditLogger;
+use crate::billing::stripe_client::StripeClient;
+use crate::billing::tiers::TierRegistry;
 use crate::db_trait::Database;
 use crate::egress::sessions::SessionManager;
 use crate::egress::udp::SharedWebRtcSocket;
@@ -32,4 +34,8 @@ pub struct AppState {
     pub enrollment_addr: String,
     /// Shared UDP socket for all WebRTC sessions (demultiplexed by STUN ufrag).
     pub webrtc_socket: Arc<SharedWebRtcSocket>,
+    /// Stripe client for billing. None = billing disabled (unlimited free tier).
+    pub stripe: Option<Arc<StripeClient>>,
+    /// Subscription tier definitions.
+    pub tiers: Arc<TierRegistry>,
 }

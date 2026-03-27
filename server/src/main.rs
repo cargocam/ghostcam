@@ -1,6 +1,7 @@
 mod api;
 mod audit;
 mod auth;
+mod billing;
 mod config;
 mod db;
 mod db_trait;
@@ -118,6 +119,33 @@ async fn main() -> anyhow::Result<()> {
     });
     tracing::info!("audit logger started");
 
+    // --- Billing (optional) ---
+    let tiers = Arc::new(billing::tiers::TierRegistry::default());
+    let stripe = if let (Some(key), Some(webhook_secret)) =
+        (&cfg.stripe_secret_key, &cfg.stripe_webhook_secret)
+    {
+        let mut price_ids = std::collections::HashMap::new();
+        if let Some(p) = &cfg.stripe_price_id_starter {
+            price_ids.insert("starter".into(), p.clone());
+        }
+        if let Some(p) = &cfg.stripe_price_id_pro {
+            price_ids.insert("pro".into(), p.clone());
+        }
+        if let Some(p) = &cfg.stripe_price_id_enterprise {
+            price_ids.insert("enterprise".into(), p.clone());
+        }
+        let client = billing::stripe_client::StripeClient::new(key, webhook_secret, price_ids);
+        tracing::info!("stripe billing enabled");
+        Some(Arc::new(client))
+    } else {
+        tracing::info!("stripe not configured, billing disabled (unlimited free tier)");
+        None
+    };
+
+    if stripe.is_some() {
+        billing::background::spawn_grace_period_check(db.clone(), audit.clone(), cancel.clone());
+    }
+
     // --- Shared state ---
     let hmac_secret = db.get_hmac_secret().await?;
     let registry = Arc::new(RoutingRegistry::new());
@@ -137,6 +165,8 @@ async fn main() -> anyhow::Result<()> {
         public_ip_override: cfg.public_ip,
         enrollment_addr,
         webrtc_socket,
+        stripe,
+        tiers,
     });
 
     // --- QUIC listener ---
