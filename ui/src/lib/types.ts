@@ -29,3 +29,29 @@ export interface GroupInfo {
 export type GridLayout = 'auto' | '1+5';
 export type ViewMode = 'live' | 'map' | 'dashboard' | 'camera';
 export type MarkerMode = 'dot' | 'detailed' | 'pip';
+
+export interface SubscriptionInfo {
+	tier: string;
+	status: string;
+	billing_enabled: boolean;
+	current_period_end?: number;
+	grace_expires_at?: number;
+}
+
+export interface TierInfo {
+	id: string;
+	name: string;
+	camera_limit: number | null;
+	storage_gb: number | null;
+	bandwidth_gb: number | null;
+	price_cents: number;
+}
+
+export interface UsageInfo {
+	cameras_count: number;
+	storage_bytes: number;
+	bandwidth_bytes: number;
+	camera_limit: number | null;
+	storage_limit_gb: number | null;
+	bandwidth_limit_gb: number | null;
+}

@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod audit;
 pub mod auth;
+pub mod billing;
 pub mod cameras;
 pub mod health;
 pub mod hls;

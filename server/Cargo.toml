@@ -38,6 +38,7 @@ str0m = { workspace = true }
 governor = { workspace = true }
 toml = { workspace = true }
 sqlx = { workspace = true, features = ["postgres"] }
+async-stripe = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

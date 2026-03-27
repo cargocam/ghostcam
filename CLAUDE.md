@@ -154,6 +154,12 @@ Settings that require restart (ports, database_url, data_dir) log warnings on re
 | `GHOSTCAM_ADMIN_EMAIL` | server | `admin@localhost` | Admin email |
 | `GHOSTCAM_ADMIN_PASSWORD` | server | _(auto-generated)_ | Preset admin password |
 | `GHOSTCAM_SERVER_ADDR` | camera | _(from enrollment)_ | Server QUIC address |
+| `STRIPE_SECRET_KEY` | server | _(none)_ | Stripe API key (billing enabled if set) |
+| `STRIPE_WEBHOOK_SECRET` | server | _(none)_ | Stripe webhook signing secret |
+| `STRIPE_PRICE_ID_STARTER` | server | _(none)_ | Stripe Price ID for starter tier |
+| `STRIPE_PRICE_ID_PRO` | server | _(none)_ | Stripe Price ID for pro tier |
+| `STRIPE_PRICE_ID_ENTERPRISE` | server | _(none)_ | Stripe Price ID for enterprise tier |
+| `STRIPE_PORTAL_CONFIG_ID` | server | _(none)_ | Portal config with plan switching |
 
 ## Architecture
 
@@ -219,16 +225,17 @@ telemetry/       sensors.rs (/proc, /sys, gpsd), buffer.rs (batch upload)
 ```
 main.rs       Config load, PKI bootstrap, task spawning, SIGHUP reload, Axum bind
 config.rs     ServerConfig + ServerConfigFile, layered TOML/env resolution
-db_trait.rs   Database trait + record types (CameraRecord, SessionRecord, ApiTokenRecord, AuditLogRecord, ...)
+db_trait.rs   Database trait + record types (CameraRecord, SessionRecord, ApiTokenRecord, AuditLogRecord, SubscriptionRecord, UsageRecord, ...)
 db.rs         PostgresDatabase — sqlx PostgreSQL implementation
 auth.rs       Token hashing, HMAC, session validation
 audit.rs      AuditLogger — HMAC-SHA256 signed audit trail (file + DB dual-write, wired into AppState)
 sse.rs        SseEventBus — per-user broadcast for Server-Sent Events
+billing/      Stripe integration, subscription tiers, camera limit enforcement, grace period background task
 api/          Axum routes, rate limiting (see server/src/api/README.md)
 ingest/       QUIC accept loop, IngestSlot, RoutingRegistry (see server/src/ingest/README.md)
 egress/       EgressHandle, SessionManager, RTP packetizer (see server/src/egress/README.md)
 pki/          CA bootstrap, device enrollment, revocation (see server/src/pki/README.md)
-redis/        Telemetry write/query via Redis Streams, ConnectionManager, TelemetryBatcher (see server/src/redis/README.md)
+redis/        Telemetry write/query via Redis Streams, ConnectionManager, TelemetryBatcher, usage counters (see server/src/redis/README.md)
 ```
 
 ## Viewer Structure
@@ -250,6 +257,7 @@ stores/
   cameraConfig.svelte.ts  Display name overrides (localStorage)
   videoStats.svelte.ts    Per-track WebRTC inbound-rtp stats
   thumbnails.svelte.ts    Canvas frame thumbnails
+  billing.svelte.ts       Subscription, tiers, usage state + Stripe checkout/portal
 ```
 
 ## Wire Protocol
@@ -325,6 +333,13 @@ GET    /api/v1/tokens                      List API tokens
 POST   /api/v1/tokens                      Create token
 DELETE /api/v1/tokens/:id                  Revoke token
 
+GET    /api/v1/billing/subscription         Current subscription + tier info
+GET    /api/v1/billing/tiers               Available tiers with pricing
+POST   /api/v1/billing/checkout            { tier, success_url, cancel_url } → { url }
+POST   /api/v1/billing/portal              { return_url } → { url }
+GET    /api/v1/billing/usage               Current month usage stats
+POST   /api/v1/webhooks/stripe             Stripe webhook (public, signature-verified)
+
 GET    /api/v1/audit                       Audit log query (?type=&since=&until=&limit=&offset=)
 POST   /api/v1/admin/reload                Reload config from disk
 
@@ -360,6 +375,10 @@ GET    /readyz                             200 when ready (no auth)
 - **Camera offline after server restart**: Cameras auto-reconnect with backoff (1s → 30s). Wait or restart cameras manually.
 - **Audit log**: Set `GHOSTCAM_HMAC_KEY` to a secret key for HMAC-SHA256 signing (default: `dev-hmac-key`). Entries are written to `{data_dir}/audit.jsonl` and the `audit_log` PostgreSQL table. Query via `GET /api/v1/audit`.
 - **str0m API**: Pinned at 0.6.x. Key methods: `Rtc::builder().set_ice_lite(true)`, `sdp_api().accept_offer(offer)`, `rtc.writer(mid)`, `channel.write(binary, data)`.
+- **Billing disabled**: If `STRIPE_SECRET_KEY` is unset, billing is fully disabled — unlimited cameras, no payment UI. The `/api/v1/billing/subscription` endpoint returns `{ billing_enabled: false, tier: "unlimited" }`.
+- **Camera limit 402**: When billing is enabled and a user hits their camera limit, `POST /api/v1/cameras` returns HTTP 402 with `{ error: "camera_limit_reached" }`.
+- **Billing webhooks**: Stripe webhooks keep subscription state in sync. In production, set `STRIPE_WEBHOOK_SECRET` to the real signing secret. In local dev, run `docker compose --profile stripe up stripe-webhooks` to forward events via the Stripe CLI container — it prints the `whsec_...` secret to stdout on startup.
+- **Stripe Portal plan switching**: Requires `STRIPE_PORTAL_CONFIG_ID` — create one via the Stripe API or Dashboard with `subscription_update.enabled=true` and the product/price list. Without it, the portal only shows cancellation.
 
 ## Key Dependencies
 
@@ -372,6 +391,7 @@ GET    /readyz                             200 when ready (no auth)
 | `rcgen` | 0.13 | Cert generation. `KeyPair::generate()`, `CertificateParams::self_signed(&kp)` |
 | `sqlx` | 0.8 | PostgreSQL async |
 | `redis` | 0.27 | Redis Streams for telemetry (with `connection-manager` feature) |
+| `async-stripe` | 0.39 | Stripe billing (checkout, portal, webhooks). Optional — no key = free tier |
 | `governor` | 0.10 | Token-bucket rate limiting |
 | `argon2` | 0.5 | Password hashing |
 | `rmp-serde` | 1 | MessagePack for telemetry wire format |

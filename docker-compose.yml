@@ -38,6 +38,13 @@ services:
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
       - GHOSTCAM_ENROLLMENT_ADDR=server:4433
       - RUST_LOG=server=info
+      # Billing (set in .env to enable)
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
+      - STRIPE_PRICE_ID_STARTER=${STRIPE_PRICE_ID_STARTER:-}
+      - STRIPE_PRICE_ID_PRO=${STRIPE_PRICE_ID_PRO:-}
+      - STRIPE_PRICE_ID_ENTERPRISE=${STRIPE_PRICE_ID_ENTERPRISE:-}
+      - STRIPE_PORTAL_CONFIG_ID=${STRIPE_PORTAL_CONFIG_ID:-}
     volumes:
       - server-data:/var/ghostcam
 
@@ -83,6 +90,26 @@ services:
     depends_on: [server]
     environment:
       - VITE_API_URL=http://server:3000
+
+  # Stripe CLI webhook forwarder.
+  # Forwards Stripe events to the server's webhook endpoint.
+  # Exits immediately if STRIPE_SECRET_KEY is not set.
+  # Prints the webhook signing secret (whsec_...) to stdout on startup —
+  # set it as STRIPE_WEBHOOK_SECRET in .env and restart the server.
+  stripe-webhooks:
+    image: stripe/stripe-cli:latest
+    depends_on: [server]
+    environment:
+      - STRIPE_API_KEY=${STRIPE_SECRET_KEY:-}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ -z "$$STRIPE_API_KEY" ]; then
+          echo "STRIPE_SECRET_KEY not set, skipping webhook forwarder"
+          exit 0
+        fi
+        exec stripe listen --forward-to http://server:3000/api/v1/webhooks/stripe --log-level warn
+    restart: "no"
 
 volumes:
   pg-data:

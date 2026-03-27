@@ -63,6 +63,57 @@ pub async fn enroll(
     Extension(user): Extension<AuthUser>,
     Json(body): Json<EnrollRequest>,
 ) -> Response {
+    // Check camera limit (billing enforcement)
+    match crate::billing::enforcement::check_camera_limit(
+        state.db.as_ref(),
+        &user.user_id,
+        &state.tiers,
+        state.stripe.is_some(),
+    )
+    .await
+    {
+        Ok(Ok(())) => {} // allowed
+        Ok(Err(e)) => {
+            state
+                .audit
+                .log(crate::audit::AuditEvent::CameraLimitBlocked {
+                    user_id: user.user_id.0.clone(),
+                    current: match &e {
+                        crate::billing::enforcement::EnforcementError::CameraLimitReached {
+                            current,
+                            ..
+                        } => *current,
+                        _ => 0,
+                    },
+                    limit: match &e {
+                        crate::billing::enforcement::EnforcementError::CameraLimitReached {
+                            limit,
+                            ..
+                        } => *limit,
+                        _ => 0,
+                    },
+                });
+            let error_key = match &e {
+                crate::billing::enforcement::EnforcementError::SubscriptionSuspended => {
+                    "subscription_suspended"
+                }
+                _ => "camera_limit_reached",
+            };
+            return (
+                StatusCode::PAYMENT_REQUIRED,
+                Json(serde_json::json!({
+                    "error": error_key,
+                    "message": e.to_string(),
+                })),
+            )
+                .into_response();
+        }
+        Err(e) => {
+            tracing::error!("camera limit check failed: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    }
+
     let claims = crate::pki::enrollment::EnrollmentClaims::new(
         &state.enrollment_addr,
         body.display_name,

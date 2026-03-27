@@ -110,6 +110,21 @@ pub struct AuditLogRecord {
     pub hmac: String,
 }
 
+/// A subscription record from the database.
+#[derive(Debug, Clone)]
+pub struct SubscriptionRecord {
+    pub user_id: UserId,
+    pub stripe_customer_id: Option<String>,
+    pub stripe_subscription_id: Option<String>,
+    pub tier: String,
+    pub status: String,
+    pub current_period_start: Option<u64>,
+    pub current_period_end: Option<u64>,
+    pub grace_expires_at: Option<u64>,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
 /// Async database trait. PostgreSQL implementation in db.rs.
 #[async_trait]
 pub trait Database: Send + Sync + 'static {
@@ -181,6 +196,21 @@ pub trait Database: Send + Sync + 'static {
         event_data: &serde_json::Value,
         hmac: &str,
     ) -> Result<()>;
+
+    // --- Billing ---
+    async fn get_subscription(&self, user_id: &UserId) -> Result<Option<SubscriptionRecord>>;
+    async fn get_subscription_by_stripe_customer(
+        &self,
+        customer_id: &str,
+    ) -> Result<Option<SubscriptionRecord>>;
+    async fn upsert_subscription(&self, record: &SubscriptionRecord) -> Result<()>;
+    async fn get_camera_count(&self, user_id: &UserId) -> Result<i64>;
+    async fn list_past_due_expired(&self, now: u64) -> Result<Vec<SubscriptionRecord>>;
+
+    // --- Stripe idempotency ---
+    async fn try_claim_stripe_event(&self, event_id: &str) -> Result<bool>;
+
+    async fn cleanup_old_stripe_events(&self, before: u64) -> Result<u64>;
 
     /// Returns `(entries, total)` in a single query using `COUNT(*) OVER()`.
     async fn query_audit_log(

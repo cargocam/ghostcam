@@ -1,7 +1,8 @@
 use crate::auth;
 use crate::db_trait::{
     ApiTokenRecord, AuditLogRecord, CameraRecord, CameraUpdate, Database, NewApiToken,
-    NewCameraRecord, NewEnrollmentToken, NewSession, SessionRecord, UserRecord, UserUpdate,
+    NewCameraRecord, NewEnrollmentToken, NewSession, SessionRecord, SubscriptionRecord, UserRecord,
+    UserUpdate,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -485,6 +486,10 @@ impl Database for PostgresDatabase {
             .execute(&self.pool)
             .await
             .context("failed to run migration 003")?;
+        sqlx::raw_sql(include_str!("../migrations/004_billing.sql"))
+            .execute(&self.pool)
+            .await
+            .context("failed to run migration 004")?;
         Ok(())
     }
 
@@ -618,6 +623,161 @@ impl Database for PostgresDatabase {
             })
             .collect();
         Ok((entries, total))
+    }
+
+    // --- Billing ---
+
+    async fn get_subscription(&self, user_id: &UserId) -> Result<Option<SubscriptionRecord>> {
+        let row = sqlx::query(
+            "SELECT user_id, stripe_customer_id, stripe_subscription_id, tier, status, \
+             current_period_start, current_period_end, grace_expires_at, created_at, updated_at \
+             FROM subscriptions WHERE user_id = $1",
+        )
+        .bind(&user_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| SubscriptionRecord {
+            user_id: UserId(r.get("user_id")),
+            stripe_customer_id: r.get("stripe_customer_id"),
+            stripe_subscription_id: r.get("stripe_subscription_id"),
+            tier: r.get("tier"),
+            status: r.get("status"),
+            current_period_start: r
+                .get::<Option<i64>, _>("current_period_start")
+                .map(|v| v as u64),
+            current_period_end: r
+                .get::<Option<i64>, _>("current_period_end")
+                .map(|v| v as u64),
+            grace_expires_at: r
+                .get::<Option<i64>, _>("grace_expires_at")
+                .map(|v| v as u64),
+            created_at: r.get::<i64, _>("created_at") as u64,
+            updated_at: r.get::<i64, _>("updated_at") as u64,
+        }))
+    }
+
+    async fn get_subscription_by_stripe_customer(
+        &self,
+        customer_id: &str,
+    ) -> Result<Option<SubscriptionRecord>> {
+        let row = sqlx::query(
+            "SELECT user_id, stripe_customer_id, stripe_subscription_id, tier, status, \
+             current_period_start, current_period_end, grace_expires_at, created_at, updated_at \
+             FROM subscriptions WHERE stripe_customer_id = $1",
+        )
+        .bind(customer_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| SubscriptionRecord {
+            user_id: UserId(r.get("user_id")),
+            stripe_customer_id: r.get("stripe_customer_id"),
+            stripe_subscription_id: r.get("stripe_subscription_id"),
+            tier: r.get("tier"),
+            status: r.get("status"),
+            current_period_start: r
+                .get::<Option<i64>, _>("current_period_start")
+                .map(|v| v as u64),
+            current_period_end: r
+                .get::<Option<i64>, _>("current_period_end")
+                .map(|v| v as u64),
+            grace_expires_at: r
+                .get::<Option<i64>, _>("grace_expires_at")
+                .map(|v| v as u64),
+            created_at: r.get::<i64, _>("created_at") as u64,
+            updated_at: r.get::<i64, _>("updated_at") as u64,
+        }))
+    }
+
+    async fn upsert_subscription(&self, record: &SubscriptionRecord) -> Result<()> {
+        sqlx::query(
+            "INSERT INTO subscriptions (user_id, stripe_customer_id, stripe_subscription_id, \
+             tier, status, current_period_start, current_period_end, grace_expires_at, \
+             created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
+             ON CONFLICT (user_id) DO UPDATE SET \
+             stripe_customer_id = COALESCE($2, subscriptions.stripe_customer_id), \
+             stripe_subscription_id = $3, \
+             tier = $4, status = $5, \
+             current_period_start = $6, current_period_end = $7, \
+             grace_expires_at = $8, updated_at = $10",
+        )
+        .bind(&record.user_id.0)
+        .bind(&record.stripe_customer_id)
+        .bind(&record.stripe_subscription_id)
+        .bind(&record.tier)
+        .bind(&record.status)
+        .bind(record.current_period_start.map(|v| v as i64))
+        .bind(record.current_period_end.map(|v| v as i64))
+        .bind(record.grace_expires_at.map(|v| v as i64))
+        .bind(record.created_at as i64)
+        .bind(record.updated_at as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn get_camera_count(&self, user_id: &UserId) -> Result<i64> {
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cameras WHERE user_id = $1")
+            .bind(&user_id.0)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(count)
+    }
+
+    async fn list_past_due_expired(&self, now: u64) -> Result<Vec<SubscriptionRecord>> {
+        let rows = sqlx::query(
+            "SELECT user_id, stripe_customer_id, stripe_subscription_id, tier, status, \
+             current_period_start, current_period_end, grace_expires_at, created_at, updated_at \
+             FROM subscriptions \
+             WHERE status = 'past_due' AND grace_expires_at IS NOT NULL AND grace_expires_at <= $1",
+        )
+        .bind(now as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| SubscriptionRecord {
+                user_id: UserId(r.get("user_id")),
+                stripe_customer_id: r.get("stripe_customer_id"),
+                stripe_subscription_id: r.get("stripe_subscription_id"),
+                tier: r.get("tier"),
+                status: r.get("status"),
+                current_period_start: r
+                    .get::<Option<i64>, _>("current_period_start")
+                    .map(|v| v as u64),
+                current_period_end: r
+                    .get::<Option<i64>, _>("current_period_end")
+                    .map(|v| v as u64),
+                grace_expires_at: r
+                    .get::<Option<i64>, _>("grace_expires_at")
+                    .map(|v| v as u64),
+                created_at: r.get::<i64, _>("created_at") as u64,
+                updated_at: r.get::<i64, _>("updated_at") as u64,
+            })
+            .collect())
+    }
+
+    // --- Stripe idempotency ---
+
+    async fn try_claim_stripe_event(&self, event_id: &str) -> Result<bool> {
+        let now = now_unix() as i64;
+        let result = sqlx::query("INSERT INTO stripe_events (event_id, processed_at) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+            .bind(event_id)
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn cleanup_old_stripe_events(&self, before: u64) -> Result<u64> {
+        let result = sqlx::query("DELETE FROM stripe_events WHERE processed_at < $1")
+            .bind(before as i64)
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected())
     }
 
     async fn update_user(&self, user_id: &UserId, update: &UserUpdate) -> Result<()> {

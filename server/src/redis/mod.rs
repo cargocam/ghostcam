@@ -5,3 +5,4 @@ pub mod revocation;
 pub mod telemetry;
 pub mod telemetry_api;
 pub mod telemetry_query;
+pub mod usage;
