@@ -42,8 +42,8 @@ class BillingStore {
 		try {
 			const { url } = await createCheckout(
 				tier,
-				window.location.origin + '/?billing=success',
-				window.location.origin + '/?billing=cancel',
+				window.location.origin + '/',
+				window.location.origin + '/',
 			);
 			window.location.href = url;
 		} catch (e) {
@@ -53,7 +53,7 @@ class BillingStore {
 
 	async openPortal() {
 		try {
-			const { url } = await createPortal(window.location.href);
+			const { url } = await createPortal(window.location.origin + '/');
 			window.location.href = url;
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : 'Portal failed';

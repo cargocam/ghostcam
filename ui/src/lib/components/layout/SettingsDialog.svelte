@@ -16,9 +16,9 @@
 
 	let upgradeOpen = $state(false);
 
-	// Load billing data when settings opens
+	// Refresh billing data each time settings opens
 	$effect(() => {
-		if (open && !billingStore.subscription) {
+		if (open) {
 			billingStore.load();
 		}
 	});

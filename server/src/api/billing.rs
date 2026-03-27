@@ -130,6 +130,22 @@ pub async fn create_checkout(
         None => return StatusCode::NOT_FOUND.into_response(),
     };
 
+    // If user already has an active Stripe subscription, reject — use Portal instead
+    if let Ok(Some(existing)) = state.db.get_subscription(&user.user_id).await {
+        if existing.stripe_subscription_id.is_some()
+            && matches!(existing.status.as_str(), "active" | "past_due")
+        {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "active_subscription_exists",
+                    "message": "You already have an active subscription. Use the customer portal to change plans."
+                })),
+            )
+                .into_response();
+        }
+    }
+
     // Validate tier exists and has a Stripe price ID
     let price_id = match stripe.price_id_for_tier(&body.tier) {
         Some(p) => p.clone(),
@@ -243,7 +259,11 @@ pub async fn create_portal(
     };
 
     match stripe
-        .create_portal_session(customer_id, &body.return_url)
+        .create_portal_session(
+            customer_id,
+            &body.return_url,
+            state.stripe_portal_config_id.as_deref(),
+        )
         .await
     {
         Ok(url) => Json(PortalResponse { url }).into_response(),

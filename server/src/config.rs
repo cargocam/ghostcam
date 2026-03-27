@@ -24,6 +24,7 @@ pub struct ServerConfig {
     pub stripe_price_id_starter: Option<String>,
     pub stripe_price_id_pro: Option<String>,
     pub stripe_price_id_enterprise: Option<String>,
+    pub stripe_portal_config_id: Option<String>,
 }
 
 /// TOML-deserialized server config file. All fields optional — missing fields
@@ -106,6 +107,7 @@ impl ServerConfig {
         let stripe_price_id_starter = env_opt("STRIPE_PRICE_ID_STARTER");
         let stripe_price_id_pro = env_opt("STRIPE_PRICE_ID_PRO");
         let stripe_price_id_enterprise = env_opt("STRIPE_PRICE_ID_ENTERPRISE");
+        let stripe_portal_config_id = env_opt("STRIPE_PORTAL_CONFIG_ID");
 
         let config = ServerConfig {
             data_dir,
@@ -123,6 +125,7 @@ impl ServerConfig {
             stripe_price_id_starter,
             stripe_price_id_pro,
             stripe_price_id_enterprise,
+            stripe_portal_config_id,
         };
 
         config.validate()?;
@@ -236,6 +239,7 @@ mod tests {
             stripe_price_id_starter: None,
             stripe_price_id_pro: None,
             stripe_price_id_enterprise: None,
+            stripe_portal_config_id: None,
         };
         assert_eq!(config.resolved_enrollment_addr(), "10.0.0.1:4433");
     }
@@ -258,6 +262,7 @@ mod tests {
             stripe_price_id_starter: None,
             stripe_price_id_pro: None,
             stripe_price_id_enterprise: None,
+            stripe_portal_config_id: None,
         };
         assert_eq!(config.resolved_enrollment_addr(), "server:4433");
     }

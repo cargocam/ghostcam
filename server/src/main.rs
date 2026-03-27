@@ -167,6 +167,7 @@ async fn main() -> anyhow::Result<()> {
         webrtc_socket,
         stripe,
         tiers,
+        stripe_portal_config_id: cfg.stripe_portal_config_id,
     });
 
     // --- QUIC listener ---

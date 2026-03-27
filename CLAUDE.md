@@ -159,6 +159,7 @@ Settings that require restart (ports, database_url, data_dir) log warnings on re
 | `STRIPE_PRICE_ID_STARTER` | server | _(none)_ | Stripe Price ID for starter tier |
 | `STRIPE_PRICE_ID_PRO` | server | _(none)_ | Stripe Price ID for pro tier |
 | `STRIPE_PRICE_ID_ENTERPRISE` | server | _(none)_ | Stripe Price ID for enterprise tier |
+| `STRIPE_PORTAL_CONFIG_ID` | server | _(none)_ | Portal config with plan switching |
 
 ## Architecture
 
@@ -376,6 +377,8 @@ GET    /readyz                             200 when ready (no auth)
 - **str0m API**: Pinned at 0.6.x. Key methods: `Rtc::builder().set_ice_lite(true)`, `sdp_api().accept_offer(offer)`, `rtc.writer(mid)`, `channel.write(binary, data)`.
 - **Billing disabled**: If `STRIPE_SECRET_KEY` is unset, billing is fully disabled — unlimited cameras, no payment UI. The `/api/v1/billing/subscription` endpoint returns `{ billing_enabled: false, tier: "unlimited" }`.
 - **Camera limit 402**: When billing is enabled and a user hits their camera limit, `POST /api/v1/cameras` returns HTTP 402 with `{ error: "camera_limit_reached" }`.
+- **Billing webhooks**: Stripe webhooks keep subscription state in sync. In production, set `STRIPE_WEBHOOK_SECRET` to the real signing secret. In local dev, run `docker compose --profile stripe up stripe-webhooks` to forward events via the Stripe CLI container — it prints the `whsec_...` secret to stdout on startup.
+- **Stripe Portal plan switching**: Requires `STRIPE_PORTAL_CONFIG_ID` — create one via the Stripe API or Dashboard with `subscription_update.enabled=true` and the product/price list. Without it, the portal only shows cancellation.
 
 ## Key Dependencies
 

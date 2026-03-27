@@ -38,4 +38,6 @@ pub struct AppState {
     pub stripe: Option<Arc<StripeClient>>,
     /// Subscription tier definitions.
     pub tiers: Arc<TierRegistry>,
+    /// Stripe portal configuration ID (enables plan switching in portal).
+    pub stripe_portal_config_id: Option<String>,
 }

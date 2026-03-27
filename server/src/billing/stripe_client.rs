@@ -110,10 +110,14 @@ impl StripeClient {
         &self,
         customer_id: &str,
         return_url: &str,
+        portal_config_id: Option<&str>,
     ) -> Result<String> {
         let cid: CustomerId = customer_id.parse().context("invalid customer ID")?;
         let mut params = CreateBillingPortalSession::new(cid);
         params.return_url = Some(return_url);
+        if let Some(config_id) = portal_config_id {
+            params.configuration = Some(config_id);
+        }
 
         let session = BillingPortalSession::create(&self.client, params)
             .await
