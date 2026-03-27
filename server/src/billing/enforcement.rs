@@ -14,10 +14,7 @@ impl std::fmt::Display for EnforcementError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::CameraLimitReached { current, limit } => {
-                write!(
-                    f,
-                    "Camera limit reached: {current} of {limit} cameras used"
-                )
+                write!(f, "Camera limit reached: {current} of {limit} cameras used")
             }
             Self::SubscriptionSuspended => {
                 write!(f, "Subscription is suspended due to payment failure")
@@ -41,10 +38,7 @@ pub async fn check_camera_limit(
 
     let sub = db.get_subscription(user_id).await?;
     let tier_id = sub.as_ref().map(|s| s.tier.as_str()).unwrap_or("free");
-    let status = sub
-        .as_ref()
-        .map(|s| s.status.as_str())
-        .unwrap_or("active");
+    let status = sub.as_ref().map(|s| s.status.as_str()).unwrap_or("active");
 
     // Suspended users cannot enroll new cameras
     if status == "suspended" {

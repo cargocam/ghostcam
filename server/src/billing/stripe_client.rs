@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use stripe::{
-    BillingPortalSession, CheckoutSession, CheckoutSessionMode, Client,
-    CreateBillingPortalSession, CreateCheckoutSession, CreateCheckoutSessionLineItems,
-    CreateCustomer, Customer, CustomerId, EventObject, EventType, Webhook,
+    BillingPortalSession, CheckoutSession, CheckoutSessionMode, Client, CreateBillingPortalSession,
+    CreateCheckoutSession, CreateCheckoutSessionLineItems, CreateCustomer, Customer, CustomerId,
+    EventObject, EventType, Webhook,
 };
 
 pub struct StripeClient {
@@ -42,11 +42,7 @@ pub enum WebhookAction {
 }
 
 impl StripeClient {
-    pub fn new(
-        secret_key: &str,
-        webhook_secret: &str,
-        price_ids: HashMap<String, String>,
-    ) -> Self {
+    pub fn new(secret_key: &str, webhook_secret: &str, price_ids: HashMap<String, String>) -> Self {
         Self {
             client: Client::new(secret_key),
             webhook_secret: webhook_secret.to_string(),
@@ -164,7 +160,7 @@ impl StripeClient {
                     WebhookAction::SubscriptionUpdated {
                         customer_id: sub.customer.id().to_string(),
                         subscription_id: sub.id.to_string(),
-                        status: format!("{:?}", sub.status),
+                        status: sub.status.as_str().to_string(),
                         current_period_start: Some(sub.current_period_start as u64),
                         current_period_end: Some(sub.current_period_end as u64),
                         price_id,

@@ -208,8 +208,7 @@ pub trait Database: Send + Sync + 'static {
     async fn list_past_due_expired(&self, now: u64) -> Result<Vec<SubscriptionRecord>>;
 
     // --- Stripe idempotency ---
-    async fn is_stripe_event_processed(&self, event_id: &str) -> Result<bool>;
-    async fn mark_stripe_event_processed(&self, event_id: &str) -> Result<()>;
+    async fn try_claim_stripe_event(&self, event_id: &str) -> Result<bool>;
 
     async fn cleanup_old_stripe_events(&self, before: u64) -> Result<u64>;
 

@@ -1,8 +1,8 @@
 use crate::auth;
 use crate::db_trait::{
     ApiTokenRecord, AuditLogRecord, CameraRecord, CameraUpdate, Database, NewApiToken,
-    NewCameraRecord, NewEnrollmentToken, NewSession, SessionRecord, SubscriptionRecord,
-    UserRecord, UserUpdate,
+    NewCameraRecord, NewEnrollmentToken, NewSession, SessionRecord, SubscriptionRecord, UserRecord,
+    UserUpdate,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -643,9 +643,15 @@ impl Database for PostgresDatabase {
             stripe_subscription_id: r.get("stripe_subscription_id"),
             tier: r.get("tier"),
             status: r.get("status"),
-            current_period_start: r.get::<Option<i64>, _>("current_period_start").map(|v| v as u64),
-            current_period_end: r.get::<Option<i64>, _>("current_period_end").map(|v| v as u64),
-            grace_expires_at: r.get::<Option<i64>, _>("grace_expires_at").map(|v| v as u64),
+            current_period_start: r
+                .get::<Option<i64>, _>("current_period_start")
+                .map(|v| v as u64),
+            current_period_end: r
+                .get::<Option<i64>, _>("current_period_end")
+                .map(|v| v as u64),
+            grace_expires_at: r
+                .get::<Option<i64>, _>("grace_expires_at")
+                .map(|v| v as u64),
             created_at: r.get::<i64, _>("created_at") as u64,
             updated_at: r.get::<i64, _>("updated_at") as u64,
         }))
@@ -670,9 +676,15 @@ impl Database for PostgresDatabase {
             stripe_subscription_id: r.get("stripe_subscription_id"),
             tier: r.get("tier"),
             status: r.get("status"),
-            current_period_start: r.get::<Option<i64>, _>("current_period_start").map(|v| v as u64),
-            current_period_end: r.get::<Option<i64>, _>("current_period_end").map(|v| v as u64),
-            grace_expires_at: r.get::<Option<i64>, _>("grace_expires_at").map(|v| v as u64),
+            current_period_start: r
+                .get::<Option<i64>, _>("current_period_start")
+                .map(|v| v as u64),
+            current_period_end: r
+                .get::<Option<i64>, _>("current_period_end")
+                .map(|v| v as u64),
+            grace_expires_at: r
+                .get::<Option<i64>, _>("grace_expires_at")
+                .map(|v| v as u64),
             created_at: r.get::<i64, _>("created_at") as u64,
             updated_at: r.get::<i64, _>("updated_at") as u64,
         }))
@@ -686,7 +698,7 @@ impl Database for PostgresDatabase {
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
              ON CONFLICT (user_id) DO UPDATE SET \
              stripe_customer_id = COALESCE($2, subscriptions.stripe_customer_id), \
-             stripe_subscription_id = COALESCE($3, subscriptions.stripe_subscription_id), \
+             stripe_subscription_id = $3, \
              tier = $4, status = $5, \
              current_period_start = $6, current_period_end = $7, \
              grace_expires_at = $8, updated_at = $10",
@@ -707,11 +719,10 @@ impl Database for PostgresDatabase {
     }
 
     async fn get_camera_count(&self, user_id: &UserId) -> Result<i64> {
-        let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM cameras WHERE user_id = $1")
-                .bind(&user_id.0)
-                .fetch_one(&self.pool)
-                .await?;
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cameras WHERE user_id = $1")
+            .bind(&user_id.0)
+            .fetch_one(&self.pool)
+            .await?;
         Ok(count)
     }
 
@@ -751,31 +762,21 @@ impl Database for PostgresDatabase {
 
     // --- Stripe idempotency ---
 
-    async fn is_stripe_event_processed(&self, event_id: &str) -> Result<bool> {
-        let exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM stripe_events WHERE event_id = $1)")
-                .bind(event_id)
-                .fetch_one(&self.pool)
-                .await?;
-        Ok(exists)
-    }
-
-    async fn mark_stripe_event_processed(&self, event_id: &str) -> Result<()> {
+    async fn try_claim_stripe_event(&self, event_id: &str) -> Result<bool> {
         let now = now_unix() as i64;
-        sqlx::query("INSERT INTO stripe_events (event_id, processed_at) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+        let result = sqlx::query("INSERT INTO stripe_events (event_id, processed_at) VALUES ($1, $2) ON CONFLICT DO NOTHING")
             .bind(event_id)
             .bind(now)
             .execute(&self.pool)
             .await?;
-        Ok(())
+        Ok(result.rows_affected() > 0)
     }
 
     async fn cleanup_old_stripe_events(&self, before: u64) -> Result<u64> {
-        let result =
-            sqlx::query("DELETE FROM stripe_events WHERE processed_at < $1")
-                .bind(before as i64)
-                .execute(&self.pool)
-                .await?;
+        let result = sqlx::query("DELETE FROM stripe_events WHERE processed_at < $1")
+            .bind(before as i64)
+            .execute(&self.pool)
+            .await?;
         Ok(result.rows_affected())
     }
 

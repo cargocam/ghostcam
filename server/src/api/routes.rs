@@ -53,7 +53,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/v1/billing/subscription",
             get(billing::get_subscription),
         )
-        .route("/api/v1/billing/tiers", get(billing::list_tiers))
         .route("/api/v1/billing/checkout", post(billing::create_checkout))
         .route("/api/v1/billing/portal", post(billing::create_portal))
         .route("/api/v1/billing/usage", get(billing::get_usage))
@@ -83,6 +82,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/readyz", get(health::readyz))
         .merge(login)
         .route("/api/v1/auth/register", post(auth::register))
+        .route("/api/v1/billing/tiers", get(billing::list_tiers))
         .route("/api/v1/webhooks/stripe", post(billing::stripe_webhook));
 
     Router::new()

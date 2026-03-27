@@ -93,10 +93,16 @@ pub async fn enroll(
                         _ => 0,
                     },
                 });
+            let error_key = match &e {
+                crate::billing::enforcement::EnforcementError::SubscriptionSuspended => {
+                    "subscription_suspended"
+                }
+                _ => "camera_limit_reached",
+            };
             return (
                 StatusCode::PAYMENT_REQUIRED,
                 Json(serde_json::json!({
-                    "error": "camera_limit_reached",
+                    "error": error_key,
                     "message": e.to_string(),
                 })),
             )

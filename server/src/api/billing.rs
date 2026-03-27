@@ -130,6 +130,21 @@ pub async fn create_checkout(
         None => return StatusCode::NOT_FOUND.into_response(),
     };
 
+    if !body.success_url.starts_with("http://") && !body.success_url.starts_with("https://") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid success_url"})),
+        )
+            .into_response();
+    }
+    if !body.cancel_url.starts_with("http://") && !body.cancel_url.starts_with("https://") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid cancel_url"})),
+        )
+            .into_response();
+    }
+
     // If user already has an active Stripe subscription, reject — use Portal instead
     if let Ok(Some(existing)) = state.db.get_subscription(&user.user_id).await {
         if existing.stripe_subscription_id.is_some()
@@ -161,9 +176,7 @@ pub async fn create_checkout(
     // Ensure user has a Stripe customer ID
     let sub = state.db.get_subscription(&user.user_id).await;
     let customer_id = match sub {
-        Ok(Some(ref s)) if s.stripe_customer_id.is_some() => {
-            s.stripe_customer_id.clone().unwrap()
-        }
+        Ok(Some(ref s)) if s.stripe_customer_id.is_some() => s.stripe_customer_id.clone().unwrap(),
         _ => {
             // Look up user email for Stripe customer creation
             let user_record = match state.db.get_user(&user.user_id).await {
@@ -231,6 +244,14 @@ pub async fn create_portal(
         Some(s) => s,
         None => return StatusCode::NOT_FOUND.into_response(),
     };
+
+    if !body.return_url.starts_with("http://") && !body.return_url.starts_with("https://") {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "invalid return_url"})),
+        )
+            .into_response();
+    }
 
     let sub = match state.db.get_subscription(&user.user_id).await {
         Ok(Some(s)) => s,
@@ -331,7 +352,10 @@ pub async fn stripe_webhook(
         None => return StatusCode::NOT_FOUND.into_response(),
     };
 
-    let signature = match headers.get("stripe-signature").and_then(|v| v.to_str().ok()) {
+    let signature = match headers
+        .get("stripe-signature")
+        .and_then(|v| v.to_str().ok())
+    {
         Some(s) => s,
         None => return StatusCode::BAD_REQUEST.into_response(),
     };
@@ -351,14 +375,14 @@ pub async fn stripe_webhook(
 
     let event_id = event.id.to_string();
 
-    // Idempotency check
-    match state.db.is_stripe_event_processed(&event_id).await {
-        Ok(true) => return StatusCode::OK.into_response(),
+    // Atomic idempotency: attempt INSERT, skip if already claimed
+    match state.db.try_claim_stripe_event(&event_id).await {
+        Ok(false) => return StatusCode::OK.into_response(),
         Err(e) => {
             tracing::error!("idempotency check error: {e}");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
-        _ => {}
+        Ok(true) => {}
     }
 
     let action = stripe.parse_event(&event);
@@ -384,16 +408,22 @@ pub async fn stripe_webhook(
             };
 
             if let Some(user_id) = user_id {
+                let existing = state.db.get_subscription(&user_id).await.ok().flatten();
+                let existing_tier = existing
+                    .as_ref()
+                    .map(|s| s.tier.clone())
+                    .unwrap_or_else(|| "free".into());
+                let created_at = existing.as_ref().map(|s| s.created_at).unwrap_or(now);
                 let record = SubscriptionRecord {
                     user_id: user_id.clone(),
                     stripe_customer_id: Some(customer_id),
                     stripe_subscription_id: Some(subscription_id),
-                    tier: "starter".into(), // Will be corrected by subscription.updated event
+                    tier: existing_tier,
                     status: "active".into(),
                     current_period_start: None,
                     current_period_end: None,
                     grace_expires_at: None,
-                    created_at: now,
+                    created_at,
                     updated_at: now,
                 };
                 if let Err(e) = state.db.upsert_subscription(&record).await {
@@ -504,10 +534,10 @@ pub async fn stripe_webhook(
                 .get_subscription_by_stripe_customer(&customer_id)
                 .await
             {
-                let grace_end = now + 7 * 86400; // 7-day grace period
+                let grace_expires_at = existing.grace_expires_at.unwrap_or(now + 7 * 86400);
                 let record = SubscriptionRecord {
                     status: "past_due".into(),
-                    grace_expires_at: Some(grace_end),
+                    grace_expires_at: Some(grace_expires_at),
                     updated_at: now,
                     ..existing
                 };
@@ -520,11 +550,6 @@ pub async fn stripe_webhook(
         WebhookAction::Unknown => {
             tracing::debug!(event_type = ?event.type_, "unhandled webhook event type");
         }
-    }
-
-    // Mark event as processed
-    if let Err(e) = state.db.mark_stripe_event_processed(&event_id).await {
-        tracing::error!("failed to mark stripe event processed: {e}");
     }
 
     StatusCode::OK.into_response()

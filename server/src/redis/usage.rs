@@ -18,16 +18,20 @@ fn storage_key(user_id: &str, month: &str) -> String {
 const USAGE_TTL_SECS: u64 = 90 * 86400;
 
 /// Increment the bandwidth counter for a user's current month.
-pub async fn increment_bandwidth(redis: &Arc<RedisManager>, user_id: &str, month: &str, bytes: i64) {
-    let Some(mut conn) = redis.get_conn() else { return };
+pub async fn increment_bandwidth(
+    redis: &Arc<RedisManager>,
+    user_id: &str,
+    month: &str,
+    bytes: i64,
+) {
+    let Some(mut conn) = redis.get_conn() else {
+        return;
+    };
     let key = bandwidth_key(user_id, month);
     let result: Result<i64, _> = conn.incr(&key, bytes).await;
     match result {
-        Ok(new_val) => {
-            // Set TTL on first write (when value equals the increment)
-            if new_val == bytes {
-                let _: Result<(), _> = conn.expire(&key, USAGE_TTL_SECS as i64).await;
-            }
+        Ok(_) => {
+            let _: Result<(), _> = conn.expire(&key, USAGE_TTL_SECS as i64).await;
         }
         Err(e) => {
             redis.record_write_error();
@@ -38,14 +42,14 @@ pub async fn increment_bandwidth(redis: &Arc<RedisManager>, user_id: &str, month
 
 /// Increment the storage counter for a user's current month.
 pub async fn increment_storage(redis: &Arc<RedisManager>, user_id: &str, month: &str, bytes: i64) {
-    let Some(mut conn) = redis.get_conn() else { return };
+    let Some(mut conn) = redis.get_conn() else {
+        return;
+    };
     let key = storage_key(user_id, month);
     let result: Result<i64, _> = conn.incr(&key, bytes).await;
     match result {
-        Ok(new_val) => {
-            if new_val == bytes {
-                let _: Result<(), _> = conn.expire(&key, USAGE_TTL_SECS as i64).await;
-            }
+        Ok(_) => {
+            let _: Result<(), _> = conn.expire(&key, USAGE_TTL_SECS as i64).await;
         }
         Err(e) => {
             redis.record_write_error();
