@@ -46,6 +46,8 @@
 			<div>
 				<input
 					type="email"
+					name="email"
+					autocomplete="email"
 					bind:value={email}
 					placeholder="Email"
 					required
@@ -57,6 +59,8 @@
 			<div>
 				<input
 					type="password"
+					name="password"
+					autocomplete={isRegistering ? 'new-password' : 'current-password'}
 					bind:value={password}
 					placeholder="Password"
 					required
@@ -68,6 +72,8 @@
 				<div>
 					<input
 						type="text"
+						name="display_name"
+						autocomplete="name"
 						bind:value={displayName}
 						placeholder="Display name (optional)"
 						class="w-full rounded-md border bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

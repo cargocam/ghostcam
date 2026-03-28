@@ -2,16 +2,14 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use stripe::{
-    BillingPortalSession, CheckoutSession, CheckoutSessionMode, Client, CreateBillingPortalSession,
-    CreateCheckoutSession, CreateCheckoutSessionLineItems, CreateCustomer, Customer, CustomerId,
+    BillingPortalSession, Client, CreateBillingPortalSession,
+    CreateCustomer, Customer, CustomerId,
     EventObject, EventType, Webhook,
 };
 
 pub struct StripeClient {
     client: Client,
-    webhook_secret: String,
-    /// tier_id -> stripe_price_id
-    price_ids: HashMap<String, String>,
+    webhook_secret: Option<String>,
 }
 
 /// Parsed Stripe webhook event with the fields we care about.
@@ -27,7 +25,7 @@ pub enum WebhookAction {
         status: String,
         current_period_start: Option<u64>,
         current_period_end: Option<u64>,
-        price_id: Option<String>,
+        tier: Option<String>,
     },
     SubscriptionDeleted {
         customer_id: String,
@@ -42,24 +40,23 @@ pub enum WebhookAction {
 }
 
 impl StripeClient {
-    pub fn new(secret_key: &str, webhook_secret: &str, price_ids: HashMap<String, String>) -> Self {
+    pub fn new(secret_key: &str, webhook_secret: Option<&str>) -> Self {
         Self {
             client: Client::new(secret_key),
-            webhook_secret: webhook_secret.to_string(),
-            price_ids,
+            webhook_secret: webhook_secret.map(|s| s.to_string()),
         }
     }
 
-    pub fn price_id_for_tier(&self, tier: &str) -> Option<&String> {
-        self.price_ids.get(tier)
-    }
-
-    /// Reverse lookup: stripe price ID -> tier ID
-    pub fn tier_for_price_id(&self, price_id: &str) -> Option<String> {
-        self.price_ids
-            .iter()
-            .find(|(_, v)| v.as_str() == price_id)
-            .map(|(k, _)| k.clone())
+    /// Resolve a Stripe product name to a tier ID.
+    /// Expects product names like "Ghostcam Starter" → "starter".
+    pub fn tier_from_product_name(name: &str) -> Option<String> {
+        let lower = name.to_lowercase();
+        for tier in ["starter", "pro", "enterprise"] {
+            if lower.contains(tier) {
+                return Some(tier.to_string());
+            }
+        }
+        None
     }
 
     pub async fn create_customer(&self, email: &str, user_id: &str) -> Result<String> {
@@ -70,36 +67,6 @@ impl StripeClient {
             .await
             .context("failed to create Stripe customer")?;
         Ok(customer.id.to_string())
-    }
-
-    pub async fn create_checkout_session(
-        &self,
-        customer_id: &str,
-        price_id: &str,
-        user_id: &str,
-        success_url: &str,
-        cancel_url: &str,
-    ) -> Result<String> {
-        let cid: CustomerId = customer_id.parse().context("invalid customer ID")?;
-        let mut params = CreateCheckoutSession::new();
-        params.customer = Some(cid);
-        params.mode = Some(CheckoutSessionMode::Subscription);
-        params.success_url = Some(success_url);
-        params.cancel_url = Some(cancel_url);
-        params.client_reference_id = Some(user_id);
-        params.line_items = Some(vec![CreateCheckoutSessionLineItems {
-            price: Some(price_id.to_string()),
-            quantity: Some(1),
-            ..Default::default()
-        }]);
-
-        let session = CheckoutSession::create(&self.client, params)
-            .await
-            .context("failed to create Stripe checkout session")?;
-
-        session
-            .url
-            .ok_or_else(|| anyhow::anyhow!("Stripe checkout session missing URL"))
     }
 
     pub async fn create_portal_session(
@@ -123,7 +90,9 @@ impl StripeClient {
     }
 
     pub fn verify_webhook(&self, payload: &str, signature: &str) -> Result<stripe::Event> {
-        Webhook::construct_event(payload, signature, &self.webhook_secret)
+        let secret = self.webhook_secret.as_deref()
+            .ok_or_else(|| anyhow::anyhow!("webhook secret not configured"))?;
+        Webhook::construct_event(payload, signature, secret)
             .map_err(|e| anyhow::anyhow!("webhook signature verification failed: {e}"))
     }
 
@@ -151,19 +120,24 @@ impl StripeClient {
             }
             EventType::CustomerSubscriptionUpdated => {
                 if let EventObject::Subscription(ref sub) = event.data.object {
-                    let price_id = sub
+                    let tier = sub
                         .items
                         .data
                         .first()
                         .and_then(|item| item.price.as_ref())
-                        .map(|p| p.id.to_string());
+                        .and_then(|p| p.product.as_ref())
+                        .and_then(|prod| match prod {
+                            stripe::Expandable::Object(p) => p.name.as_deref(),
+                            _ => None,
+                        })
+                        .and_then(Self::tier_from_product_name);
                     WebhookAction::SubscriptionUpdated {
                         customer_id: sub.customer.id().to_string(),
                         subscription_id: sub.id.to_string(),
                         status: sub.status.as_str().to_string(),
                         current_period_start: Some(sub.current_period_start as u64),
                         current_period_end: Some(sub.current_period_end as u64),
-                        price_id,
+                        tier,
                     }
                 } else {
                     WebhookAction::Unknown

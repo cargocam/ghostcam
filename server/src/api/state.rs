@@ -38,6 +38,10 @@ pub struct AppState {
     pub stripe: Option<Arc<StripeClient>>,
     /// Subscription tier definitions.
     pub tiers: Arc<TierRegistry>,
+    /// Stripe publishable key (needed by frontend for Pricing Table embed).
+    pub stripe_public_key: Option<String>,
+    /// Stripe Pricing Table ID (free-tier users see this to pick a plan).
+    pub stripe_pricing_table_id: Option<String>,
     /// Stripe portal configuration ID (enables plan switching in portal).
     pub stripe_portal_config_id: Option<String>,
 }

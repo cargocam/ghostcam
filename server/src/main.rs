@@ -121,20 +121,12 @@ async fn main() -> anyhow::Result<()> {
 
     // --- Billing (optional) ---
     let tiers = Arc::new(billing::tiers::TierRegistry::default());
-    let stripe = if let (Some(key), Some(webhook_secret)) =
-        (&cfg.stripe_secret_key, &cfg.stripe_webhook_secret)
-    {
-        let mut price_ids = std::collections::HashMap::new();
-        if let Some(p) = &cfg.stripe_price_id_starter {
-            price_ids.insert("starter".into(), p.clone());
+    let stripe = if let Some(key) = &cfg.stripe_secret_key {
+        let webhook_secret = cfg.stripe_webhook_secret.as_deref();
+        if webhook_secret.is_none() {
+            tracing::warn!("STRIPE_WEBHOOK_SECRET not set — webhooks will be rejected");
         }
-        if let Some(p) = &cfg.stripe_price_id_pro {
-            price_ids.insert("pro".into(), p.clone());
-        }
-        if let Some(p) = &cfg.stripe_price_id_enterprise {
-            price_ids.insert("enterprise".into(), p.clone());
-        }
-        let client = billing::stripe_client::StripeClient::new(key, webhook_secret, price_ids);
+        let client = billing::stripe_client::StripeClient::new(key, webhook_secret);
         tracing::info!("stripe billing enabled");
         Some(Arc::new(client))
     } else {
@@ -167,6 +159,8 @@ async fn main() -> anyhow::Result<()> {
         webrtc_socket,
         stripe,
         tiers,
+        stripe_public_key: cfg.stripe_public_key,
+        stripe_pricing_table_id: cfg.stripe_pricing_table_id,
         stripe_portal_config_id: cfg.stripe_portal_config_id,
     });
 

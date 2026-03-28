@@ -36,6 +36,8 @@ export interface SubscriptionInfo {
 	billing_enabled: boolean;
 	current_period_end?: number;
 	grace_expires_at?: number;
+	stripe_public_key?: string;
+	stripe_pricing_table_id?: string;
 }
 
 export interface TierInfo {
@@ -44,7 +46,6 @@ export interface TierInfo {
 	camera_limit: number | null;
 	storage_gb: number | null;
 	bandwidth_gb: number | null;
-	price_cents: number;
 }
 
 export interface UsageInfo {

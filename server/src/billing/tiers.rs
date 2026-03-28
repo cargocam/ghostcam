@@ -10,8 +10,6 @@ pub struct TierInfo {
     pub storage_gb: Option<u64>,
     /// None = unlimited
     pub bandwidth_gb: Option<u64>,
-    /// Monthly price in cents
-    pub price_cents: u32,
 }
 
 /// A collection of subscription tiers, configurable at startup.
@@ -57,7 +55,6 @@ pub fn default_tiers() -> Vec<TierInfo> {
             camera_limit: Some(2),
             storage_gb: Some(0),
             bandwidth_gb: Some(5),
-            price_cents: 0,
         },
         TierInfo {
             id: "starter".into(),
@@ -65,7 +62,6 @@ pub fn default_tiers() -> Vec<TierInfo> {
             camera_limit: Some(5),
             storage_gb: Some(50),
             bandwidth_gb: Some(100),
-            price_cents: 999,
         },
         TierInfo {
             id: "pro".into(),
@@ -73,7 +69,6 @@ pub fn default_tiers() -> Vec<TierInfo> {
             camera_limit: Some(20),
             storage_gb: Some(500),
             bandwidth_gb: Some(1000),
-            price_cents: 2999,
         },
         TierInfo {
             id: "enterprise".into(),
@@ -81,7 +76,6 @@ pub fn default_tiers() -> Vec<TierInfo> {
             camera_limit: None,
             storage_gb: None,
             bandwidth_gb: None,
-            price_cents: 9999,
         },
     ]
 }
@@ -104,7 +98,6 @@ mod tests {
     fn free_tier_exists() {
         let registry = TierRegistry::default();
         let tier = registry.get("free").unwrap();
-        assert_eq!(tier.price_cents, 0);
         assert_eq!(tier.camera_limit, Some(2));
     }
 
@@ -132,7 +125,6 @@ mod tests {
                 camera_limit: Some(1),
                 storage_gb: Some(0),
                 bandwidth_gb: Some(1),
-                price_cents: 0,
             },
             TierInfo {
                 id: "premium".into(),
@@ -140,7 +132,6 @@ mod tests {
                 camera_limit: Some(100),
                 storage_gb: None,
                 bandwidth_gb: None,
-                price_cents: 4999,
             },
         ]);
         assert_eq!(registry.camera_limit("free"), Some(1));
@@ -157,7 +148,6 @@ mod tests {
             camera_limit: None,
             storage_gb: None,
             bandwidth_gb: None,
-            price_cents: 999,
         }]);
     }
 }

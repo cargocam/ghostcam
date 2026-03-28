@@ -53,7 +53,6 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             "/api/v1/billing/subscription",
             get(billing::get_subscription),
         )
-        .route("/api/v1/billing/checkout", post(billing::create_checkout))
         .route("/api/v1/billing/portal", post(billing::create_portal))
         .route("/api/v1/billing/usage", get(billing::get_usage))
         // Audit

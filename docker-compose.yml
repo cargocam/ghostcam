@@ -35,15 +35,14 @@ services:
       - GHOSTCAM_DATABASE_URL=postgres://ghostcam:dev-password@postgres:5432/ghostcam
       - GHOSTCAM_REDIS_URL=redis://redis:6379
       - GHOSTCAM_DATA_DIR=/var/ghostcam
+      - GHOSTCAM_ADMIN_EMAIL=admin@ghostcam.dev
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
       - GHOSTCAM_ENROLLMENT_ADDR=server:4433
       - RUST_LOG=server=info
-      # Billing (set in .env to enable)
+      # Billing — set Stripe keys in .env (see .env.example)
+      - STRIPE_PUBLIC_KEY=${STRIPE_PUBLIC_KEY:-}
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
-      - STRIPE_WEBHOOK_SECRET=${STRIPE_WEBHOOK_SECRET:-}
-      - STRIPE_PRICE_ID_STARTER=${STRIPE_PRICE_ID_STARTER:-}
-      - STRIPE_PRICE_ID_PRO=${STRIPE_PRICE_ID_PRO:-}
-      - STRIPE_PRICE_ID_ENTERPRISE=${STRIPE_PRICE_ID_ENTERPRISE:-}
+      - STRIPE_PRICING_TABLE_ID=${STRIPE_PRICING_TABLE_ID:-}
       - STRIPE_PORTAL_CONFIG_ID=${STRIPE_PORTAL_CONFIG_ID:-}
     volumes:
       - server-data:/var/ghostcam
@@ -55,8 +54,9 @@ services:
     restart: unless-stopped
     depends_on: [server]
     environment:
+      - GHOSTCAM_ADMIN_EMAIL=admin@ghostcam.dev
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
-      - GHOSTCAM_CAMERA_NAME=Camera 1
+      - GHOSTCAM_CAMERA_NAME=Front Door
       - GHOSTCAM_DATA_DIR=/var/ghostcam
       - GHOSTCAM_SERVER_HTTP=http://server:3000
       - RUST_LOG=camera=info
@@ -71,13 +71,31 @@ services:
     restart: unless-stopped
     depends_on: [server]
     environment:
+      - GHOSTCAM_ADMIN_EMAIL=admin@ghostcam.dev
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
-      - GHOSTCAM_CAMERA_NAME=Camera 2
+      - GHOSTCAM_CAMERA_NAME=Garage
       - GHOSTCAM_DATA_DIR=/var/ghostcam
       - GHOSTCAM_SERVER_HTTP=http://server:3000
       - RUST_LOG=camera=info
     volumes:
       - camera-2-data:/var/ghostcam
+    command: ["--test-source", "--server-addr", "server:4433", "--no-tofu"]
+
+  camera-3:
+    build:
+      context: .
+      target: camera
+    restart: unless-stopped
+    depends_on: [server]
+    environment:
+      - GHOSTCAM_ADMIN_EMAIL=admin@ghostcam.dev
+      - GHOSTCAM_ADMIN_PASSWORD=dev-password
+      - GHOSTCAM_CAMERA_NAME=Backyard
+      - GHOSTCAM_DATA_DIR=/var/ghostcam
+      - GHOSTCAM_SERVER_HTTP=http://server:3000
+      - RUST_LOG=camera=info
+    volumes:
+      - camera-3-data:/var/ghostcam
     command: ["--test-source", "--server-addr", "server:4433", "--no-tofu"]
 
   ui:
@@ -90,10 +108,11 @@ services:
     depends_on: [server]
     environment:
       - VITE_API_URL=http://server:3000
+    volumes:
+      - ./ui/src:/app/src
 
   # Stripe CLI webhook forwarder.
-  # Forwards Stripe events to the server's webhook endpoint.
-  # Exits immediately if STRIPE_SECRET_KEY is not set.
+  # Exits immediately if STRIPE_SECRET_KEY is not set in the host env.
   # Prints the webhook signing secret (whsec_...) to stdout on startup —
   # set it as STRIPE_WEBHOOK_SECRET in .env and restart the server.
   stripe-webhooks:
@@ -117,3 +136,4 @@ volumes:
   server-data:
   camera-1-data:
   camera-2-data:
+  camera-3-data:

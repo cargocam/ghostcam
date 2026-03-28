@@ -35,6 +35,12 @@ pub struct SubscriptionResponse {
     pub billing_enabled: bool,
     pub current_period_end: Option<u64>,
     pub grace_expires_at: Option<u64>,
+    /// Stripe publishable key for Pricing Table embed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stripe_public_key: Option<String>,
+    /// Stripe Pricing Table ID for upgrade flow.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stripe_pricing_table_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -45,18 +51,6 @@ pub struct UsageResponse {
     pub camera_limit: Option<u32>,
     pub storage_limit_gb: Option<u64>,
     pub bandwidth_limit_gb: Option<u64>,
-}
-
-#[derive(Deserialize)]
-pub struct CheckoutRequest {
-    pub tier: String,
-    pub success_url: String,
-    pub cancel_url: String,
-}
-
-#[derive(Serialize)]
-pub struct CheckoutResponse {
-    pub url: String,
 }
 
 #[derive(Deserialize)]
@@ -83,9 +77,14 @@ pub async fn get_subscription(
             billing_enabled: false,
             current_period_end: None,
             grace_expires_at: None,
+            stripe_public_key: None,
+            stripe_pricing_table_id: None,
         })
         .into_response();
     }
+
+    let pk = state.stripe_public_key.clone();
+    let pt = state.stripe_pricing_table_id.clone();
 
     match state.db.get_subscription(&user.user_id).await {
         Ok(Some(sub)) => Json(SubscriptionResponse {
@@ -94,6 +93,8 @@ pub async fn get_subscription(
             billing_enabled: true,
             current_period_end: sub.current_period_end,
             grace_expires_at: sub.grace_expires_at,
+            stripe_public_key: pk,
+            stripe_pricing_table_id: pt,
         })
         .into_response(),
         Ok(None) => Json(SubscriptionResponse {
@@ -102,6 +103,8 @@ pub async fn get_subscription(
             billing_enabled: true,
             current_period_end: None,
             grace_expires_at: None,
+            stripe_public_key: pk,
+            stripe_pricing_table_id: pt,
         })
         .into_response(),
         Err(e) => {
@@ -117,121 +120,6 @@ pub async fn list_tiers(State(state): State<Arc<AppState>>) -> Response {
         return Json(serde_json::json!([])).into_response();
     }
     Json(state.tiers.all()).into_response()
-}
-
-/// POST /api/v1/billing/checkout
-pub async fn create_checkout(
-    State(state): State<Arc<AppState>>,
-    Extension(user): Extension<AuthUser>,
-    Json(body): Json<CheckoutRequest>,
-) -> Response {
-    let stripe = match &state.stripe {
-        Some(s) => s,
-        None => return StatusCode::NOT_FOUND.into_response(),
-    };
-
-    if !body.success_url.starts_with("http://") && !body.success_url.starts_with("https://") {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "invalid success_url"})),
-        )
-            .into_response();
-    }
-    if !body.cancel_url.starts_with("http://") && !body.cancel_url.starts_with("https://") {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "invalid cancel_url"})),
-        )
-            .into_response();
-    }
-
-    // If user already has an active Stripe subscription, reject — use Portal instead
-    if let Ok(Some(existing)) = state.db.get_subscription(&user.user_id).await {
-        if existing.stripe_subscription_id.is_some()
-            && matches!(existing.status.as_str(), "active" | "past_due")
-        {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": "active_subscription_exists",
-                    "message": "You already have an active subscription. Use the customer portal to change plans."
-                })),
-            )
-                .into_response();
-        }
-    }
-
-    // Validate tier exists and has a Stripe price ID
-    let price_id = match stripe.price_id_for_tier(&body.tier) {
-        Some(p) => p.clone(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "invalid tier or no Stripe price configured"})),
-            )
-                .into_response()
-        }
-    };
-
-    // Ensure user has a Stripe customer ID
-    let sub = state.db.get_subscription(&user.user_id).await;
-    let customer_id = match sub {
-        Ok(Some(ref s)) if s.stripe_customer_id.is_some() => s.stripe_customer_id.clone().unwrap(),
-        _ => {
-            // Look up user email for Stripe customer creation
-            let user_record = match state.db.get_user(&user.user_id).await {
-                Ok(Some(u)) => u,
-                _ => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            };
-            match stripe
-                .create_customer(&user_record.email, &user.user_id.0)
-                .await
-            {
-                Ok(cid) => {
-                    // Store customer ID
-                    let now = now_unix();
-                    let record = SubscriptionRecord {
-                        user_id: user.user_id.clone(),
-                        stripe_customer_id: Some(cid.clone()),
-                        stripe_subscription_id: None,
-                        tier: "free".into(),
-                        status: "active".into(),
-                        current_period_start: None,
-                        current_period_end: None,
-                        grace_expires_at: None,
-                        created_at: now,
-                        updated_at: now,
-                    };
-                    if let Err(e) = state.db.upsert_subscription(&record).await {
-                        tracing::error!("failed to store Stripe customer: {e}");
-                        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-                    }
-                    cid
-                }
-                Err(e) => {
-                    tracing::error!("failed to create Stripe customer: {e}");
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-                }
-            }
-        }
-    };
-
-    match stripe
-        .create_checkout_session(
-            &customer_id,
-            &price_id,
-            &user.user_id.0,
-            &body.success_url,
-            &body.cancel_url,
-        )
-        .await
-    {
-        Ok(url) => Json(CheckoutResponse { url }).into_response(),
-        Err(e) => {
-            tracing::error!("failed to create checkout session: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
-    }
 }
 
 /// POST /api/v1/billing/portal
@@ -253,35 +141,58 @@ pub async fn create_portal(
             .into_response();
     }
 
-    let sub = match state.db.get_subscription(&user.user_id).await {
-        Ok(Some(s)) => s,
-        Ok(None) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "no subscription found"})),
-            )
-                .into_response()
+    // Get or create Stripe customer for this user
+    let sub = state.db.get_subscription(&user.user_id).await;
+    let customer_id = match sub {
+        Ok(Some(ref s)) if s.stripe_customer_id.is_some() => {
+            s.stripe_customer_id.clone().unwrap()
         }
-        Err(e) => {
-            tracing::error!("get subscription error: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-
-    let customer_id = match &sub.stripe_customer_id {
-        Some(c) => c,
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "no Stripe customer on file"})),
-            )
-                .into_response()
+        _ => {
+            // Create a Stripe customer so the portal can be opened
+            let user_record = match state.db.get_user(&user.user_id).await {
+                Ok(Some(u)) => u,
+                _ => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            };
+            match stripe
+                .create_customer(&user_record.email, &user.user_id.0)
+                .await
+            {
+                Ok(cid) => {
+                    let now = now_unix();
+                    let record = SubscriptionRecord {
+                        user_id: user.user_id.clone(),
+                        stripe_customer_id: Some(cid.clone()),
+                        stripe_subscription_id: None,
+                        tier: "free".into(),
+                        status: "active".into(),
+                        current_period_start: None,
+                        current_period_end: None,
+                        grace_expires_at: None,
+                        created_at: sub
+                            .as_ref()
+                            .ok()
+                            .and_then(|s| s.as_ref())
+                            .map(|s| s.created_at)
+                            .unwrap_or(now),
+                        updated_at: now,
+                    };
+                    if let Err(e) = state.db.upsert_subscription(&record).await {
+                        tracing::error!("failed to store Stripe customer: {e}");
+                        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    }
+                    cid
+                }
+                Err(e) => {
+                    tracing::error!("failed to create Stripe customer: {e}");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            }
         }
     };
 
     match stripe
         .create_portal_session(
-            customer_id,
+            &customer_id,
             &body.return_url,
             state.stripe_portal_config_id.as_deref(),
         )
@@ -438,17 +349,14 @@ pub async fn stripe_webhook(
             status,
             current_period_start,
             current_period_end,
-            price_id,
+            tier,
         } => {
             if let Ok(Some(existing)) = state
                 .db
                 .get_subscription_by_stripe_customer(&customer_id)
                 .await
             {
-                let new_tier = price_id
-                    .as_deref()
-                    .and_then(|p| stripe.tier_for_price_id(p))
-                    .unwrap_or_else(|| existing.tier.clone());
+                let new_tier = tier.unwrap_or_else(|| existing.tier.clone());
 
                 let old_tier = existing.tier.clone();
                 let record = SubscriptionRecord {

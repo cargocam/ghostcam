@@ -43,40 +43,23 @@ cargo build --release
 cargo test --workspace
 ```
 
-### Local dev (3 terminals)
+### Local dev
+
+All services run through docker-compose. Never run server, cameras, or UI natively.
+In dev, Vite serves the UI with HMR. In production, the Rust server serves the built static files directly (no separate UI process).
 
 ```bash
-# Terminal 1 — server
-# GHOSTCAM_PUBLIC_IP must be your LAN IP, not 127.0.0.1.
-# Firefox binds its ICE UDP sockets on the LAN interface and cannot route to loopback.
-# Chrome works either way (it also generates a 127.0.0.1 candidate).
-# macOS: ipconfig getifaddr en0  |  Linux: hostname -I | awk '{print $1}'
-GHOSTCAM_DATA_DIR=/tmp/ghostcam-server \
-GHOSTCAM_DATABASE_URL=postgres://ghostcam:dev-password@localhost:5432/ghostcam \
-GHOSTCAM_REDIS_URL=redis://127.0.0.1:6379 \
-GHOSTCAM_PUBLIC_IP=<your-lan-ip> \
-./target/release/server
+# Copy .env.example and fill in your LAN IP (required for Firefox WebRTC):
+cp .env.example .env
+# macOS: echo "GHOSTCAM_PUBLIC_IP=$(ipconfig getifaddr en0)" >> .env
+# Linux: echo "GHOSTCAM_PUBLIC_IP=$(hostname -I | awk '{print $1}')" >> .env
+# Optionally add Stripe keys for billing (see .env.example)
 
-# Terminal 2 — test cameras (3 in parallel)
-for i in 1 2 3; do
-  mkdir -p /tmp/ghostcam-cam0$i/segments
-  ./target/release/camera \
-    --test-source --server-addr 127.0.0.1:4433 \
-    --data-dir /tmp/ghostcam-cam0$i \
-    --segment-dir /tmp/ghostcam-cam0$i/segments \
-    --no-tofu &
-done
-
-# Terminal 3 — viewer dev server
-cd ui && bun install && bun run dev
-# Open http://localhost:5173  (login: admin / printed at server first start)
-```
-
-## Docker
-
-```bash
 docker compose build
-docker compose up    # server + 2 test cameras
+docker compose up -d    # server + 3 test cameras + UI
+
+# Open http://localhost:5173  (login: admin@ghostcam.dev / dev-password)
+# Clean restart: docker compose down -v && docker compose up -d
 ```
 
 ## CI

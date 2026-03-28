@@ -1,4 +1,4 @@
-import type { GroupInfo, CameraInfo, SubscriptionInfo, TierInfo, UsageInfo } from '$lib/types.js';
+import type { GroupInfo, CameraInfo, SubscriptionInfo, UsageInfo } from '$lib/types.js';
 
 interface CoverageSegment {
 	id: string;
@@ -101,30 +101,9 @@ export async function getSubscription(): Promise<SubscriptionInfo> {
 	return res.json();
 }
 
-export async function getTiers(): Promise<TierInfo[]> {
-	const res = await fetch(`${API_BASE}/billing/tiers`, { credentials: 'include' });
-	if (!res.ok) throw new Error(`getTiers failed: ${res.status}`);
-	return res.json();
-}
-
 export async function getUsage(): Promise<UsageInfo> {
 	const res = await fetch(`${API_BASE}/billing/usage`, { credentials: 'include' });
 	if (!res.ok) throw new Error(`getUsage failed: ${res.status}`);
-	return res.json();
-}
-
-export async function createCheckout(
-	tier: string,
-	successUrl: string,
-	cancelUrl: string,
-): Promise<{ url: string }> {
-	const res = await fetch(`${API_BASE}/billing/checkout`, {
-		method: 'POST',
-		headers: headers(),
-		body: JSON.stringify({ tier, success_url: successUrl, cancel_url: cancelUrl }),
-		credentials: 'include',
-	});
-	if (!res.ok) throw new Error(`createCheckout failed: ${res.status}`);
 	return res.json();
 }
 

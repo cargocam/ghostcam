@@ -6,15 +6,13 @@
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { transportStore } from '$lib/stores/transport.svelte.js';
 	import { billingStore } from '$lib/stores/billing.svelte.js';
-	import { Sun, Moon, Monitor, Bug, CreditCard, ExternalLink, AlertTriangle, Zap, Rocket, Building } from 'lucide-svelte';
+	import { Sun, Moon, Monitor, Bug, CreditCard, ExternalLink, AlertTriangle } from 'lucide-svelte';
 
 	let {
 		open = $bindable(false),
 	}: {
 		open?: boolean;
 	} = $props();
-
-	let upgradeOpen = $state(false);
 
 	// Refresh billing data each time settings opens
 	$effect(() => {
@@ -24,13 +22,22 @@
 	});
 
 	let isFree = $derived(billingStore.currentTier === 'free');
-	let paidTiers = $derived(billingStore.tiers.filter(t => t.id !== 'free'));
+	let hasPricingTable = $derived(billingStore.stripePublicKey && billingStore.stripePricingTableId);
+	let upgradeOpen = $state(false);
 
-	function formatPrice(cents: number): string {
-		return `$${(cents / 100).toFixed(2)}`;
-	}
-
-	const tierIcons = { starter: Zap, pro: Rocket, enterprise: Building } as Record<string, typeof Zap>;
+	// Load Stripe Pricing Table script once
+	let stripeScriptLoaded = $state(false);
+	$effect(() => {
+		if (hasPricingTable && !stripeScriptLoaded) {
+			if (!document.querySelector('script[src*="pricing-table.js"]')) {
+				const script = document.createElement('script');
+				script.src = 'https://js.stripe.com/v3/pricing-table.js';
+				script.async = true;
+				document.head.appendChild(script);
+			}
+			stripeScriptLoaded = true;
+		}
+	});
 </script>
 
 <Sheet bind:open>
@@ -134,15 +141,9 @@
 						</Button>
 					{:else}
 						<Button variant="outline" class="w-full" onclick={() => billingStore.openPortal()}>
-							Update Subscription
+							Manage Subscription
 							<ExternalLink class="h-3.5 w-3.5 ml-1.5" />
 						</Button>
-						<button
-							class="w-full mt-2 text-xs text-destructive hover:underline text-center"
-							onclick={() => billingStore.openPortal()}
-						>
-							Cancel subscription
-						</button>
 					{/if}
 				</div>
 
@@ -166,38 +167,16 @@
 	</SheetContent>
 </Sheet>
 
-<!-- Upgrade modal -->
-<Dialog bind:open={upgradeOpen}>
-	<DialogContent class="sm:max-w-md">
-		<DialogHeader>
-			<DialogTitle>Choose a plan</DialogTitle>
-			<DialogDescription>Select a plan to upgrade your account.</DialogDescription>
-		</DialogHeader>
-		<div class="space-y-3 mt-2">
-			{#each paidTiers as tier}
-				{@const Icon = tierIcons[tier.id] ?? Zap}
-				<button
-					class="w-full flex items-center gap-3 px-4 py-3 rounded-lg border text-sm hover:bg-accent transition-colors"
-					onclick={() => { upgradeOpen = false; billingStore.checkout(tier.id); }}
-				>
-					<Icon class="h-5 w-5 text-muted-foreground flex-shrink-0" />
-					<div class="flex-1 text-left">
-						<div class="font-medium">{tier.name}</div>
-						<div class="text-xs text-muted-foreground mt-0.5">
-							{tier.camera_limit !== null ? `Up to ${tier.camera_limit} cameras` : 'Unlimited cameras'}
-							{#if tier.bandwidth_gb !== null}
-								· {tier.bandwidth_gb >= 1000 ? `${tier.bandwidth_gb / 1000} TB` : `${tier.bandwidth_gb} GB`} bandwidth
-							{:else}
-								· Unlimited bandwidth
-							{/if}
-						</div>
-					</div>
-					<div class="text-right">
-						<div class="font-semibold">{formatPrice(tier.price_cents)}</div>
-						<div class="text-xs text-muted-foreground">per month</div>
-					</div>
-				</button>
-			{/each}
-		</div>
-	</DialogContent>
-</Dialog>
+{#if hasPricingTable}
+	<Dialog bind:open={upgradeOpen}>
+		<DialogContent style="max-width: min(1100px, 90vw);">
+			<DialogHeader>
+				<DialogTitle>Choose a plan</DialogTitle>
+				<DialogDescription>Select a plan to upgrade your account.</DialogDescription>
+			</DialogHeader>
+			<div class="mt-2">
+				{@html `<stripe-pricing-table pricing-table-id="${billingStore.stripePricingTableId}" publishable-key="${billingStore.stripePublicKey}"></stripe-pricing-table>`}
+			</div>
+		</DialogContent>
+	</Dialog>
+{/if}

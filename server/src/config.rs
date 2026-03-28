@@ -20,10 +20,9 @@ pub struct ServerConfig {
     pub admin_password: Option<String>,
     // Stripe billing (all optional — no key = billing disabled)
     pub stripe_secret_key: Option<String>,
+    pub stripe_public_key: Option<String>,
     pub stripe_webhook_secret: Option<String>,
-    pub stripe_price_id_starter: Option<String>,
-    pub stripe_price_id_pro: Option<String>,
-    pub stripe_price_id_enterprise: Option<String>,
+    pub stripe_pricing_table_id: Option<String>,
     pub stripe_portal_config_id: Option<String>,
 }
 
@@ -101,12 +100,11 @@ impl ServerConfig {
         // admin_password: env only (sensitive)
         let admin_password = env_opt("GHOSTCAM_ADMIN_PASSWORD");
 
-        // Stripe billing (env only — all sensitive)
+        // Stripe billing (env only)
         let stripe_secret_key = env_opt("STRIPE_SECRET_KEY");
+        let stripe_public_key = env_opt("STRIPE_PUBLIC_KEY");
         let stripe_webhook_secret = env_opt("STRIPE_WEBHOOK_SECRET");
-        let stripe_price_id_starter = env_opt("STRIPE_PRICE_ID_STARTER");
-        let stripe_price_id_pro = env_opt("STRIPE_PRICE_ID_PRO");
-        let stripe_price_id_enterprise = env_opt("STRIPE_PRICE_ID_ENTERPRISE");
+        let stripe_pricing_table_id = env_opt("STRIPE_PRICING_TABLE_ID");
         let stripe_portal_config_id = env_opt("STRIPE_PORTAL_CONFIG_ID");
 
         let config = ServerConfig {
@@ -121,10 +119,9 @@ impl ServerConfig {
             admin_email,
             admin_password,
             stripe_secret_key,
+            stripe_public_key,
             stripe_webhook_secret,
-            stripe_price_id_starter,
-            stripe_price_id_pro,
-            stripe_price_id_enterprise,
+            stripe_pricing_table_id,
             stripe_portal_config_id,
         };
 
@@ -235,10 +232,9 @@ mod tests {
             admin_email: "admin@localhost".to_string(),
             admin_password: None,
             stripe_secret_key: None,
+            stripe_public_key: None,
             stripe_webhook_secret: None,
-            stripe_price_id_starter: None,
-            stripe_price_id_pro: None,
-            stripe_price_id_enterprise: None,
+            stripe_pricing_table_id: None,
             stripe_portal_config_id: None,
         };
         assert_eq!(config.resolved_enrollment_addr(), "10.0.0.1:4433");
@@ -258,10 +254,9 @@ mod tests {
             admin_email: "admin@localhost".to_string(),
             admin_password: None,
             stripe_secret_key: None,
+            stripe_public_key: None,
             stripe_webhook_secret: None,
-            stripe_price_id_starter: None,
-            stripe_price_id_pro: None,
-            stripe_price_id_enterprise: None,
+            stripe_pricing_table_id: None,
             stripe_portal_config_id: None,
         };
         assert_eq!(config.resolved_enrollment_addr(), "server:4433");
