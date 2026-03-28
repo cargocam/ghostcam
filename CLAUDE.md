@@ -16,6 +16,8 @@ ghostcam/
 ├── camera/          Camera agent: QUIC/mTLS, enrollment, capture, recording, telemetry
 ├── server/          Server binary: QUIC ingest, WebRTC egress, HTTP API, Redis telemetry, PostgreSQL
 ├── ui/              Svelte 5 SPA: live WebRTC view, HLS playback, timeline scrubber, GPS map
+├── pi/              Pi system files: systemd services, GPS, NetworkManager configs
+├── scripts/         Developer tools: pi.sh (camera manager CLI)
 ├── Dockerfile       Multi-stage: server + camera targets
 ├── docker-compose.yml
 └── .github/workflows/ci.yml
@@ -56,9 +58,36 @@ cp .env.example .env
 # Optionally add Stripe keys for billing (see .env.example)
 
 docker compose build
-docker compose up -d    # server + 3 test cameras + UI
+```
 
+Two workflows depending on whether you're using test cameras or real hardware:
+
+**Server/UI development (test cameras, no hardware)**:
+```bash
+docker compose up -d --profile test   # server + UI + 3 test cameras
 # Open http://localhost:5173  (login: admin@ghostcam.dev / dev-password)
+```
+
+**Camera firmware on real Pi hardware**:
+```bash
+docker compose up -d                  # server + UI only (no test cameras)
+./scripts/pi.sh deploy                # cross-compile, deploy to Pi, tail logs
+```
+
+The Pi camera connects to the Docker server via the host's LAN IP (`GHOSTCAM_PUBLIC_IP`). Both workflows can run simultaneously -- test cameras and real hardware connect to the same server.
+
+```bash
+# Camera manager CLI (all Pi operations):
+./scripts/pi.sh setup    [HOST] [USER] [PASS]   # First-time Pi provisioning
+./scripts/pi.sh deploy   [HOST] [USER] [PASS]   # Build + deploy (primary dev loop)
+./scripts/pi.sh logs     [HOST] [USER] [PASS]   # Stream camera logs
+./scripts/pi.sh status   [HOST] [USER] [PASS]   # Health check
+./scripts/pi.sh wifi-off [SECS] [HOST] [USER] [PASS]  # Cellular failover test
+./scripts/pi.sh restart  [HOST] [USER] [PASS]   # Restart camera service
+./scripts/pi.sh ssh      [HOST] [USER] [PASS]   # Interactive SSH
+./scripts/pi.sh unenroll [HOST] [USER] [PASS]   # Reset enrollment
+
+# Defaults configured via .pi.env (gitignored) or CLI args
 # Clean restart: docker compose down -v && docker compose up -d
 ```
 
