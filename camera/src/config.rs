@@ -11,6 +11,8 @@ pub struct CameraConfig {
     pub test_video: String,
     pub segment_dir: String,
     pub no_audio: bool,
+    /// Audio input device name (None = system default)
+    pub audio_device: Option<String>,
     pub no_gps: bool,
     pub no_tofu: bool,
     pub data_dir: String,
@@ -35,6 +37,7 @@ pub struct CameraConfigFile {
     pub test_video: Option<String>,
     pub segment_dir: Option<String>,
     pub no_audio: Option<bool>,
+    pub audio_device: Option<String>,
     pub no_gps: Option<bool>,
     /// Security flag — only settable via CLI, never from config file.
     #[serde(skip)]
@@ -95,6 +98,8 @@ impl CameraConfig {
 
         let no_audio = cli.no_audio || file_conf.no_audio.unwrap_or(false);
 
+        let audio_device = env_opt("GHOSTCAM_AUDIO_DEVICE").or(file_conf.audio_device);
+
         let no_gps = cli.no_gps || file_conf.no_gps.unwrap_or(false);
 
         // no_tofu is CLI-only (intentional security decision — never from config file)
@@ -138,6 +143,7 @@ impl CameraConfig {
             test_video,
             segment_dir,
             no_audio,
+            audio_device,
             no_gps,
             no_tofu,
             data_dir,

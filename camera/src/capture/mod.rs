@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+pub mod audio;
 pub mod audio_test;
 pub mod video;
 pub mod video_test;
@@ -74,6 +76,7 @@ pub async fn start_capture(
                 test_video: String::new(),
                 segment_dir: String::new(),
                 no_audio: true,
+                audio_device: None,
                 no_gps: true,
                 no_tofu: true,
                 data_dir: String::new(),
@@ -88,19 +91,48 @@ pub async fn start_capture(
             }
         });
 
-        // Audio: still use test audio for now (real audio capture is a separate step)
+        // Real audio capture on Linux, test audio fallback on other platforms.
         if !config.no_audio {
-            let audio_tx = tx;
-            let audio_cancel = cancel;
-            tokio::spawn(async move {
-                if let Err(e) = audio_test::run_test_audio(audio_tx, audio_cancel).await {
-                    tracing::warn!("test audio source ended: {e}");
-                }
-            });
+            start_audio_capture(config, tx, cancel);
         }
     }
 
     Ok(rx)
+}
+
+/// Start audio capture: real cpal+opus on Linux, test source on other platforms.
+fn start_audio_capture(config: &CameraConfig, tx: CaptureSender, cancel: CancellationToken) {
+    #[cfg(target_os = "linux")]
+    {
+        let device_name = config.audio_device.clone();
+        let audio_tx = tx.clone();
+        let audio_cancel = cancel.clone();
+
+        match audio::start_real_audio(device_name.as_deref(), audio_tx, audio_cancel) {
+            Ok(()) => {
+                tracing::info!("real audio capture started");
+                return;
+            }
+            Err(e) => {
+                tracing::warn!("real audio capture failed to initialize: {e}");
+                tracing::warn!("falling back to test audio source");
+            }
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = &config.audio_device; // suppress unused warning
+    }
+
+    // Fallback: test audio source (non-Linux or if real audio init failed)
+    let audio_tx = tx;
+    let audio_cancel = cancel;
+    tokio::spawn(async move {
+        if let Err(e) = audio_test::run_test_audio(audio_tx, audio_cancel).await {
+            tracing::warn!("test audio source ended: {e}");
+        }
+    });
 }
 
 #[cfg(test)]

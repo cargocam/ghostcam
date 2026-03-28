@@ -167,6 +167,7 @@ async fn main() -> Result<()> {
                 test_video: String::new(),
                 segment_dir: String::new(),
                 no_audio: camera_config.no_audio,
+                audio_device: None,
                 no_gps: telem_no_gps,
                 no_tofu: true,
                 data_dir: String::new(),

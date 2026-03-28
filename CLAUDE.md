@@ -166,6 +166,7 @@ Settings that require restart (ports, database_url, data_dir) log warnings on re
 | `GHOSTCAM_ADMIN_EMAIL` | server | `admin@localhost` | Admin email |
 | `GHOSTCAM_ADMIN_PASSWORD` | server | _(auto-generated)_ | Preset admin password |
 | `GHOSTCAM_SERVER_ADDR` | camera | _(from enrollment)_ | Server QUIC address |
+| `GHOSTCAM_AUDIO_DEVICE` | camera | _(system default)_ | ALSA audio input device name |
 | `STRIPE_SECRET_KEY` | server | _(none)_ | Stripe API key (billing enabled if set) |
 | `STRIPE_WEBHOOK_SECRET` | server | _(none)_ | Stripe webhook signing secret |
 | `STRIPE_PRICE_ID_STARTER` | server | _(none)_ | Stripe Price ID for starter tier |
@@ -227,6 +228,7 @@ tofu.rs          Server fingerprint pinning (first connect)
 quic.rs          QUIC endpoint with mTLS device cert
 commands.rs      CameraCommand handler → updates watch channels
 capture/         Test sources: video_test.rs (loop H.264), audio_test/ (synthetic Opus)
+                 Real capture: video.rs (rpicam-vid), audio.rs (cpal+opus, Linux only)
 stream/          Frame senders: video.rs, audio.rs (write to persistent QUIC streams)
 recording/       fMP4 ring buffer: muxer, segment, ring_buffer, manifest, uploads
 telemetry/       sensors.rs (/proc, /sys, gpsd), buffer.rs (batch upload)

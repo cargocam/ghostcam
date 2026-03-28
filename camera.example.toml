@@ -30,6 +30,11 @@
 # CLI: --no-audio
 # no_audio = false
 
+# Audio input device name (ALSA device name, Linux only)
+# If unset, uses the system default input device.
+# Env: GHOSTCAM_AUDIO_DEVICE
+# audio_device = "sndrpigooglevoi"
+
 # Disable GPS (even if gpsd is available)
 # CLI: --no-gps
 # no_gps = false

@@ -49,6 +49,7 @@ See `camera.example.toml` in the repo root for all available settings with comme
 | `GHOSTCAM_CONFIG_FILE` | _(none)_ | Explicit path to TOML config file |
 | `GHOSTCAM_DATA_DIR` | `/var/ghostcam` | Data directory |
 | `GHOSTCAM_SERVER_ADDR` | _(from enrollment)_ | Server QUIC address |
+| `GHOSTCAM_AUDIO_DEVICE` | _(system default)_ | ALSA audio input device name (Linux only) |
 
 Server address resolution precedence: `--server-addr` CLI flag -> `GHOSTCAM_SERVER_ADDR` env var -> config file -> `server.addr` file (written during enrollment) -> hardcoded default.
 
@@ -81,6 +82,8 @@ Server address resolution precedence: `--server-addr` CLI flag -> `GHOSTCAM_SERV
 | `capture/mod` | `CaptureMessage` enum (VideoNal, AudioFrame) |
 | `capture/video_test` | Test video source: loops H.264 file at real-time pace |
 | `capture/audio_test` | Test audio source: synthetic Opus tone |
+| `capture/audio` | Real audio capture: cpal + opus (Linux only) |
+| `capture/video` | Real video capture: rpicam-vid / libcamera-vid |
 | `stream/mod` | Frame sender coordination |
 | `stream/video` | Writes H.264 NAL units to the persistent Video QUIC stream |
 | `stream/audio` | Writes Opus frames to the persistent Audio QUIC stream |
