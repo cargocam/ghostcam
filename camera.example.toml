@@ -37,3 +37,25 @@
 # Disable TOFU server fingerprint verification (dev/testing only)
 # CLI: --no-tofu
 # no_tofu = false
+
+# --- Video capture settings (rpicam-vid) ---
+
+# Video resolution width
+# Env: GHOSTCAM_VIDEO_WIDTH
+# video_width = 1280
+
+# Video resolution height
+# Env: GHOSTCAM_VIDEO_HEIGHT
+# video_height = 720
+
+# Video framerate
+# Env: GHOSTCAM_VIDEO_FPS
+# video_fps = 30
+
+# Video bitrate in bits per second (0 = VBR)
+# Env: GHOSTCAM_VIDEO_BITRATE
+# video_bitrate = 2000000
+
+# Keyframe interval in frames (60 = 2s at 30fps)
+# Env: GHOSTCAM_VIDEO_KEYFRAME_INTERVAL
+# video_keyframe_interval = 60

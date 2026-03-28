@@ -170,6 +170,11 @@ async fn main() -> Result<()> {
                 no_gps: telem_no_gps,
                 no_tofu: true,
                 data_dir: String::new(),
+                video_width: 1280,
+                video_height: 720,
+                video_fps: 30,
+                video_bitrate: 2_000_000,
+                video_keyframe_interval: 60,
             };
             if let Err(e) = telemetry::run_telemetry_loop(conn_rx, &buffer, &config, cancel).await {
                 tracing::warn!("telemetry loop ended: {e}");

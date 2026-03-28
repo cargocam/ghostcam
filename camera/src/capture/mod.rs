@@ -1,4 +1,5 @@
 pub mod audio_test;
+pub mod video;
 pub mod video_test;
 
 use bytes::Bytes;
@@ -48,19 +49,46 @@ pub async fn start_capture(
             });
         }
     } else {
-        // Real capture — stub for Plan 8/9
-        // On Linux: rpicam-vid for video, cpal+opus for audio
-        // On non-Linux: fall back to test sources
-        tracing::warn!("real capture not yet implemented, using test sources");
+        // Real video capture via rpicam-vid / libcamera-vid.
+        // Verify the binary exists before spawning — fail loudly, never fall back silently.
+        if video::detect_capture_binary().await.is_none() {
+            anyhow::bail!(
+                "real video capture requested but neither rpicam-vid nor libcamera-vid \
+                 found on PATH. Install rpicam-apps or use --test-source for development."
+            );
+        }
+
         let video_tx = tx.clone();
-        let video_path = config.test_video.clone();
         let video_cancel = cancel.clone();
+        // Clone config fields needed by the spawned task
+        let video_width = config.video_width;
+        let video_height = config.video_height;
+        let video_fps = config.video_fps;
+        let video_bitrate = config.video_bitrate;
+        let video_keyframe_interval = config.video_keyframe_interval;
         tokio::spawn(async move {
-            if let Err(e) = video_test::run_test_video(&video_path, video_tx, video_cancel).await {
-                tracing::warn!("test video source ended: {e}");
+            // Build a minimal config for the video task
+            let video_config = CameraConfig {
+                server_addr: String::new(),
+                test_source: false,
+                test_video: String::new(),
+                segment_dir: String::new(),
+                no_audio: true,
+                no_gps: true,
+                no_tofu: true,
+                data_dir: String::new(),
+                video_width,
+                video_height,
+                video_fps,
+                video_bitrate,
+                video_keyframe_interval,
+            };
+            if let Err(e) = video::run_real_video(&video_config, video_tx, video_cancel).await {
+                tracing::error!("real video capture failed: {e}");
             }
         });
 
+        // Audio: still use test audio for now (real audio capture is a separate step)
         if !config.no_audio {
             let audio_tx = tx;
             let audio_cancel = cancel;

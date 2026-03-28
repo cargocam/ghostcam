@@ -63,7 +63,6 @@ rpicam-vid \
   --framerate 30          # configurable
   --codec h264            # H.264 output
   --profile baseline      # broadest decoder compatibility
-  --level 3.1             # matches 720p30
   -o -                    # stdout
   --flush                 # immediate output (no buffering)
   -n                      # no preview window (headless)

@@ -210,6 +210,11 @@ mod tests {
             no_gps: false,
             no_tofu: true,
             data_dir: String::new(),
+            video_width: 1280,
+            video_height: 720,
+            video_fps: 30,
+            video_bitrate: 2_000_000,
+            video_keyframe_interval: 60,
         };
         let d = read_sensors(&config).await;
         assert!(d.ts > 0);
@@ -226,6 +231,11 @@ mod tests {
             no_gps: false,
             no_tofu: true,
             data_dir: String::new(),
+            video_width: 1280,
+            video_height: 720,
+            video_fps: 30,
+            video_bitrate: 2_000_000,
+            video_keyframe_interval: 60,
         };
         let d = read_sensors(&config).await;
         assert!(d.cpu.is_some());
@@ -242,6 +252,11 @@ mod tests {
             no_gps: false,
             no_tofu: true,
             data_dir: String::new(),
+            video_width: 1280,
+            video_height: 720,
+            video_fps: 30,
+            video_bitrate: 2_000_000,
+            video_keyframe_interval: 60,
         };
         let d = read_sensors(&config).await;
         assert!(d.mem.is_some());
@@ -258,6 +273,11 @@ mod tests {
             no_gps: true,
             no_tofu: true,
             data_dir: String::new(),
+            video_width: 1280,
+            video_height: 720,
+            video_fps: 30,
+            video_bitrate: 2_000_000,
+            video_keyframe_interval: 60,
         };
         let d = read_sensors(&config).await;
         assert!(d.lat.is_none());
