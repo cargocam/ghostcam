@@ -5,6 +5,7 @@ mod config;
 mod enrollment;
 mod firmware;
 mod network;
+mod qr_enrollment;
 mod quic;
 mod recording;
 mod session;
@@ -22,7 +23,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::capture::CaptureMessage;
 use crate::config::CameraConfig;
+use crate::network::{spawn_network_monitor, wait_for_route};
 use crate::telemetry::buffer::TelemetryBuffer;
+
+/// Timeout for individual frame sends. QUIC connections can hang for 30s+
+/// without signaling an error; this ensures we detect dead links quickly.
+const SEND_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Parser)]
 #[command(name = "ghostcam-camera")]
@@ -122,10 +128,29 @@ async fn main() -> Result<()> {
                 }
             }
         } else {
-            tracing::warn!("no user association certificate — enrollment required");
-            tracing::warn!("use --enrollment-jwt to enroll this camera");
+            // No JWT provided — try QR code scanning
+            tracing::info!("no enrollment found — entering QR scan mode");
+            match qr_enrollment::scan_and_enroll(&camera_config.data_dir, &device_cert, &device_key)
+                .await
+            {
+                Ok(()) => {
+                    tracing::info!("enrollment via QR complete");
+                    user_cert = certs::load_user_cert(&user_cert_path, &user_key_path)?;
+                }
+                Err(e) => {
+                    tracing::error!("QR enrollment failed: {e}");
+                    tracing::warn!("use --enrollment-jwt to enroll this camera manually");
+                }
+            }
         }
     }
+
+    // Check for firmware updates before connecting to server (best-effort)
+    firmware::check_for_update(
+        &camera_config.server_addr,
+        Path::new(&camera_config.data_dir),
+    )
+    .await;
 
     // Load telemetry buffer
     let buffer_path = Path::new(&camera_config.data_dir).join("telemetry.buf");
@@ -167,9 +192,15 @@ async fn main() -> Result<()> {
                 test_video: String::new(),
                 segment_dir: String::new(),
                 no_audio: camera_config.no_audio,
+                audio_device: None,
                 no_gps: telem_no_gps,
                 no_tofu: true,
                 data_dir: String::new(),
+                video_width: 1280,
+                video_height: 720,
+                video_fps: 30,
+                video_bitrate: 2_000_000,
+                video_keyframe_interval: 60,
             };
             if let Err(e) = telemetry::run_telemetry_loop(conn_rx, &buffer, &config, cancel).await {
                 tracing::warn!("telemetry loop ended: {e}");
@@ -179,6 +210,9 @@ async fn main() -> Result<()> {
 
     // Shutdown signal handler
     tokio::spawn(shutdown_signal(cancel.clone()));
+
+    // Network monitor — detects default route changes (Linux only, no-op on macOS)
+    let net_change_rx = spawn_network_monitor();
 
     // Connection loop
     run_connection_loop(
@@ -191,6 +225,7 @@ async fn main() -> Result<()> {
         video_rx,
         audio_rx,
         conn_tx,
+        net_change_rx,
         cancel,
     )
     .await?;
@@ -212,18 +247,27 @@ async fn run_connection_loop(
     video_rx: mpsc::Receiver<CaptureMessage>,
     audio_rx: mpsc::Receiver<CaptureMessage>,
     conn_tx: watch::Sender<Option<quinn::Connection>>,
+    net_change_rx: watch::Receiver<u64>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let mut backoff = Duration::from_secs(RECONNECT_BACKOFF_INITIAL_SECS);
     let mut video_rx = video_rx;
     let mut audio_rx = audio_rx;
+    let mut net_change_rx = net_change_rx;
 
     loop {
         if cancel.is_cancelled() {
             break;
         }
 
+        // Wait for a default route before attempting to connect.
+        // After WiFi drops, cellular may take 10-30s to come up.
+        wait_for_route().await;
+
         tracing::info!(addr = %config.server_addr, "connecting to server");
+
+        // Mark current network state as seen — only react to NEW changes.
+        net_change_rx.borrow_and_update();
 
         match try_connect_and_run(
             config,
@@ -235,6 +279,7 @@ async fn run_connection_loop(
             &mut video_rx,
             &mut audio_rx,
             &conn_tx,
+            &mut net_change_rx,
             &cancel,
         )
         .await
@@ -242,6 +287,11 @@ async fn run_connection_loop(
             Ok(()) => break,
             Err(e) => {
                 let _ = conn_tx.send(None);
+
+                // Drain buffered frames during reconnection to prevent
+                // backpressure on the capture pipeline.
+                while video_rx.try_recv().is_ok() {}
+                while audio_rx.try_recv().is_ok() {}
 
                 tracing::warn!("connection lost: {e}");
                 tracing::info!("reconnecting in {:?}", backoff);
@@ -267,6 +317,7 @@ async fn try_connect_and_run(
     video_rx: &mut mpsc::Receiver<CaptureMessage>,
     audio_rx: &mut mpsc::Receiver<CaptureMessage>,
     conn_tx: &watch::Sender<Option<quinn::Connection>>,
+    net_change_rx: &mut watch::Receiver<u64>,
     cancel: &CancellationToken,
 ) -> Result<()> {
     let endpoint = quic::build_client_endpoint(
@@ -304,7 +355,7 @@ async fn try_connect_and_run(
     let mut sess_handle = tokio::spawn(async move { sess.run(vid_rx, aud_rx).await });
 
     // Drain loop: forward frames into the session's channels.
-    // Exits when the session finishes (success or error) or when the global cancel fires.
+    // Exits when the session finishes, the network changes, or a send times out.
     let result = loop {
         tokio::select! {
             _ = cancel.cancelled() => break Ok(()),
@@ -315,16 +366,34 @@ async fn try_connect_and_run(
                     Err(e) => Err(anyhow::anyhow!("session task panicked: {e}")),
                 };
             }
+            Ok(_) = net_change_rx.changed() => {
+                tracing::warn!("network interface changed, reconnecting");
+                break Err(anyhow::anyhow!("network interface changed"));
+            }
             msg = video_rx.recv() => {
                 if let Some(m) = msg {
-                    let _ = vid_tx.send(m).await;
+                    // Race the channel send against a 5s timeout — dead QUIC
+                    // connections can cause channel backpressure for 30s+.
+                    tokio::select! {
+                        _ = vid_tx.send(m) => {}
+                        _ = tokio::time::sleep(SEND_TIMEOUT) => {
+                            tracing::warn!("video send timeout ({}s), connection likely dead", SEND_TIMEOUT.as_secs());
+                            break Err(anyhow::anyhow!("send timeout"));
+                        }
+                    }
                 } else {
                     break Ok(());
                 }
             }
             msg = audio_rx.recv() => {
                 if let Some(m) = msg {
-                    let _ = aud_tx.send(m).await;
+                    tokio::select! {
+                        _ = aud_tx.send(m) => {}
+                        _ = tokio::time::sleep(SEND_TIMEOUT) => {
+                            tracing::warn!("audio send timeout ({}s), connection likely dead", SEND_TIMEOUT.as_secs());
+                            break Err(anyhow::anyhow!("send timeout"));
+                        }
+                    }
                 } else {
                     break Ok(());
                 }

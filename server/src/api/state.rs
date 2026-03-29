@@ -1,5 +1,8 @@
 use std::sync::Arc;
 
+use ghostcam::firmware::FirmwareRelease;
+use tokio::sync::RwLock;
+
 use crate::audit::AuditLogger;
 use crate::billing::stripe_client::StripeClient;
 use crate::billing::tiers::TierRegistry;
@@ -44,4 +47,13 @@ pub struct AppState {
     pub stripe_pricing_table_id: Option<String>,
     /// Stripe portal configuration ID (enables plan switching in portal).
     pub stripe_portal_config_id: Option<String>,
+    /// Latest known firmware release (populated by GitHub webhook or startup fetch).
+    pub firmware_release: Arc<RwLock<Option<FirmwareRelease>>>,
+    /// GitHub webhook secret for signature verification. None = webhook disabled.
+    pub github_webhook_secret: Option<String>,
+    /// Window (seconds) over which to spread reboot commands on new release.
+    pub update_stagger_secs: u64,
+    /// Version for which a staggered reboot is already in flight. Prevents
+    /// duplicate reboots from webhook retries.
+    pub pending_reboot_version: tokio::sync::Mutex<Option<String>>,
 }

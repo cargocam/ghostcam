@@ -6,6 +6,7 @@ mod config;
 mod db;
 mod db_trait;
 mod egress;
+mod firmware;
 mod frames;
 mod ingest;
 mod pki;
@@ -144,6 +145,27 @@ async fn main() -> anyhow::Result<()> {
     let sessions = Arc::new(SessionManager::new());
     let sse_bus = Arc::new(SseEventBus::new());
 
+    // --- Firmware release state ---
+    let firmware_release = Arc::new(tokio::sync::RwLock::new(None));
+
+    // Seed firmware state from GitHub API on startup
+    if let Some(ref repo) = cfg.release_repo {
+        let fw = firmware_release.clone();
+        let repo = repo.clone();
+        tokio::spawn(async move {
+            tracing::info!(repo = %repo, "fetching latest release from GitHub API");
+            match crate::api::github_webhook::fetch_latest_github_release(&repo).await {
+                Some(release) => {
+                    tracing::info!(version = %release.version, "seeded firmware state from GitHub");
+                    *fw.write().await = Some(release);
+                }
+                None => {
+                    tracing::info!("no firmware release found on GitHub (or fetch failed)");
+                }
+            }
+        });
+    }
+
     let app_state = Arc::new(AppState {
         db: db.clone(),
         redis: redis.clone(),
@@ -159,10 +181,24 @@ async fn main() -> anyhow::Result<()> {
         webrtc_socket,
         stripe,
         tiers,
-        stripe_public_key: cfg.stripe_public_key,
-        stripe_pricing_table_id: cfg.stripe_pricing_table_id,
-        stripe_portal_config_id: cfg.stripe_portal_config_id,
+        stripe_public_key: cfg.stripe_public_key.clone(),
+        stripe_pricing_table_id: cfg.stripe_pricing_table_id.clone(),
+        stripe_portal_config_id: cfg.stripe_portal_config_id.clone(),
+        firmware_release: firmware_release.clone(),
+        github_webhook_secret: cfg.github_webhook_secret.clone(),
+        update_stagger_secs: cfg.update_stagger_secs,
+        pending_reboot_version: tokio::sync::Mutex::new(None),
     });
+
+    // --- Redis firmware release subscription ---
+    if let Some(ref redis_url) = cfg.redis_url {
+        let url = redis_url.clone();
+        let fw_state = app_state.clone();
+        let fw_cancel = cancel.clone();
+        tokio::spawn(async move {
+            crate::redis::firmware::subscribe_firmware_releases(&url, fw_state, fw_cancel).await;
+        });
+    }
 
     // --- QUIC listener ---
     let quic_bind: SocketAddr = format!("0.0.0.0:{}", cfg.quic_port).parse()?;
@@ -181,6 +217,7 @@ async fn main() -> anyhow::Result<()> {
         telemetry_batcher,
         sse_bus.clone(),
         audit.clone(),
+        firmware_release.clone(),
         quic_cancel,
     ));
 

@@ -6,7 +6,7 @@ Two modes:
 - **Test source** (`--test-source`): loops a pre-recorded H.264 file with synthetic audio. No system dependencies beyond Rust. Used for development and Docker.
 - **Real capture** (default): `rpicam-vid`/`libcamera-vid` for video, `cpal` + Opus for audio, `/proc`/`/sys` + gpsd for telemetry. Requires Linux with a camera.
 
-Auto-reconnects to the server with exponential backoff (1s → 30s).
+Auto-reconnects to the server with exponential backoff (1s → 30s). On Linux, a network monitor polls `/proc/net/route` every 500ms to detect WiFi-to-cellular failover — on interface change, the camera drops the QUIC session and reconnects immediately rather than waiting for the QUIC idle timeout. A 5s send timeout catches dead connections that haven't errored yet. On macOS (dev), the monitor is a no-op.
 
 ## System Requirements (Real Capture)
 
@@ -49,12 +49,13 @@ See `camera.example.toml` in the repo root for all available settings with comme
 | `GHOSTCAM_CONFIG_FILE` | _(none)_ | Explicit path to TOML config file |
 | `GHOSTCAM_DATA_DIR` | `/var/ghostcam` | Data directory |
 | `GHOSTCAM_SERVER_ADDR` | _(from enrollment)_ | Server QUIC address |
+| `GHOSTCAM_AUDIO_DEVICE` | _(system default)_ | ALSA audio input device name (Linux only) |
 
 Server address resolution precedence: `--server-addr` CLI flag -> `GHOSTCAM_SERVER_ADDR` env var -> config file -> `server.addr` file (written during enrollment) -> hardcoded default.
 
 ## How It Works
 
-1. **Enrollment** — On first boot (no device cert), camera accepts an `--enrollment-jwt`. The server signs and returns a device certificate.
+1. **Enrollment** — On first boot (no `user.crt`), camera tries QR code scanning (Linux only: captures frames via `rpicam-still` and decodes with `rqrr`). If QR scanning is unavailable or times out after 5 minutes, falls back to `--enrollment-jwt`. The server signs and returns a device certificate.
 2. **TOFU** — On first connection after enrollment, the server's TLS fingerprint is pinned. Subsequent connections verify against the pin (bypassed with `--no-tofu`).
 3. **Connect** — Opens a QUIC connection using the device cert for mTLS. Opens persistent streams: `Alerts` (bidirectional), `Video`, `Audio`.
 4. **Handshake** — Sends an `Alert::Handshake` with device ID, cert fingerprint, and capabilities.
@@ -72,15 +73,18 @@ Server address resolution precedence: `--server-addr` CLI flag -> `GHOSTCAM_SERV
 | `config` | `CameraConfig` + `CameraConfigFile`, layered TOML/env/CLI resolution |
 | `session` | Active QUIC session: alert stream, command stream, video/audio enabled atomics |
 | `enrollment` | JWT parsing, enrollment handshake with server PKI |
+| `qr_enrollment` | QR code scanning enrollment (rpicam-still + rqrr, Linux only) |
 | `tofu` | Server fingerprint pinning on first connect |
 | `certs` | Device certificate load/store |
 | `quic` | QUIC endpoint setup with mTLS |
 | `commands` | `CameraCommand` handler — updates watch channels |
-| `network` | Network interface monitoring (stub) |
+| `network` | Network monitor (500ms `/proc/net/route` poll, 1s debounce), WiFi/NM helpers, `wait_for_route()` |
 | `firmware` | OTA update handling (stub) |
 | `capture/mod` | `CaptureMessage` enum (VideoNal, AudioFrame) |
 | `capture/video_test` | Test video source: loops H.264 file at real-time pace |
 | `capture/audio_test` | Test audio source: synthetic Opus tone |
+| `capture/audio` | Real audio capture: cpal + opus (Linux only) |
+| `capture/video` | Real video capture: rpicam-vid / libcamera-vid |
 | `stream/mod` | Frame sender coordination |
 | `stream/video` | Writes H.264 NAL units to the persistent Video QUIC stream |
 | `stream/audio` | Writes Opus frames to the persistent Audio QUIC stream |

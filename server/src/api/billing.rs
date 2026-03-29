@@ -144,9 +144,7 @@ pub async fn create_portal(
     // Get or create Stripe customer for this user
     let sub = state.db.get_subscription(&user.user_id).await;
     let customer_id = match sub {
-        Ok(Some(ref s)) if s.stripe_customer_id.is_some() => {
-            s.stripe_customer_id.clone().unwrap()
-        }
+        Ok(Some(ref s)) if s.stripe_customer_id.is_some() => s.stripe_customer_id.clone().unwrap(),
         _ => {
             // Create a Stripe customer so the portal can be opened
             let user_record = match state.db.get_user(&user.user_id).await {

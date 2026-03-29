@@ -9,7 +9,10 @@ use ghostcam::config::MAX_REQUEST_BODY_BYTES;
 use super::auth::auth_middleware;
 use super::rate_limit::{api_rate_limit, login_rate_limit, ApiRateLimiter, LoginRateLimiter};
 use super::state::AppState;
-use super::{admin, audit, auth, billing, cameras, health, hls, sse, tokens, watch};
+use super::{
+    admin, audit, auth, billing, cameras, firmware, github_webhook, health, hls, qr, sse, tokens,
+    watch,
+};
 use crate::redis::telemetry_api;
 
 pub fn build_router(state: Arc<AppState>) -> Router {
@@ -19,6 +22,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     let protected = Router::new()
         // Cameras
         .route("/api/v1/cameras", get(cameras::list).post(cameras::enroll))
+        .route("/api/v1/cameras/enroll/qr", get(qr::enrollment_qr))
         .route(
             "/api/v1/cameras/:device_id",
             get(cameras::get)
@@ -82,7 +86,12 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .merge(login)
         .route("/api/v1/auth/register", post(auth::register))
         .route("/api/v1/billing/tiers", get(billing::list_tiers))
-        .route("/api/v1/webhooks/stripe", post(billing::stripe_webhook));
+        .route("/api/v1/webhooks/stripe", post(billing::stripe_webhook))
+        .route("/api/v1/firmware/latest", get(firmware::get_latest))
+        .route(
+            "/api/v1/webhooks/github",
+            post(github_webhook::github_webhook),
+        );
 
     Router::new()
         .merge(protected)

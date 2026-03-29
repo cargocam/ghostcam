@@ -16,6 +16,8 @@ ghostcam/
 ├── camera/          Camera agent: QUIC/mTLS, enrollment, capture, recording, telemetry
 ├── server/          Server binary: QUIC ingest, WebRTC egress, HTTP API, Redis telemetry, PostgreSQL
 ├── ui/              Svelte 5 SPA: live WebRTC view, HLS playback, timeline scrubber, GPS map
+├── pi/              Pi system files: systemd services, GPS, NetworkManager configs
+├── scripts/         Developer tools: pi.sh (camera manager CLI)
 ├── Dockerfile       Multi-stage: server + camera targets
 ├── docker-compose.yml
 └── .github/workflows/ci.yml
@@ -56,9 +58,36 @@ cp .env.example .env
 # Optionally add Stripe keys for billing (see .env.example)
 
 docker compose build
-docker compose up -d    # server + 3 test cameras + UI
+```
 
+Two workflows depending on whether you're using test cameras or real hardware:
+
+**Server/UI development (test cameras, no hardware)**:
+```bash
+docker compose up -d --profile test   # server + UI + 3 test cameras
 # Open http://localhost:5173  (login: admin@ghostcam.dev / dev-password)
+```
+
+**Camera firmware on real Pi hardware**:
+```bash
+docker compose up -d                  # server + UI only (no test cameras)
+./scripts/pi.sh deploy                # cross-compile, deploy to Pi, tail logs
+```
+
+The Pi camera connects to the Docker server via the host's LAN IP (`GHOSTCAM_PUBLIC_IP`). Both workflows can run simultaneously -- test cameras and real hardware connect to the same server.
+
+```bash
+# Camera manager CLI (all Pi operations):
+./scripts/pi.sh setup    [HOST] [USER] [PASS]   # First-time Pi provisioning
+./scripts/pi.sh deploy   [HOST] [USER] [PASS]   # Build + deploy (primary dev loop)
+./scripts/pi.sh logs     [HOST] [USER] [PASS]   # Stream camera logs
+./scripts/pi.sh status   [HOST] [USER] [PASS]   # Health check
+./scripts/pi.sh wifi-off [SECS] [HOST] [USER] [PASS]  # Cellular failover test
+./scripts/pi.sh restart  [HOST] [USER] [PASS]   # Restart camera service
+./scripts/pi.sh ssh      [HOST] [USER] [PASS]   # Interactive SSH
+./scripts/pi.sh unenroll [HOST] [USER] [PASS]   # Reset enrollment
+
+# Defaults configured via .pi.env (gitignored) or CLI args
 # Clean restart: docker compose down -v && docker compose up -d
 ```
 
@@ -137,12 +166,16 @@ Settings that require restart (ports, database_url, data_dir) log warnings on re
 | `GHOSTCAM_ADMIN_EMAIL` | server | `admin@localhost` | Admin email |
 | `GHOSTCAM_ADMIN_PASSWORD` | server | _(auto-generated)_ | Preset admin password |
 | `GHOSTCAM_SERVER_ADDR` | camera | _(from enrollment)_ | Server QUIC address |
+| `GHOSTCAM_AUDIO_DEVICE` | camera | _(system default)_ | ALSA audio input device name |
 | `STRIPE_SECRET_KEY` | server | _(none)_ | Stripe API key (billing enabled if set) |
 | `STRIPE_WEBHOOK_SECRET` | server | _(none)_ | Stripe webhook signing secret |
 | `STRIPE_PRICE_ID_STARTER` | server | _(none)_ | Stripe Price ID for starter tier |
 | `STRIPE_PRICE_ID_PRO` | server | _(none)_ | Stripe Price ID for pro tier |
 | `STRIPE_PRICE_ID_ENTERPRISE` | server | _(none)_ | Stripe Price ID for enterprise tier |
 | `STRIPE_PORTAL_CONFIG_ID` | server | _(none)_ | Portal config with plan switching |
+| `GHOSTCAM_RELEASE_REPO` | server | _(none)_ | GitHub `owner/repo` for firmware releases |
+| `GITHUB_WEBHOOK_SECRET` | server | _(none)_ | GitHub webhook HMAC secret |
+| `GHOSTCAM_UPDATE_STAGGER_SECS` | server | `300` | Reboot stagger window (seconds) |
 
 ## Architecture
 
@@ -176,6 +209,7 @@ Camera presence is delivered via **Server-Sent Events** (`/events`). Each camera
 
 ```
 config.rs     Port/size/limit constants (QUIC_PORT, HTTP_PORT, BROADCAST_CAPACITY, QUIC_MAX_*, MAX_REQUEST_BODY_BYTES, MAX_SESSIONS_PER_USER, TELEMETRY_BATCH_INTERVAL_SECS, ...) + helpers: load_toml(), env_or(), env_opt()
+firmware.rs   FirmwareRelease, FirmwareAsset, FirmwareLatestResponse types + is_newer_version() semver comparison
 types.rs      DeviceId, UserId, SessionId, TokenId, CertFingerprint, Seq newtypes
 telemetry.rs  TelemetryDatagram — sparse MessagePack payload (cpu, temp, mem, gps, ...)
 pki.rs        generate_key_pair(), create_self_signed_ca() — rcgen 0.13 wrappers
@@ -190,14 +224,18 @@ wire/
 ## Camera Structure
 
 ```
-main.rs          CLI, reconnect loop with exponential backoff
+main.rs          CLI, reconnect loop with exponential backoff + network awareness
 config.rs        CameraConfig + CameraConfigFile, layered TOML/env/CLI resolution
+firmware.rs      Startup update check (server → cloud fallback), download/verify/swap, health sentinel
 session.rs       Active QUIC session: alerts stream, command gate atomics
 enrollment.rs    JWT enrollment handshake
+qr_enrollment.rs QR code scanning enrollment (rpicam-still + rqrr, Linux only)
 tofu.rs          Server fingerprint pinning (first connect)
 quic.rs          QUIC endpoint with mTLS device cert
 commands.rs      CameraCommand handler → updates watch channels
+network.rs       Network monitor (500ms poll /proc/net/route), WiFi/NM helpers, wait_for_route()
 capture/         Test sources: video_test.rs (loop H.264), audio_test/ (synthetic Opus)
+                 Real capture: video.rs (rpicam-vid), audio.rs (cpal+opus, Linux only)
 stream/          Frame senders: video.rs, audio.rs (write to persistent QUIC streams)
 recording/       fMP4 ring buffer: muxer, segment, ring_buffer, manifest, uploads
 telemetry/       sensors.rs (/proc, /sys, gpsd), buffer.rs (batch upload)
@@ -214,11 +252,12 @@ auth.rs       Token hashing, HMAC, session validation
 audit.rs      AuditLogger — HMAC-SHA256 signed audit trail (file + DB dual-write, wired into AppState)
 sse.rs        SseEventBus — per-user broadcast for Server-Sent Events
 billing/      Stripe integration, subscription tiers, camera limit enforcement, grace period background task
+firmware.rs   Staggered reboot scheduling, reconnection version check
 api/          Axum routes, rate limiting (see server/src/api/README.md)
 ingest/       QUIC accept loop, IngestSlot, RoutingRegistry (see server/src/ingest/README.md)
 egress/       EgressHandle, SessionManager, RTP packetizer (see server/src/egress/README.md)
 pki/          CA bootstrap, device enrollment, revocation (see server/src/pki/README.md)
-redis/        Telemetry write/query via Redis Streams, ConnectionManager, TelemetryBatcher, usage counters (see server/src/redis/README.md)
+redis/        Telemetry write/query via Redis Streams, ConnectionManager, TelemetryBatcher, usage counters, firmware pub/sub (see server/src/redis/README.md)
 ```
 
 ## Viewer Structure
@@ -265,7 +304,7 @@ stores/
 
 ### CameraCommand (server → camera, on Alerts stream)
 
-Tagged JSON (`"type"` field): `StartVideo`, `StopVideo`, `StartAudio`, `StopAudio`, `UploadSegment { segment_id }`, `UploadInit`, `Reboot`, `NetworkConfig { ssid, psk }`, `RemoveNetwork { ssid }`, `ListNetworks`, `UpdateAvailable { version, url, checksum }`, `CertRefresh { cert_pem }`, `Unregister`
+Tagged JSON (`"type"` field): `StartVideo`, `StopVideo`, `StartAudio`, `StopAudio`, `UploadSegment { segment_id }`, `UploadInit`, `Reboot`, `NetworkConfig { ssid, psk }`, `RemoveNetwork { ssid }`, `ListNetworks`, `CertRefresh { cert_pem }`, `Unregister`
 
 All carry `seq: Seq` for correlation with `Alert::Ack`.
 
@@ -295,6 +334,7 @@ PATCH  /api/v1/auth/password
 
 GET    /api/v1/cameras                     List enrolled cameras
 POST   /api/v1/cameras                     Enroll new camera
+GET    /api/v1/cameras/enroll/qr           Enrollment QR code (SVG, auth required)
 GET    /api/v1/cameras/:id                 Camera + latest telemetry
 PATCH  /api/v1/cameras/:id                 Update name/group
 DELETE /api/v1/cameras/:id                 Revoke
@@ -322,6 +362,9 @@ POST   /api/v1/billing/checkout            { tier, success_url, cancel_url } →
 POST   /api/v1/billing/portal              { return_url } → { url }
 GET    /api/v1/billing/usage               Current month usage stats
 POST   /api/v1/webhooks/stripe             Stripe webhook (public, signature-verified)
+
+GET    /api/v1/firmware/latest             Latest firmware release (public, no auth)
+POST   /api/v1/webhooks/github            GitHub release webhook (public, HMAC-verified)
 
 GET    /api/v1/audit                       Audit log query (?type=&since=&until=&limit=&offset=)
 POST   /api/v1/admin/reload                Reload config from disk
@@ -356,12 +399,14 @@ GET    /readyz                             200 when ready (no auth)
 - **QUIC refused**: Verify port 4433/udp is open and the server started successfully.
 - **Telemetry API 503**: `GHOSTCAM_REDIS_URL` is unset or empty — Redis is required for telemetry history.
 - **Camera offline after server restart**: Cameras auto-reconnect with backoff (1s → 30s). Wait or restart cameras manually.
+- **Cellular failover**: The network monitor polls `/proc/net/route` every 500ms (Linux only, no-op on macOS). On interface change (e.g. wlan0→wwan0), it debounces 1s then signals the connection loop to reconnect. A 5s send timeout catches dead QUIC connections that haven't errored yet. See `docs/design/cellular-failover.md` for full architecture.
 - **Audit log**: Set `GHOSTCAM_HMAC_KEY` to a secret key for HMAC-SHA256 signing (default: `dev-hmac-key`). Entries are written to `{data_dir}/audit.jsonl` and the `audit_log` PostgreSQL table. Query via `GET /api/v1/audit`.
 - **str0m API**: Pinned at 0.6.x. Key methods: `Rtc::builder().set_ice_lite(true)`, `sdp_api().accept_offer(offer)`, `rtc.writer(mid)`, `channel.write(binary, data)`.
 - **Billing disabled**: If `STRIPE_SECRET_KEY` is unset, billing is fully disabled — unlimited cameras, no payment UI. The `/api/v1/billing/subscription` endpoint returns `{ billing_enabled: false, tier: "unlimited" }`.
 - **Camera limit 402**: When billing is enabled and a user hits their camera limit, `POST /api/v1/cameras` returns HTTP 402 with `{ error: "camera_limit_reached" }`.
 - **Billing webhooks**: Stripe webhooks keep subscription state in sync. In production, set `STRIPE_WEBHOOK_SECRET` to the real signing secret. In local dev, run `docker compose --profile stripe up stripe-webhooks` to forward events via the Stripe CLI container — it prints the `whsec_...` secret to stdout on startup.
 - **Stripe Portal plan switching**: Requires `STRIPE_PORTAL_CONFIG_ID` — create one via the Stripe API or Dashboard with `subscription_update.enabled=true` and the product/price list. Without it, the portal only shows cancellation.
+- **Firmware updates**: Cameras check `GET /api/v1/firmware/latest` on every startup before connecting. If the enrolled server is unreachable (5s timeout), the camera falls back to the cloud URL (compiled in via `GHOSTCAM_CLOUD_URL` build-time env var). If no update is needed, the camera starts normally. Set `GHOSTCAM_RELEASE_REPO` on the server to enable startup fetch from GitHub API. Set `GITHUB_WEBHOOK_SECRET` to enable the GitHub release webhook. Connected cameras are rebooted with stagger (`GHOSTCAM_UPDATE_STAGGER_SECS`, default 300s) when a new release arrives. Reconnecting cameras with stale firmware get an immediate Reboot command.
 
 ## Key Dependencies
 
@@ -375,6 +420,8 @@ GET    /readyz                             200 when ready (no auth)
 | `sqlx` | 0.8 | PostgreSQL async |
 | `redis` | 0.27 | Redis Streams for telemetry (with `connection-manager` feature) |
 | `async-stripe` | 0.39 | Stripe billing (checkout, portal, webhooks). Optional — no key = free tier |
+| `qrcode` | 0.14 | QR code generation (SVG) for enrollment |
+| `rqrr` | 0.8 | QR code detection/decoding from camera frames (camera only) |
 | `governor` | 0.10 | Token-bucket rate limiting |
 | `argon2` | 0.5 | Password hashing |
 | `rmp-serde` | 1 | MessagePack for telemetry wire format |

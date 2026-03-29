@@ -1,4 +1,5 @@
 pub mod buffer;
+pub mod gpsd;
 pub mod sensors;
 
 use std::time::Duration;
@@ -10,6 +11,7 @@ use tokio::sync::watch;
 use tokio_util::sync::CancellationToken;
 
 use self::buffer::TelemetryBuffer;
+use self::sensors::GpsSource;
 use crate::config::CameraConfig;
 
 /// Run the telemetry poll-and-send loop.
@@ -28,6 +30,7 @@ pub async fn run_telemetry_loop(
 
     let mut previous = TelemetryDatagram::default();
     let mut last_heartbeat = tokio::time::Instant::now();
+    let mut gps = GpsSource::new(config).await;
 
     tracing::info!("telemetry loop started");
 
@@ -40,7 +43,7 @@ pub async fn run_telemetry_loop(
             _ = tokio::time::sleep(poll_interval) => {}
         }
 
-        let current = sensors::read_sensors(config).await;
+        let current = sensors::read_sensors(config, &mut gps);
 
         let heartbeat_due = last_heartbeat.elapsed() >= heartbeat_interval;
         let threshold_exceeded = exceeds_threshold(&previous, &current, &thresholds);

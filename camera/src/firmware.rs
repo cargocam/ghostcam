@@ -1,92 +1,182 @@
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
-use ghostcam::wire::alert::Alert;
+use ghostcam::firmware::{is_newer_version, FirmwareLatestResponse};
 
-/// Handle a firmware update command.
+/// Compile-time cloud URL for firmware fallback. Set via `GHOSTCAM_CLOUD_URL`
+/// env var at build time. Official release builds have this; self-hosted builds
+/// from source do not (and that's correct — they shouldn't phone home).
+const CLOUD_URL: Option<&str> = option_env!("GHOSTCAM_CLOUD_URL");
+
+/// Timeout for the firmware metadata HTTP request.
+const FIRMWARE_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Check for firmware updates before connecting to the server.
 ///
-/// Downloads the binary, verifies SHA-256, performs atomic swap, then exits
-/// so the watchdog can restart with the new binary.
-pub async fn handle_firmware_update(
-    url: &str,
-    expected_sha256: &str,
-    version: &str,
-    data_dir: &Path,
-    alerts_tx: &tokio::sync::Mutex<quinn::SendStream>,
-) -> Result<()> {
-    tracing::info!(version, url, "firmware update — downloading");
+/// Tries the enrolled server first, then falls back to the cloud URL.
+/// This is best-effort: any error results in the camera starting normally.
+pub async fn check_for_update(server_addr: &str, data_dir: &Path) {
+    let current_version = env!("CARGO_PKG_VERSION");
 
-    // Send UpdateApplying alert
-    let applying = Alert::UpdateApplying {
-        version: version.to_string(),
-    };
-    {
-        let mut stream = alerts_tx.lock().await;
-        let _ = ghostcam::wire::framing::write_json(&mut *stream, &applying).await;
+    // Derive the HTTP URL from the QUIC address. The server_addr is host:quic_port
+    // (e.g., "10.0.0.1:4433"). The HTTP port defaults to 3000.
+    let http_host = server_addr
+        .rsplit_once(':')
+        .map(|(host, _)| host)
+        .unwrap_or(server_addr);
+    let enrolled_url = format!(
+        "http://{http_host}:{}/api/v1/firmware/latest",
+        ghostcam::config::HTTP_PORT
+    );
+    match fetch_firmware_metadata(&enrolled_url).await {
+        Ok(resp) => {
+            if try_update_from_response(&resp, current_version, data_dir).await {
+                return; // Updated (or no update needed) — either way, done
+            }
+            // Response was valid — don't try cloud fallback even if version was null
+            return;
+        }
+        Err(e) => {
+            tracing::warn!("firmware check from enrolled server failed: {e}");
+        }
     }
 
-    let firmware_dir = data_dir.join("firmware");
-    tokio::fs::create_dir_all(&firmware_dir)
+    // Fallback to cloud URL (only if enrolled server was unreachable)
+    if let Some(cloud_base) = CLOUD_URL {
+        let cloud_url = format!("{cloud_base}/api/v1/firmware/latest");
+        match fetch_firmware_metadata(&cloud_url).await {
+            Ok(resp) => {
+                let _ = try_update_from_response(&resp, current_version, data_dir).await;
+            }
+            Err(e) => {
+                tracing::warn!("firmware check from cloud fallback failed: {e}");
+            }
+        }
+    }
+
+    // If we get here, no update was performed — start normally
+    tracing::info!(version = current_version, "firmware is current");
+}
+
+/// Fetch firmware metadata from a URL using curl.
+async fn fetch_firmware_metadata(url: &str) -> Result<FirmwareLatestResponse> {
+    let timeout_secs = FIRMWARE_CHECK_TIMEOUT.as_secs().to_string();
+    let output = tokio::process::Command::new("curl")
+        .args(["-sf", "--max-time", &timeout_secs, url])
+        .output()
         .await
-        .context("creating firmware directory")?;
+        .context("running curl for firmware check")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("firmware metadata request failed: {stderr}");
+    }
+
+    let resp: FirmwareLatestResponse =
+        serde_json::from_slice(&output.stdout).context("parsing firmware metadata response")?;
+
+    Ok(resp)
+}
+
+/// Attempt to update based on firmware metadata response.
+/// Returns true if the response was successfully processed (whether or not
+/// an update was needed), false if something went wrong.
+async fn try_update_from_response(
+    resp: &FirmwareLatestResponse,
+    current_version: &str,
+    data_dir: &Path,
+) -> bool {
+    let Some(ref available_version) = resp.version else {
+        tracing::info!("server reports no firmware release available");
+        return true;
+    };
+
+    if !is_newer_version(current_version, available_version) {
+        tracing::info!(
+            current = current_version,
+            available = available_version,
+            "firmware is current or newer"
+        );
+        return true;
+    }
+
+    // Determine our architecture
+    let arch = std::env::consts::ARCH;
+    // Map Rust arch names to our asset names
+    let asset_key = match arch {
+        "aarch64" => "aarch64",
+        "x86_64" => "x86_64",
+        other => {
+            tracing::warn!(arch = other, "unsupported architecture for firmware update");
+            return true;
+        }
+    };
+
+    let Some(ref assets) = resp.assets else {
+        tracing::warn!("firmware response has version but no assets");
+        return true;
+    };
+
+    let Some(asset) = assets.get(asset_key) else {
+        tracing::warn!(arch = asset_key, "no firmware asset for this architecture");
+        return true;
+    };
+
+    tracing::info!(
+        current = current_version,
+        available = available_version,
+        arch = asset_key,
+        "newer firmware available — downloading"
+    );
+
+    // Reuse the existing download/verify/swap logic
+    let firmware_dir = data_dir.join("firmware");
+    if let Err(e) = tokio::fs::create_dir_all(&firmware_dir).await {
+        tracing::error!("failed to create firmware directory: {e}");
+        return false;
+    }
 
     let temp_path = firmware_dir.join("downloading");
     let current_path = firmware_dir.join("current");
     let previous_path = firmware_dir.join("previous");
 
-    // Download
-    match download_and_verify(url, expected_sha256, &temp_path, data_dir).await {
-        Ok(()) => {}
-        Err(e) => {
-            tracing::error!("firmware download/verify failed: {e}");
-            let failed = Alert::UpdateFailed {
-                version_attempted: version.to_string(),
-                version_current: env!("CARGO_PKG_VERSION").to_string(),
-                reason: if e.to_string().contains("hash mismatch") {
-                    ghostcam::wire::alert::UpdateFailReason::HashMismatch
-                } else {
-                    ghostcam::wire::alert::UpdateFailReason::DownloadFailed
-                },
-            };
-            let mut stream = alerts_tx.lock().await;
-            let _ = ghostcam::wire::framing::write_json(&mut *stream, &failed).await;
-            return Err(e);
-        }
+    if let Err(e) = download_and_verify(&asset.url, &asset.sha256, &temp_path, data_dir).await {
+        tracing::error!("firmware download/verify failed: {e}");
+        return false;
     }
 
     // Set executable (unix)
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        tokio::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o755))
-            .await
-            .context("setting firmware executable permission")?;
+        if let Err(e) =
+            tokio::fs::set_permissions(&temp_path, std::fs::Permissions::from_mode(0o755)).await
+        {
+            tracing::error!("failed to set firmware executable permission: {e}");
+            return false;
+        }
     }
 
-    // Atomic swap: current → previous, temp → current
+    // Atomic swap: current -> previous, temp -> current
     if current_path.exists() {
         if let Err(e) = tokio::fs::rename(&current_path, &previous_path).await {
             tracing::warn!("failed to preserve previous firmware: {e}");
         }
     }
-    tokio::fs::rename(&temp_path, &current_path)
-        .await
-        .context("installing new firmware")?;
+    if let Err(e) = tokio::fs::rename(&temp_path, &current_path).await {
+        tracing::error!("failed to install new firmware: {e}");
+        return false;
+    }
 
     // Remove health sentinel so watchdog can detect unhealthy start
     let sentinel = firmware_dir.join("healthy");
     let _ = tokio::fs::remove_file(&sentinel).await;
 
-    tracing::info!(version, "firmware installed — exiting for restart");
-
-    // Send success alert before exiting
-    let success = Alert::UpdateSucceeded {
-        version: version.to_string(),
-    };
-    {
-        let mut stream = alerts_tx.lock().await;
-        let _ = ghostcam::wire::framing::write_json(&mut *stream, &success).await;
-    }
+    tracing::info!(
+        version = available_version,
+        "firmware installed — exiting for restart"
+    );
 
     // Exit cleanly — watchdog/systemd will restart with new binary
     std::process::exit(0);

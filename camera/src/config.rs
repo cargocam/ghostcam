@@ -11,9 +11,21 @@ pub struct CameraConfig {
     pub test_video: String,
     pub segment_dir: String,
     pub no_audio: bool,
+    /// Audio input device name (None = system default)
+    pub audio_device: Option<String>,
     pub no_gps: bool,
     pub no_tofu: bool,
     pub data_dir: String,
+    /// Video resolution width (default: 1280)
+    pub video_width: u32,
+    /// Video resolution height (default: 720)
+    pub video_height: u32,
+    /// Video framerate (default: 30)
+    pub video_fps: u32,
+    /// Video bitrate in bps (default: 2_000_000). 0 = VBR
+    pub video_bitrate: u32,
+    /// Keyframe interval in frames (default: 60 = 2s at 30fps)
+    pub video_keyframe_interval: u32,
 }
 
 /// TOML-deserialized camera config file. All fields optional.
@@ -25,11 +37,17 @@ pub struct CameraConfigFile {
     pub test_video: Option<String>,
     pub segment_dir: Option<String>,
     pub no_audio: Option<bool>,
+    pub audio_device: Option<String>,
     pub no_gps: Option<bool>,
     /// Security flag — only settable via CLI, never from config file.
     #[serde(skip)]
     pub no_tofu: Option<bool>,
     pub data_dir: Option<String>,
+    pub video_width: Option<u32>,
+    pub video_height: Option<u32>,
+    pub video_fps: Option<u32>,
+    pub video_bitrate: Option<u32>,
+    pub video_keyframe_interval: Option<u32>,
 }
 
 impl CameraConfig {
@@ -80,6 +98,8 @@ impl CameraConfig {
 
         let no_audio = cli.no_audio || file_conf.no_audio.unwrap_or(false);
 
+        let audio_device = env_opt("GHOSTCAM_AUDIO_DEVICE").or(file_conf.audio_device);
+
         let no_gps = cli.no_gps || file_conf.no_gps.unwrap_or(false);
 
         // no_tofu is CLI-only (intentional security decision — never from config file)
@@ -92,15 +112,46 @@ impl CameraConfig {
             .or(file_conf.segment_dir)
             .unwrap_or_else(|| format!("{data_dir}/segments"));
 
+        let video_width = env_opt("GHOSTCAM_VIDEO_WIDTH")
+            .and_then(|s| s.parse().ok())
+            .or(file_conf.video_width)
+            .unwrap_or(1280);
+
+        let video_height = env_opt("GHOSTCAM_VIDEO_HEIGHT")
+            .and_then(|s| s.parse().ok())
+            .or(file_conf.video_height)
+            .unwrap_or(720);
+
+        let video_fps = env_opt("GHOSTCAM_VIDEO_FPS")
+            .and_then(|s| s.parse().ok())
+            .or(file_conf.video_fps)
+            .unwrap_or(30);
+
+        let video_bitrate = env_opt("GHOSTCAM_VIDEO_BITRATE")
+            .and_then(|s| s.parse().ok())
+            .or(file_conf.video_bitrate)
+            .unwrap_or(2_000_000);
+
+        let video_keyframe_interval = env_opt("GHOSTCAM_VIDEO_KEYFRAME_INTERVAL")
+            .and_then(|s| s.parse().ok())
+            .or(file_conf.video_keyframe_interval)
+            .unwrap_or(60);
+
         let config = CameraConfig {
             server_addr,
             test_source,
             test_video,
             segment_dir,
             no_audio,
+            audio_device,
             no_gps,
             no_tofu,
             data_dir,
+            video_width,
+            video_height,
+            video_fps,
+            video_bitrate,
+            video_keyframe_interval,
         };
 
         config.validate()?;

@@ -24,6 +24,10 @@ pub struct ServerConfig {
     pub stripe_webhook_secret: Option<String>,
     pub stripe_pricing_table_id: Option<String>,
     pub stripe_portal_config_id: Option<String>,
+    // Firmware releases (all optional — no repo = firmware endpoint returns null)
+    pub release_repo: Option<String>,
+    pub github_webhook_secret: Option<String>,
+    pub update_stagger_secs: u64,
 }
 
 /// TOML-deserialized server config file. All fields optional — missing fields
@@ -107,6 +111,13 @@ impl ServerConfig {
         let stripe_pricing_table_id = env_opt("STRIPE_PRICING_TABLE_ID");
         let stripe_portal_config_id = env_opt("STRIPE_PORTAL_CONFIG_ID");
 
+        // Firmware release config
+        let release_repo = env_opt("GHOSTCAM_RELEASE_REPO");
+        let github_webhook_secret = env_opt("GITHUB_WEBHOOK_SECRET");
+        let update_stagger_secs: u64 = env_opt("GHOSTCAM_UPDATE_STAGGER_SECS")
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(300);
+
         let config = ServerConfig {
             data_dir,
             http_port,
@@ -123,6 +134,9 @@ impl ServerConfig {
             stripe_webhook_secret,
             stripe_pricing_table_id,
             stripe_portal_config_id,
+            release_repo,
+            github_webhook_secret,
+            update_stagger_secs,
         };
 
         config.validate()?;
@@ -236,6 +250,9 @@ mod tests {
             stripe_webhook_secret: None,
             stripe_pricing_table_id: None,
             stripe_portal_config_id: None,
+            release_repo: None,
+            github_webhook_secret: None,
+            update_stagger_secs: 300,
         };
         assert_eq!(config.resolved_enrollment_addr(), "10.0.0.1:4433");
     }
@@ -258,6 +275,9 @@ mod tests {
             stripe_webhook_secret: None,
             stripe_pricing_table_id: None,
             stripe_portal_config_id: None,
+            release_repo: None,
+            github_webhook_secret: None,
+            update_stagger_secs: 300,
         };
         assert_eq!(config.resolved_enrollment_addr(), "server:4433");
     }

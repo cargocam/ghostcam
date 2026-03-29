@@ -38,14 +38,6 @@ pub enum Command {
     ListNetworks {
         seq: u64,
     },
-    UpdateAvailable {
-        seq: u64,
-        version: String,
-        url: String,
-        sha256: String,
-        #[serde(default)]
-        force: bool,
-    },
     CertRefresh {
         seq: u64,
         cert_pem: String,
@@ -62,9 +54,6 @@ const MAX_SHORT_STRING: usize = 256;
 
 /// Maximum length for PEM certificate fields.
 const MAX_PEM_STRING: usize = 8192;
-
-/// Maximum length for URL fields.
-const MAX_URL_STRING: usize = 2048;
 
 impl Command {
     /// Validate string field lengths after deserialization.
@@ -88,23 +77,6 @@ impl Command {
             Command::RemoveNetwork { ssid, .. } => {
                 if ssid.len() > MAX_SHORT_STRING {
                     return Err(format!("ssid too long: {} bytes", ssid.len()));
-                }
-                Ok(())
-            }
-            Command::UpdateAvailable {
-                version,
-                url,
-                sha256,
-                ..
-            } => {
-                if version.len() > MAX_SHORT_STRING {
-                    return Err(format!("version too long: {} bytes", version.len()));
-                }
-                if url.len() > MAX_URL_STRING {
-                    return Err(format!("url too long: {} bytes", url.len()));
-                }
-                if sha256.len() > MAX_SHORT_STRING {
-                    return Err(format!("sha256 too long: {} bytes", sha256.len()));
                 }
                 Ok(())
             }
@@ -138,7 +110,6 @@ impl Command {
             | Command::NetworkConfig { seq, .. }
             | Command::RemoveNetwork { seq, .. }
             | Command::ListNetworks { seq }
-            | Command::UpdateAvailable { seq, .. }
             | Command::CertRefresh { seq, .. }
             | Command::Unregister { seq } => *seq,
         }
@@ -172,19 +143,12 @@ mod tests {
                 ssid: "OldNet".into(),
             },
             Command::ListNetworks { seq: 10 },
-            Command::UpdateAvailable {
-                seq: 11,
-                version: "1.0.0".into(),
-                url: "https://example.com/fw".into(),
-                sha256: "abc123".into(),
-                force: false,
-            },
             Command::CertRefresh {
-                seq: 12,
+                seq: 11,
                 cert_pem: "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----".into(),
                 ca_pem: None,
             },
-            Command::Unregister { seq: 13 },
+            Command::Unregister { seq: 12 },
         ];
 
         for cmd in &commands {
@@ -196,22 +160,6 @@ mod tests {
 
     #[test]
     fn command_optional_fields() {
-        // UpdateAvailable without force (defaults to false)
-        let json = r#"{"type":"update_available","seq":1,"version":"1.0","url":"u","sha256":"h"}"#;
-        let cmd: Command = serde_json::from_str(json).unwrap();
-        match cmd {
-            Command::UpdateAvailable { force, .. } => assert!(!force),
-            _ => panic!("wrong variant"),
-        }
-
-        // UpdateAvailable with force=true
-        let json = r#"{"type":"update_available","seq":1,"version":"1.0","url":"u","sha256":"h","force":true}"#;
-        let cmd: Command = serde_json::from_str(json).unwrap();
-        match cmd {
-            Command::UpdateAvailable { force, .. } => assert!(force),
-            _ => panic!("wrong variant"),
-        }
-
         // CertRefresh without ca_pem
         let cmd = Command::CertRefresh {
             seq: 1,

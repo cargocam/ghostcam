@@ -1,27 +1,65 @@
 use ghostcam::telemetry::TelemetryDatagram;
 
+use super::gpsd::GpsdReader;
 use crate::config::CameraConfig;
+
+/// GPS source for the telemetry loop. Created once at startup.
+pub enum GpsSource {
+    /// Real gpsd client (Linux with gpsd running).
+    Gpsd(GpsdReader),
+    /// Synthetic GPS for test mode / non-Linux dev.
+    Synthetic,
+    /// GPS disabled (--no-gps).
+    Disabled,
+}
+
+impl GpsSource {
+    /// Create the appropriate GPS source based on config.
+    pub async fn new(config: &CameraConfig) -> Self {
+        if config.no_gps {
+            return Self::Disabled;
+        }
+        if config.test_source || !cfg!(target_os = "linux") {
+            return Self::Synthetic;
+        }
+        match GpsdReader::new().await {
+            Some(reader) => Self::Gpsd(reader),
+            None => {
+                tracing::warn!("gpsd unavailable, GPS disabled");
+                Self::Disabled
+            }
+        }
+    }
+
+    /// Get the current GPS reading.
+    fn read(&mut self) -> (Option<f64>, Option<f64>, Option<f32>, Option<u8>) {
+        match self {
+            Self::Gpsd(reader) => match reader.latest_fix() {
+                Some(fix) => (
+                    Some(fix.latitude),
+                    Some(fix.longitude),
+                    fix.altitude.map(|a| a as f32),
+                    Some(fix.fix_mode),
+                ),
+                None => (None, None, None, None),
+            },
+            Self::Synthetic => synthetic_gps(),
+            Self::Disabled => (None, None, None, None),
+        }
+    }
+}
 
 /// Read all available sensor values.
 ///
 /// In test-source mode, falls back to synthetic values for any sensor that
 /// returns `None` (e.g. no thermal zone or GPS in Docker containers).
-pub async fn read_sensors(config: &CameraConfig) -> TelemetryDatagram {
+pub fn read_sensors(config: &CameraConfig, gps: &mut GpsSource) -> TelemetryDatagram {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
         .as_millis() as u64;
 
-    let (lat, lon, alt, gps_fix) = if config.no_gps {
-        (None, None, None, None)
-    } else {
-        let real = read_gps();
-        if config.test_source && real.0.is_none() {
-            synthetic_gps()
-        } else {
-            real
-        }
-    };
+    let (lat, lon, alt, gps_fix) = gps.read();
 
     TelemetryDatagram {
         ts,
@@ -140,18 +178,6 @@ fn read_wifi_signal() -> Option<i8> {
     Some(-55)
 }
 
-// GPS — real implementation would use gpsd
-
-#[cfg(target_os = "linux")]
-fn read_gps() -> (Option<f64>, Option<f64>, Option<f32>, Option<u8>) {
-    (None, None, None, None)
-}
-
-#[cfg(not(target_os = "linux"))]
-fn read_gps() -> (Option<f64>, Option<f64>, Option<f32>, Option<u8>) {
-    synthetic_gps()
-}
-
 /// Synthetic GPS coordinates for test-source cameras.
 /// Each camera gets a unique offset based on a hash seed derived from the
 /// hostname (Docker container ID) + PID, so containers that all run as PID 1
@@ -199,70 +225,67 @@ fn gps_seed() -> f64 {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn read_sensors_returns_datagram() {
-        let config = CameraConfig {
+    fn test_config(no_gps: bool) -> CameraConfig {
+        CameraConfig {
             server_addr: String::new(),
             test_source: true,
             test_video: String::new(),
             segment_dir: String::new(),
             no_audio: false,
-            no_gps: false,
+            audio_device: None,
+            no_gps,
             no_tofu: true,
             data_dir: String::new(),
-        };
-        let d = read_sensors(&config).await;
+            video_width: 1280,
+            video_height: 720,
+            video_fps: 30,
+            video_bitrate: 2_000_000,
+            video_keyframe_interval: 60,
+        }
+    }
+
+    #[test]
+    fn read_sensors_returns_datagram() {
+        let config = test_config(false);
+        let mut gps = GpsSource::Synthetic;
+        let d = read_sensors(&config, &mut gps);
         assert!(d.ts > 0);
     }
 
-    #[tokio::test]
-    async fn read_sensors_has_cpu() {
-        let config = CameraConfig {
-            server_addr: String::new(),
-            test_source: true,
-            test_video: String::new(),
-            segment_dir: String::new(),
-            no_audio: false,
-            no_gps: false,
-            no_tofu: true,
-            data_dir: String::new(),
-        };
-        let d = read_sensors(&config).await;
+    #[test]
+    fn read_sensors_has_cpu() {
+        let config = test_config(false);
+        let mut gps = GpsSource::Synthetic;
+        let d = read_sensors(&config, &mut gps);
         assert!(d.cpu.is_some());
     }
 
-    #[tokio::test]
-    async fn read_sensors_has_memory() {
-        let config = CameraConfig {
-            server_addr: String::new(),
-            test_source: true,
-            test_video: String::new(),
-            segment_dir: String::new(),
-            no_audio: false,
-            no_gps: false,
-            no_tofu: true,
-            data_dir: String::new(),
-        };
-        let d = read_sensors(&config).await;
+    #[test]
+    fn read_sensors_has_memory() {
+        let config = test_config(false);
+        let mut gps = GpsSource::Synthetic;
+        let d = read_sensors(&config, &mut gps);
         assert!(d.mem.is_some());
     }
 
-    #[tokio::test]
-    async fn read_sensors_no_gps_when_disabled() {
-        let config = CameraConfig {
-            server_addr: String::new(),
-            test_source: true,
-            test_video: String::new(),
-            segment_dir: String::new(),
-            no_audio: false,
-            no_gps: true,
-            no_tofu: true,
-            data_dir: String::new(),
-        };
-        let d = read_sensors(&config).await;
+    #[test]
+    fn read_sensors_no_gps_when_disabled() {
+        let config = test_config(true);
+        let mut gps = GpsSource::Disabled;
+        let d = read_sensors(&config, &mut gps);
         assert!(d.lat.is_none());
         assert!(d.lon.is_none());
         assert!(d.alt.is_none());
         assert!(d.gps_fix.is_none());
+    }
+
+    #[test]
+    fn read_sensors_synthetic_gps() {
+        let config = test_config(false);
+        let mut gps = GpsSource::Synthetic;
+        let d = read_sensors(&config, &mut gps);
+        assert!(d.lat.is_some());
+        assert!(d.lon.is_some());
+        assert!(d.gps_fix.is_some());
     }
 }

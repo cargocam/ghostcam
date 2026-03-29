@@ -1,0 +1,14 @@
+[Unit]
+Description=Ghostcam Camera Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/ghostcam-camera
+Restart=always
+RestartSec=5
+EnvironmentFile=/etc/ghostcam/env
+
+[Install]
+WantedBy=multi-user.target

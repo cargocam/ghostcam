@@ -73,6 +73,12 @@ impl RoutingRegistry {
         inner.by_device.get(device_id).cloned()
     }
 
+    /// Return all currently connected slots.
+    pub async fn all_slots(&self) -> Vec<Arc<IngestSlot>> {
+        let inner = self.cameras.read().await;
+        inner.by_device.values().cloned().collect()
+    }
+
     /// Check if a device is currently connected.
     pub async fn is_connected(&self, device_id: &DeviceId) -> bool {
         let inner = self.cameras.read().await;
