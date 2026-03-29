@@ -23,6 +23,8 @@ jsonwebtoken = { workspace = true }
 base64 = { workspace = true }
 ring = { workspace = true }
 toml = { workspace = true }
+rqrr = "0.8"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

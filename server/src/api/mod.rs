@@ -5,6 +5,7 @@ pub mod billing;
 pub mod cameras;
 pub mod health;
 pub mod hls;
+pub mod qr;
 pub mod rate_limit;
 pub mod routes;
 pub mod sse;

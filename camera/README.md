@@ -55,7 +55,7 @@ Server address resolution precedence: `--server-addr` CLI flag -> `GHOSTCAM_SERV
 
 ## How It Works
 
-1. **Enrollment** — On first boot (no device cert), camera accepts an `--enrollment-jwt`. The server signs and returns a device certificate.
+1. **Enrollment** — On first boot (no `user.crt`), camera tries QR code scanning (Linux only: captures frames via `rpicam-still` and decodes with `rqrr`). If QR scanning is unavailable or times out after 5 minutes, falls back to `--enrollment-jwt`. The server signs and returns a device certificate.
 2. **TOFU** — On first connection after enrollment, the server's TLS fingerprint is pinned. Subsequent connections verify against the pin (bypassed with `--no-tofu`).
 3. **Connect** — Opens a QUIC connection using the device cert for mTLS. Opens persistent streams: `Alerts` (bidirectional), `Video`, `Audio`.
 4. **Handshake** — Sends an `Alert::Handshake` with device ID, cert fingerprint, and capabilities.
@@ -73,6 +73,7 @@ Server address resolution precedence: `--server-addr` CLI flag -> `GHOSTCAM_SERV
 | `config` | `CameraConfig` + `CameraConfigFile`, layered TOML/env/CLI resolution |
 | `session` | Active QUIC session: alert stream, command stream, video/audio enabled atomics |
 | `enrollment` | JWT parsing, enrollment handshake with server PKI |
+| `qr_enrollment` | QR code scanning enrollment (rpicam-still + rqrr, Linux only) |
 | `tofu` | Server fingerprint pinning on first connect |
 | `certs` | Device certificate load/store |
 | `quic` | QUIC endpoint setup with mTLS |

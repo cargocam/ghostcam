@@ -25,6 +25,7 @@ Axum HTTP router. Authentication is enforced via middleware on all protected rou
 |--------|------|---------|-------------|
 | `GET` | `/api/v1/cameras` | `cameras::list` | All enrolled cameras with connection status |
 | `POST` | `/api/v1/cameras` | `cameras::enroll` | Issue enrollment token → camera uses it to get a signed cert |
+| `GET` | `/api/v1/cameras/enroll/qr` | `qr::enrollment_qr` | Generate enrollment QR code (SVG) for camera scanning |
 | `GET` | `/api/v1/cameras/:id` | `cameras::get` | Camera record + latest telemetry |
 | `PATCH` | `/api/v1/cameras/:id` | `cameras::update` | Update display name or group |
 | `DELETE` | `/api/v1/cameras/:id` | `cameras::delete` | Revoke enrollment, add fingerprint to CRL |
@@ -81,6 +82,7 @@ Axum HTTP router. Authentication is enforced via middleware on all protected rou
 | `state.rs` | `AppState` — shared across all handlers: DB, Redis, PKI, session manager, SSE bus |
 | `auth.rs` | Login, logout, password change, auth middleware |
 | `cameras.rs` | Camera CRUD and enrollment |
+| `qr.rs` | QR code enrollment — generates SVG QR containing server URL + JWT |
 | `watch.rs` | WebRTC session lifecycle |
 | `hls.rs` | HLS manifest and segment serving |
 | `sse.rs` | SSE handler — upgrades HTTP connection to event stream |

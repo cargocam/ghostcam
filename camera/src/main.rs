@@ -5,6 +5,7 @@ mod config;
 mod enrollment;
 mod firmware;
 mod network;
+mod qr_enrollment;
 mod quic;
 mod recording;
 mod session;
@@ -127,8 +128,24 @@ async fn main() -> Result<()> {
                 }
             }
         } else {
-            tracing::warn!("no user association certificate — enrollment required");
-            tracing::warn!("use --enrollment-jwt to enroll this camera");
+            // No JWT provided — try QR code scanning
+            tracing::info!("no enrollment found — entering QR scan mode");
+            match qr_enrollment::scan_and_enroll(
+                &camera_config.data_dir,
+                &device_cert,
+                &device_key,
+            )
+            .await
+            {
+                Ok(()) => {
+                    tracing::info!("enrollment via QR complete");
+                    user_cert = certs::load_user_cert(&user_cert_path, &user_key_path)?;
+                }
+                Err(e) => {
+                    tracing::error!("QR enrollment failed: {e}");
+                    tracing::warn!("use --enrollment-jwt to enroll this camera manually");
+                }
+            }
         }
     }
 

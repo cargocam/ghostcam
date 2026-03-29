@@ -224,6 +224,7 @@ main.rs          CLI, reconnect loop with exponential backoff + network awarenes
 config.rs        CameraConfig + CameraConfigFile, layered TOML/env/CLI resolution
 session.rs       Active QUIC session: alerts stream, command gate atomics
 enrollment.rs    JWT enrollment handshake
+qr_enrollment.rs QR code scanning enrollment (rpicam-still + rqrr, Linux only)
 tofu.rs          Server fingerprint pinning (first connect)
 quic.rs          QUIC endpoint with mTLS device cert
 commands.rs      CameraCommand handler → updates watch channels
@@ -327,6 +328,7 @@ PATCH  /api/v1/auth/password
 
 GET    /api/v1/cameras                     List enrolled cameras
 POST   /api/v1/cameras                     Enroll new camera
+GET    /api/v1/cameras/enroll/qr           Enrollment QR code (SVG, auth required)
 GET    /api/v1/cameras/:id                 Camera + latest telemetry
 PATCH  /api/v1/cameras/:id                 Update name/group
 DELETE /api/v1/cameras/:id                 Revoke
@@ -408,6 +410,8 @@ GET    /readyz                             200 when ready (no auth)
 | `sqlx` | 0.8 | PostgreSQL async |
 | `redis` | 0.27 | Redis Streams for telemetry (with `connection-manager` feature) |
 | `async-stripe` | 0.39 | Stripe billing (checkout, portal, webhooks). Optional — no key = free tier |
+| `qrcode` | 0.14 | QR code generation (SVG) for enrollment |
+| `rqrr` | 0.8 | QR code detection/decoding from camera frames (camera only) |
 | `governor` | 0.10 | Token-bucket rate limiting |
 | `argon2` | 0.5 | Password hashing |
 | `rmp-serde` | 1 | MessagePack for telemetry wire format |
