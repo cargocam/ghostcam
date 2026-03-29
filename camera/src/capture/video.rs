@@ -62,10 +62,10 @@ pub async fn run_real_video(
         "--profile".to_string(),
         "baseline".to_string(),
         "-o".to_string(),
-        "-".to_string(), // stdout
+        "-".to_string(),
         "--flush".to_string(),
-        "-n".to_string(),       // no preview
-        "--inline".to_string(), // SPS/PPS with every keyframe
+        "-n".to_string(),
+        "--inline".to_string(),
     ];
 
     if config.video_bitrate > 0 {
