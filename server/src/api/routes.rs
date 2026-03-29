@@ -5,6 +5,7 @@ use axum::middleware;
 use axum::routing::{delete, get, patch, post};
 use axum::Router;
 use ghostcam::config::MAX_REQUEST_BODY_BYTES;
+use tower_http::services::{ServeDir, ServeFile};
 
 use super::auth::auth_middleware;
 use super::rate_limit::{api_rate_limit, login_rate_limit, ApiRateLimiter, LoginRateLimiter};
@@ -93,9 +94,26 @@ pub fn build_router(state: Arc<AppState>) -> Router {
             post(github_webhook::github_webhook),
         );
 
-    Router::new()
+    // Serve the SPA static files in production. Falls back to index.html
+    // for client-side routing. Only active if /app/static exists (Docker build).
+    let static_dir = std::path::Path::new("/app/static");
+    let spa_fallback = if static_dir.exists() {
+        let serve = ServeDir::new(static_dir)
+            .not_found_service(ServeFile::new(static_dir.join("index.html")));
+        Some(serve)
+    } else {
+        None
+    };
+
+    let mut router = Router::new()
         .merge(protected)
         .merge(public)
         .layer(DefaultBodyLimit::max(MAX_REQUEST_BODY_BYTES))
-        .with_state(state)
+        .with_state(state);
+
+    if let Some(spa) = spa_fallback {
+        router = router.fallback_service(spa);
+    }
+
+    router
 }
