@@ -37,7 +37,7 @@ services:
       - GHOSTCAM_DATA_DIR=/var/ghostcam
       - GHOSTCAM_ADMIN_EMAIL=admin@ghostcam.dev
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
-      - GHOSTCAM_ENROLLMENT_ADDR=server:4433
+      - GHOSTCAM_ENROLLMENT_ADDR=${GHOSTCAM_PUBLIC_IP:-server}:4433
       - RUST_LOG=server=info
       # Billing — set Stripe keys in .env (see .env.example)
       - STRIPE_PUBLIC_KEY=${STRIPE_PUBLIC_KEY:-}
