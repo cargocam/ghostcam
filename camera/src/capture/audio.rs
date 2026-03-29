@@ -8,7 +8,6 @@
 use anyhow::{Context, Result};
 use bytes::Bytes;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use tokio::sync::mpsc as tokio_mpsc;
 use tokio_util::sync::CancellationToken;
 
 use super::{CaptureMessage, CaptureSender};
@@ -192,7 +191,7 @@ fn run_audio_thread(
                     }
 
                     frame_count += 1;
-                    if frame_count % 2500 == 0 {
+                    if frame_count.is_multiple_of(2500) {
                         // Log every ~50 seconds
                         tracing::debug!(
                             frames = frame_count,
