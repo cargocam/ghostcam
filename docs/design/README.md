@@ -6,13 +6,13 @@ Implementation designs for camera firmware features. Each doc covers architectur
 
 | Document | Status | Description |
 |----------|--------|-------------|
-| [firmware-releases.md](firmware-releases.md) | Design complete | OTA updates via GitHub Releases, server webhook, staggered reboots |
-| [video-capture.md](video-capture.md) | Design complete | Real video capture via rpicam-vid, ABR preset profiles |
-| [audio-capture.md](audio-capture.md) | Design complete | Real audio capture via cpal + Opus encoding |
-| [gps.md](gps.md) | Design complete | GPS via gpsd TCP client, SIM7600G-H modem |
-| [cellular-failover.md](cellular-failover.md) | Design complete | WiFi→cellular failover, NetworkManager routing, network monitor |
-| [qr-enrollment.md](qr-enrollment.md) | Design complete | QR code scanning for camera enrollment, rqrr decoder |
-| [camera-manager.md](camera-manager.md) | Design complete | `scripts/pi.sh` CLI for managing Pi hardware over SSH |
+| [firmware-releases.md](firmware-releases.md) | Implemented | OTA updates via GitHub Releases, server webhook, staggered reboots |
+| [video-capture.md](video-capture.md) | Implemented (ABR deferred) | Real video capture via rpicam-vid, fixed bitrate for v1 |
+| [audio-capture.md](audio-capture.md) | Implemented | Real audio capture via cpal + Opus encoding |
+| [gps.md](gps.md) | Implemented | GPS via gpsd TCP client, SIM7600G-H modem |
+| [cellular-failover.md](cellular-failover.md) | Implemented | WiFi→cellular failover, NetworkManager routing, network monitor |
+| [qr-enrollment.md](qr-enrollment.md) | Implemented | QR code scanning for camera enrollment, rqrr decoder |
+| [camera-manager.md](camera-manager.md) | Implemented | `scripts/pi.sh` CLI for managing Pi hardware over SSH |
 
 ## Implementation Order
 

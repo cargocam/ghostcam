@@ -85,7 +85,6 @@ pub enum UploadFailReason {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum UpdateFailReason {
-    Watchdog,
     HashMismatch,
     DownloadFailed,
 }
@@ -289,7 +288,6 @@ mod tests {
     #[test]
     fn update_fail_reason_serde() {
         for reason in [
-            UpdateFailReason::Watchdog,
             UpdateFailReason::HashMismatch,
             UpdateFailReason::DownloadFailed,
         ] {

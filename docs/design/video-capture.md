@@ -125,9 +125,11 @@ For convenience and ABR:
 | medium | 1280x720 | 2 Mbps | Default |
 | high | 1920x1080 | 4 Mbps | LAN / good WiFi |
 
-### Bitrate Changes (ABR)
+### Bitrate Changes (ABR) — Deferred
 
-When the ABR controller requests a tier change, the capture pipeline must restart `rpicam-vid` with new `--bitrate` and potentially `--width`/`--height` arguments. This is the same approach Kodama uses:
+**Status: Not yet implemented.** ABR is planned for a future iteration.
+
+When implemented, the ABR controller will request tier changes by restarting `rpicam-vid` with new `--bitrate` and potentially `--width`/`--height` arguments (same approach as Kodama):
 
 1. Kill existing subprocess
 2. Spawn new subprocess with updated args
@@ -135,6 +137,8 @@ When the ABR controller requests a tier change, the capture pipeline must restar
 4. `--inline` ensures SPS/PPS is included with the first keyframe
 
 The restart takes ~200-500ms on Pi hardware. During this gap, the server receives no frames — viewers see a brief freeze, which is acceptable for a bitrate change.
+
+For v1, the camera uses a fixed bitrate set at startup via config.
 
 ### Process Lifecycle
 
