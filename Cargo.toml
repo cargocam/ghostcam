@@ -34,7 +34,7 @@ thiserror = "2"
 tracing = "0.1"
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio"] }
+sqlx = { version = "0.8", features = ["runtime-tokio-rustls"] }
 
 # Auth
 argon2 = "0.5"
