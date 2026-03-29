@@ -1,4 +1,5 @@
 pub mod config;
+pub mod firmware;
 pub mod pki;
 pub mod telemetry;
 pub mod types;

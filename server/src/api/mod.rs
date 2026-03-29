@@ -3,6 +3,8 @@ pub mod audit;
 pub mod auth;
 pub mod billing;
 pub mod cameras;
+pub mod firmware;
+pub mod github_webhook;
 pub mod health;
 pub mod hls;
 pub mod qr;

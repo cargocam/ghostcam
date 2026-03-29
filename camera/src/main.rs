@@ -149,6 +149,13 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Check for firmware updates before connecting to server (best-effort)
+    firmware::check_for_update(
+        &camera_config.server_addr,
+        Path::new(&camera_config.data_dir),
+    )
+    .await;
+
     // Load telemetry buffer
     let buffer_path = Path::new(&camera_config.data_dir).join("telemetry.buf");
     let telemetry_buffer = TelemetryBuffer::load(&buffer_path)?;

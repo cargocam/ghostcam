@@ -173,6 +173,9 @@ Settings that require restart (ports, database_url, data_dir) log warnings on re
 | `STRIPE_PRICE_ID_PRO` | server | _(none)_ | Stripe Price ID for pro tier |
 | `STRIPE_PRICE_ID_ENTERPRISE` | server | _(none)_ | Stripe Price ID for enterprise tier |
 | `STRIPE_PORTAL_CONFIG_ID` | server | _(none)_ | Portal config with plan switching |
+| `GHOSTCAM_RELEASE_REPO` | server | _(none)_ | GitHub `owner/repo` for firmware releases |
+| `GITHUB_WEBHOOK_SECRET` | server | _(none)_ | GitHub webhook HMAC secret |
+| `GHOSTCAM_UPDATE_STAGGER_SECS` | server | `300` | Reboot stagger window (seconds) |
 
 ## Architecture
 
@@ -206,6 +209,7 @@ Camera presence is delivered via **Server-Sent Events** (`/events`). Each camera
 
 ```
 config.rs     Port/size/limit constants (QUIC_PORT, HTTP_PORT, BROADCAST_CAPACITY, QUIC_MAX_*, MAX_REQUEST_BODY_BYTES, MAX_SESSIONS_PER_USER, TELEMETRY_BATCH_INTERVAL_SECS, ...) + helpers: load_toml(), env_or(), env_opt()
+firmware.rs   FirmwareRelease, FirmwareAsset, FirmwareLatestResponse types + is_newer_version() semver comparison
 types.rs      DeviceId, UserId, SessionId, TokenId, CertFingerprint, Seq newtypes
 telemetry.rs  TelemetryDatagram — sparse MessagePack payload (cpu, temp, mem, gps, ...)
 pki.rs        generate_key_pair(), create_self_signed_ca() — rcgen 0.13 wrappers
@@ -222,6 +226,7 @@ wire/
 ```
 main.rs          CLI, reconnect loop with exponential backoff + network awareness
 config.rs        CameraConfig + CameraConfigFile, layered TOML/env/CLI resolution
+firmware.rs      Startup update check (server → cloud fallback), download/verify/swap, health sentinel
 session.rs       Active QUIC session: alerts stream, command gate atomics
 enrollment.rs    JWT enrollment handshake
 qr_enrollment.rs QR code scanning enrollment (rpicam-still + rqrr, Linux only)
@@ -247,11 +252,12 @@ auth.rs       Token hashing, HMAC, session validation
 audit.rs      AuditLogger — HMAC-SHA256 signed audit trail (file + DB dual-write, wired into AppState)
 sse.rs        SseEventBus — per-user broadcast for Server-Sent Events
 billing/      Stripe integration, subscription tiers, camera limit enforcement, grace period background task
+firmware.rs   Staggered reboot scheduling, reconnection version check
 api/          Axum routes, rate limiting (see server/src/api/README.md)
 ingest/       QUIC accept loop, IngestSlot, RoutingRegistry (see server/src/ingest/README.md)
 egress/       EgressHandle, SessionManager, RTP packetizer (see server/src/egress/README.md)
 pki/          CA bootstrap, device enrollment, revocation (see server/src/pki/README.md)
-redis/        Telemetry write/query via Redis Streams, ConnectionManager, TelemetryBatcher, usage counters (see server/src/redis/README.md)
+redis/        Telemetry write/query via Redis Streams, ConnectionManager, TelemetryBatcher, usage counters, firmware pub/sub (see server/src/redis/README.md)
 ```
 
 ## Viewer Structure
@@ -298,7 +304,7 @@ stores/
 
 ### CameraCommand (server → camera, on Alerts stream)
 
-Tagged JSON (`"type"` field): `StartVideo`, `StopVideo`, `StartAudio`, `StopAudio`, `UploadSegment { segment_id }`, `UploadInit`, `Reboot`, `NetworkConfig { ssid, psk }`, `RemoveNetwork { ssid }`, `ListNetworks`, `UpdateAvailable { version, url, checksum }`, `CertRefresh { cert_pem }`, `Unregister`
+Tagged JSON (`"type"` field): `StartVideo`, `StopVideo`, `StartAudio`, `StopAudio`, `UploadSegment { segment_id }`, `UploadInit`, `Reboot`, `NetworkConfig { ssid, psk }`, `RemoveNetwork { ssid }`, `ListNetworks`, `CertRefresh { cert_pem }`, `Unregister`
 
 All carry `seq: Seq` for correlation with `Alert::Ack`.
 
@@ -357,6 +363,9 @@ POST   /api/v1/billing/portal              { return_url } → { url }
 GET    /api/v1/billing/usage               Current month usage stats
 POST   /api/v1/webhooks/stripe             Stripe webhook (public, signature-verified)
 
+GET    /api/v1/firmware/latest             Latest firmware release (public, no auth)
+POST   /api/v1/webhooks/github            GitHub release webhook (public, HMAC-verified)
+
 GET    /api/v1/audit                       Audit log query (?type=&since=&until=&limit=&offset=)
 POST   /api/v1/admin/reload                Reload config from disk
 
@@ -397,6 +406,7 @@ GET    /readyz                             200 when ready (no auth)
 - **Camera limit 402**: When billing is enabled and a user hits their camera limit, `POST /api/v1/cameras` returns HTTP 402 with `{ error: "camera_limit_reached" }`.
 - **Billing webhooks**: Stripe webhooks keep subscription state in sync. In production, set `STRIPE_WEBHOOK_SECRET` to the real signing secret. In local dev, run `docker compose --profile stripe up stripe-webhooks` to forward events via the Stripe CLI container — it prints the `whsec_...` secret to stdout on startup.
 - **Stripe Portal plan switching**: Requires `STRIPE_PORTAL_CONFIG_ID` — create one via the Stripe API or Dashboard with `subscription_update.enabled=true` and the product/price list. Without it, the portal only shows cancellation.
+- **Firmware updates**: Cameras check `GET /api/v1/firmware/latest` on every startup before connecting. If the enrolled server is unreachable (5s timeout), the camera falls back to the cloud URL (compiled in via `GHOSTCAM_CLOUD_URL` build-time env var). If no update is needed, the camera starts normally. Set `GHOSTCAM_RELEASE_REPO` on the server to enable startup fetch from GitHub API. Set `GITHUB_WEBHOOK_SECRET` to enable the GitHub release webhook. Connected cameras are rebooted with stagger (`GHOSTCAM_UPDATE_STAGGER_SECS`, default 300s) when a new release arrives. Reconnecting cameras with stale firmware get an immediate Reboot command.
 
 ## Key Dependencies
 

@@ -59,15 +59,10 @@ pub async fn run_command_reader(
             }
             Command::Reboot { seq } => {
                 send_ack(alerts_tx, "reboot", seq).await?;
-                tracing::info!("reboot requested");
-                #[cfg(target_os = "linux")]
-                {
-                    let _ = std::process::Command::new("systemctl")
-                        .arg("reboot")
-                        .spawn();
-                }
-                #[cfg(not(target_os = "linux"))]
-                tracing::warn!("reboot not supported on this platform");
+                tracing::info!("reboot requested — exiting for watchdog restart");
+                // exit(0) so the watchdog/systemd restarts the process.
+                // On restart, the firmware update check runs before connecting.
+                std::process::exit(0);
             }
             Command::Unregister { seq } => {
                 send_ack(alerts_tx, "unregister", seq).await?;
@@ -75,24 +70,6 @@ pub async fn run_command_reader(
                 crate::enrollment::clear_enrollment(&data_dir).await?;
                 let _ = signal_tx.send(CommandSignal::Unregistered).await;
                 return Ok(());
-            }
-            Command::UpdateAvailable {
-                seq,
-                version,
-                url,
-                sha256,
-                ..
-            } => {
-                send_ack(alerts_tx, "update_available", seq).await?;
-                let alerts = alerts_tx;
-                let dd = data_dir.clone();
-                // Run firmware update (this may exit the process on success)
-                if let Err(e) =
-                    crate::firmware::handle_firmware_update(&url, &sha256, &version, &dd, alerts)
-                        .await
-                {
-                    tracing::error!("firmware update failed: {e}");
-                }
             }
             Command::CertRefresh {
                 seq,

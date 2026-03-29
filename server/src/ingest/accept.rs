@@ -3,8 +3,10 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use ghostcam::config::QUIC_MAX_CONNECTIONS;
+use ghostcam::firmware::FirmwareRelease;
 use ghostcam::wire::alert::Alert;
 use ghostcam::wire::framing;
+use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
 use super::enrollment::handle_enrollment;
@@ -31,6 +33,7 @@ pub async fn run_accept_loop(
     telemetry_batcher: Option<Arc<TelemetryBatcher>>,
     sse_bus: Arc<SseEventBus>,
     audit: Arc<AuditLogger>,
+    firmware_release: Arc<RwLock<Option<FirmwareRelease>>>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let active_connections = Arc::new(AtomicU32::new(0));
@@ -61,9 +64,10 @@ pub async fn run_accept_loop(
                 let batcher = telemetry_batcher.clone();
                 let sse_bus = sse_bus.clone();
                 let audit = audit.clone();
+                let fw_release = firmware_release.clone();
                 let conn_count = active_connections.clone();
                 tokio::spawn(async move {
-                    if let Err(e) = handle_connection(incoming, registry, db, ca, revocation_cache, redis, batcher, sse_bus, audit).await {
+                    if let Err(e) = handle_connection(incoming, registry, db, ca, revocation_cache, redis, batcher, sse_bus, audit, fw_release).await {
                         tracing::warn!("connection failed: {e}");
                     }
                     conn_count.fetch_sub(1, Ordering::Relaxed);
@@ -85,6 +89,7 @@ async fn handle_connection(
     telemetry_batcher: Option<Arc<TelemetryBatcher>>,
     sse_bus: Arc<SseEventBus>,
     audit: Arc<AuditLogger>,
+    firmware_release: Arc<RwLock<Option<FirmwareRelease>>>,
 ) -> Result<()> {
     let connection = incoming.await?;
 
@@ -227,6 +232,18 @@ async fn handle_connection(
     *slot.capabilities.write().await = streams;
 
     registry.register(slot.clone()).await;
+
+    // 14b. Check if camera firmware is stale and send Reboot if needed
+    {
+        let latest = firmware_release.read().await.clone();
+        crate::firmware::check_and_reboot_if_stale(
+            &registry,
+            &camera.device_id,
+            &fw_version,
+            &latest,
+        )
+        .await;
+    }
 
     // 15. Publish SSE camera_online event
     sse_bus

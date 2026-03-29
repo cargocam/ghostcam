@@ -1,4 +1,5 @@
 pub mod connection;
+pub mod firmware;
 pub mod manifest;
 pub mod purge;
 pub mod revocation;
