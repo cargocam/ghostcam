@@ -220,13 +220,14 @@ wire/
 ## Camera Structure
 
 ```
-main.rs          CLI, reconnect loop with exponential backoff
+main.rs          CLI, reconnect loop with exponential backoff + network awareness
 config.rs        CameraConfig + CameraConfigFile, layered TOML/env/CLI resolution
 session.rs       Active QUIC session: alerts stream, command gate atomics
 enrollment.rs    JWT enrollment handshake
 tofu.rs          Server fingerprint pinning (first connect)
 quic.rs          QUIC endpoint with mTLS device cert
 commands.rs      CameraCommand handler → updates watch channels
+network.rs       Network monitor (500ms poll /proc/net/route), WiFi/NM helpers, wait_for_route()
 capture/         Test sources: video_test.rs (loop H.264), audio_test/ (synthetic Opus)
                  Real capture: video.rs (rpicam-vid), audio.rs (cpal+opus, Linux only)
 stream/          Frame senders: video.rs, audio.rs (write to persistent QUIC streams)
@@ -387,6 +388,7 @@ GET    /readyz                             200 when ready (no auth)
 - **QUIC refused**: Verify port 4433/udp is open and the server started successfully.
 - **Telemetry API 503**: `GHOSTCAM_REDIS_URL` is unset or empty — Redis is required for telemetry history.
 - **Camera offline after server restart**: Cameras auto-reconnect with backoff (1s → 30s). Wait or restart cameras manually.
+- **Cellular failover**: The network monitor polls `/proc/net/route` every 500ms (Linux only, no-op on macOS). On interface change (e.g. wlan0→wwan0), it debounces 1s then signals the connection loop to reconnect. A 5s send timeout catches dead QUIC connections that haven't errored yet. See `docs/design/cellular-failover.md` for full architecture.
 - **Audit log**: Set `GHOSTCAM_HMAC_KEY` to a secret key for HMAC-SHA256 signing (default: `dev-hmac-key`). Entries are written to `{data_dir}/audit.jsonl` and the `audit_log` PostgreSQL table. Query via `GET /api/v1/audit`.
 - **str0m API**: Pinned at 0.6.x. Key methods: `Rtc::builder().set_ice_lite(true)`, `sdp_api().accept_offer(offer)`, `rtc.writer(mid)`, `channel.write(binary, data)`.
 - **Billing disabled**: If `STRIPE_SECRET_KEY` is unset, billing is fully disabled — unlimited cameras, no payment UI. The `/api/v1/billing/subscription` endpoint returns `{ billing_enabled: false, tier: "unlimited" }`.

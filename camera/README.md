@@ -6,7 +6,7 @@ Two modes:
 - **Test source** (`--test-source`): loops a pre-recorded H.264 file with synthetic audio. No system dependencies beyond Rust. Used for development and Docker.
 - **Real capture** (default): `rpicam-vid`/`libcamera-vid` for video, `cpal` + Opus for audio, `/proc`/`/sys` + gpsd for telemetry. Requires Linux with a camera.
 
-Auto-reconnects to the server with exponential backoff (1s → 30s).
+Auto-reconnects to the server with exponential backoff (1s → 30s). On Linux, a network monitor polls `/proc/net/route` every 500ms to detect WiFi-to-cellular failover — on interface change, the camera drops the QUIC session and reconnects immediately rather than waiting for the QUIC idle timeout. A 5s send timeout catches dead connections that haven't errored yet. On macOS (dev), the monitor is a no-op.
 
 ## System Requirements (Real Capture)
 
@@ -77,7 +77,7 @@ Server address resolution precedence: `--server-addr` CLI flag -> `GHOSTCAM_SERV
 | `certs` | Device certificate load/store |
 | `quic` | QUIC endpoint setup with mTLS |
 | `commands` | `CameraCommand` handler — updates watch channels |
-| `network` | Network interface monitoring (stub) |
+| `network` | Network monitor (500ms `/proc/net/route` poll, 1s debounce), WiFi/NM helpers, `wait_for_route()` |
 | `firmware` | OTA update handling (stub) |
 | `capture/mod` | `CaptureMessage` enum (VideoNal, AudioFrame) |
 | `capture/video_test` | Test video source: loops H.264 file at real-time pace |
