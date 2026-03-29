@@ -165,6 +165,13 @@ cmd_setup() {
         echo -n "  Enter server address (host:port): "
         read -r server_addr
     fi
+    # Sanitize server_addr — strip newlines, validate format
+    server_addr="${server_addr//$'\n'/}"
+    server_addr="${server_addr//$'\r'/}"
+    if [ -n "${server_addr}" ] && ! [[ "${server_addr}" =~ ^[a-zA-Z0-9._:-]+$ ]]; then
+        echo "  ERROR: Invalid server address format: ${server_addr}"
+        exit 1
+    fi
     if [ -n "${server_addr}" ]; then
         pi_ssh "sudo mkdir -p /etc/ghostcam && sudo tee /etc/ghostcam/env > /dev/null << EOF
 GHOSTCAM_DATA_DIR=/var/ghostcam

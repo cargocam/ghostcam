@@ -2,8 +2,7 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use stripe::{
-    BillingPortalSession, Client, CreateBillingPortalSession,
-    CreateCustomer, Customer, CustomerId,
+    BillingPortalSession, Client, CreateBillingPortalSession, CreateCustomer, Customer, CustomerId,
     EventObject, EventType, Webhook,
 };
 
@@ -90,7 +89,9 @@ impl StripeClient {
     }
 
     pub fn verify_webhook(&self, payload: &str, signature: &str) -> Result<stripe::Event> {
-        let secret = self.webhook_secret.as_deref()
+        let secret = self
+            .webhook_secret
+            .as_deref()
             .ok_or_else(|| anyhow::anyhow!("webhook secret not configured"))?;
         Webhook::construct_event(payload, signature, secret)
             .map_err(|e| anyhow::anyhow!("webhook signature verification failed: {e}"))

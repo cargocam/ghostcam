@@ -101,22 +101,21 @@ pub async fn enrollment_qr(
             owner_id: user.user_id.0.clone(),
         });
 
-    (
-        StatusCode::OK,
-        [("content-type", "image/svg+xml")],
-        svg,
-    )
-        .into_response()
+    (StatusCode::OK, [("content-type", "image/svg+xml")], svg).into_response()
 }
 
 /// Derive the server's HTTP base URL from the request headers.
 ///
 /// Uses the Host header to construct a URL the camera can reach. If a public IP
-/// override is set, uses that instead.
-fn derive_server_url(
-    headers: &HeaderMap,
-    public_ip_override: Option<std::net::IpAddr>,
-) -> String {
+/// override is set, uses that instead. Respects `X-Forwarded-Proto` to use HTTPS
+/// when behind a reverse proxy.
+fn derive_server_url(headers: &HeaderMap, public_ip_override: Option<std::net::IpAddr>) -> String {
+    let scheme = headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .filter(|s| *s == "https")
+        .unwrap_or("http");
+
     if let Some(ip) = public_ip_override {
         // If there's an explicit public IP, use it with the port from Host header
         let port = headers
@@ -126,14 +125,14 @@ fn derive_server_url(
             .and_then(|p| p.parse::<u16>().ok());
 
         return match port {
-            Some(p) => format!("http://{ip}:{p}"),
-            None => format!("http://{ip}:3000"),
+            Some(p) => format!("{scheme}://{ip}:{p}"),
+            None => format!("{scheme}://{ip}:3000"),
         };
     }
 
     // Fall back to Host header
     if let Some(host) = headers.get("host").and_then(|v| v.to_str().ok()) {
-        return format!("http://{host}");
+        return format!("{scheme}://{host}");
     }
 
     // Last resort

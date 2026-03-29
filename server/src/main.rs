@@ -187,20 +187,16 @@ async fn main() -> anyhow::Result<()> {
         firmware_release: firmware_release.clone(),
         github_webhook_secret: cfg.github_webhook_secret.clone(),
         update_stagger_secs: cfg.update_stagger_secs,
+        pending_reboot_version: tokio::sync::Mutex::new(None),
     });
 
     // --- Redis firmware release subscription ---
     if let Some(ref redis_url) = cfg.redis_url {
-        let fw = firmware_release.clone();
-        let reg = registry.clone();
-        let stagger = cfg.update_stagger_secs;
         let url = redis_url.clone();
+        let fw_state = app_state.clone();
         let fw_cancel = cancel.clone();
         tokio::spawn(async move {
-            crate::redis::firmware::subscribe_firmware_releases(
-                &url, fw, reg, stagger, fw_cancel,
-            )
-            .await;
+            crate::redis::firmware::subscribe_firmware_releases(&url, fw_state, fw_cancel).await;
         });
     }
 

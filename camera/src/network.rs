@@ -82,6 +82,7 @@ async fn network_monitor_loop(change_tx: watch::Sender<u64>) {
         // interface. Drops to None are handled by the send timeout.
         if current.is_none() {
             // Route dropped — don't signal yet, wait for a new route.
+            last_signaled = None;
             continue;
         }
 
@@ -309,7 +310,8 @@ wlan0\t0064A8C0\t00000000\t0001\t0\t0\t600\t00FFFFFF\t0\t0\t0
 
     #[test]
     fn route_empty_table() {
-        let content = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n";
+        let content =
+            "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT\n";
         assert_eq!(read_default_interface_from(content), None);
     }
 
@@ -329,7 +331,8 @@ wwan0\t00000000\t0A000001\t0003\t0\t0\t700\t00000000\t0\t0\t0
 
     #[test]
     fn route_header_only() {
-        let content = "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT";
+        let content =
+            "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\tMTU\tWindow\tIRTT";
         assert_eq!(read_default_interface_from(content), None);
     }
 

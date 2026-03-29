@@ -53,4 +53,7 @@ pub struct AppState {
     pub github_webhook_secret: Option<String>,
     /// Window (seconds) over which to spread reboot commands on new release.
     pub update_stagger_secs: u64,
+    /// Version for which a staggered reboot is already in flight. Prevents
+    /// duplicate reboots from webhook retries.
+    pub pending_reboot_version: tokio::sync::Mutex<Option<String>>,
 }

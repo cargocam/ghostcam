@@ -2,7 +2,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use ghostcam::firmware::{FirmwareLatestResponse, is_newer_version};
+use ghostcam::firmware::{is_newer_version, FirmwareLatestResponse};
 
 /// Compile-time cloud URL for firmware fallback. Set via `GHOSTCAM_CLOUD_URL`
 /// env var at build time. Official release builds have this; self-hosted builds
@@ -119,10 +119,7 @@ async fn try_update_from_response(
     };
 
     let Some(asset) = assets.get(asset_key) else {
-        tracing::warn!(
-            arch = asset_key,
-            "no firmware asset for this architecture"
-        );
+        tracing::warn!(arch = asset_key, "no firmware asset for this architecture");
         return true;
     };
 

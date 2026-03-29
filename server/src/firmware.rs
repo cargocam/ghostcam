@@ -4,14 +4,38 @@ use ghostcam::firmware::FirmwareRelease;
 use ghostcam::wire::command::Command;
 use rand::Rng;
 
+use crate::api::state::AppState;
 use crate::ingest::registry::RoutingRegistry;
 
 /// Schedule staggered reboot commands to all connected cameras.
 ///
 /// Each camera gets a random delay within `0..stagger_secs` to avoid
 /// thundering herd on the firmware CDN and surveillance gaps.
-pub fn schedule_staggered_reboot(registry: Arc<RoutingRegistry>, stagger_secs: u64) {
+/// Deduplicates: if a reboot for the same version is already in-flight, skips.
+pub fn schedule_staggered_reboot(state: &Arc<AppState>) {
+    let state = state.clone();
     tokio::spawn(async move {
+        // Dedup: check if we're already rebooting for this version
+        let version = state
+            .firmware_release
+            .read()
+            .await
+            .as_ref()
+            .map(|r| r.version.clone());
+        let Some(version) = version else { return };
+
+        {
+            let mut pending = state.pending_reboot_version.lock().await;
+            if pending.as_deref() == Some(version.as_str()) {
+                tracing::debug!(version, "staggered reboot already in-flight, skipping");
+                return;
+            }
+            *pending = Some(version.clone());
+        }
+
+        let registry = &state.registry;
+        let stagger_secs = state.update_stagger_secs;
+
         let slots = registry.all_slots().await;
         if slots.is_empty() {
             return;
@@ -20,6 +44,7 @@ pub fn schedule_staggered_reboot(registry: Arc<RoutingRegistry>, stagger_secs: u
         tracing::info!(
             cameras = slots.len(),
             stagger_secs,
+            version,
             "scheduling staggered reboot for firmware update"
         );
 

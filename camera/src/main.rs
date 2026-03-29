@@ -130,12 +130,8 @@ async fn main() -> Result<()> {
         } else {
             // No JWT provided — try QR code scanning
             tracing::info!("no enrollment found — entering QR scan mode");
-            match qr_enrollment::scan_and_enroll(
-                &camera_config.data_dir,
-                &device_cert,
-                &device_key,
-            )
-            .await
+            match qr_enrollment::scan_and_enroll(&camera_config.data_dir, &device_cert, &device_key)
+                .await
             {
                 Ok(()) => {
                     tracing::info!("enrollment via QR complete");

@@ -88,8 +88,7 @@ fn run_audio_thread(
             device.build_input_stream(
                 &supported_config.into(),
                 move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                    let samples: Vec<f32> =
-                        data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
+                    let samples: Vec<f32> = data.iter().map(|&s| s as f32 / 32768.0).collect();
                     let _ = sender.send(samples);
                 },
                 |err| tracing::error!("audio stream error: {}", err),
@@ -101,8 +100,7 @@ fn run_audio_thread(
             device.build_input_stream(
                 &supported_config.into(),
                 move |data: &[i32], _: &cpal::InputCallbackInfo| {
-                    let samples: Vec<f32> =
-                        data.iter().map(|&s| s as f32 / i32::MAX as f32).collect();
+                    let samples: Vec<f32> = data.iter().map(|&s| s as f32 / 2147483648.0).collect();
                     let _ = sender.send(samples);
                 },
                 |err| tracing::error!("audio stream error: {}", err),

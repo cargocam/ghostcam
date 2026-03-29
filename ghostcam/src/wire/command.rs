@@ -55,7 +55,6 @@ const MAX_SHORT_STRING: usize = 256;
 /// Maximum length for PEM certificate fields.
 const MAX_PEM_STRING: usize = 8192;
 
-
 impl Command {
     /// Validate string field lengths after deserialization.
     pub fn validate(&self) -> Result<(), String> {

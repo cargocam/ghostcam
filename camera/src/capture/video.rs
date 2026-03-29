@@ -64,7 +64,7 @@ pub async fn run_real_video(
         "-o".to_string(),
         "-".to_string(), // stdout
         "--flush".to_string(),
-        "-n".to_string(), // no preview
+        "-n".to_string(),       // no preview
         "--inline".to_string(), // SPS/PPS with every keyframe
     ];
 
@@ -166,11 +166,7 @@ pub async fn run_real_video(
 /// This is an incremental parser that handles partial reads across buffer
 /// boundaries. It searches for Annex B start codes (0x00 0x00 0x01 or
 /// 0x00 0x00 0x00 0x01) to delimit NAL units.
-fn read_and_parse_nals<R: Read>(
-    mut reader: R,
-    tx: CaptureSender,
-    cancel: CancellationToken,
-) {
+fn read_and_parse_nals<R: Read>(mut reader: R, tx: CaptureSender, cancel: CancellationToken) {
     let mut buf = vec![0u8; 32768]; // 32KB read buffer
     let mut accum = Vec::with_capacity(65536); // accumulates data between start codes
     let mut found_first_start_code = false;
@@ -215,18 +211,17 @@ fn read_and_parse_nals<R: Read>(
             // Everything before it is a NAL unit body.
             if nal_end > 0 {
                 let nal_data = Bytes::copy_from_slice(&accum[..nal_end]);
-                if tx.blocking_send(CaptureMessage::VideoNal(nal_data)).is_err() {
+                if tx
+                    .blocking_send(CaptureMessage::VideoNal(nal_data))
+                    .is_err()
+                {
                     tracing::info!("video receiver dropped, stopping capture");
                     return;
                 }
                 total_nals += 1;
 
                 if total_nals.is_multiple_of(300) {
-                    tracing::debug!(
-                        total_nals,
-                        total_bytes,
-                        "video capture progress"
-                    );
+                    tracing::debug!(total_nals, total_bytes, "video capture progress");
                 }
             }
             // Remove the consumed NAL and the start code prefix
@@ -248,8 +243,7 @@ fn read_and_parse_nals<R: Read>(
 /// Returns the byte offset where the NAL body begins, or `None` if the
 /// buffer doesn't start with a recognizable start code yet.
 fn skip_leading_start_code(data: &[u8]) -> Option<usize> {
-    if data.len() >= 4 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x01
-    {
+    if data.len() >= 4 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x00 && data[3] == 0x01 {
         Some(4)
     } else if data.len() >= 3 && data[0] == 0x00 && data[1] == 0x00 && data[2] == 0x01 {
         Some(3)
@@ -378,7 +372,9 @@ mod tests {
                 if self.pos >= self.data.len() {
                     return Ok(0);
                 }
-                let end = (self.pos + self.chunk_size).min(self.data.len()).min(self.pos + buf.len());
+                let end = (self.pos + self.chunk_size)
+                    .min(self.data.len())
+                    .min(self.pos + buf.len());
                 let n = end - self.pos;
                 buf[..n].copy_from_slice(&self.data[self.pos..end]);
                 self.pos += n;
@@ -387,9 +383,8 @@ mod tests {
         }
 
         let stream: Vec<u8> = vec![
-            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1e,
-            0x00, 0x00, 0x01, 0x68, 0xce, 0x38, 0x80,
-            0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x00,
+            0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x00, 0x1e, 0x00, 0x00, 0x01, 0x68, 0xce, 0x38,
+            0x80, 0x00, 0x00, 0x00, 0x01, 0x65, 0x88, 0x84, 0x00,
         ];
 
         let (tx, rx) = tokio::sync::mpsc::channel(64);

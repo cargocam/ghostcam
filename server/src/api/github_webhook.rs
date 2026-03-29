@@ -10,6 +10,56 @@ use ring::hmac;
 
 use super::state::AppState;
 
+/// Validate that a URL points to GitHub's asset CDN (prevent SSRF).
+fn is_safe_github_url(url: &str) -> bool {
+    url.starts_with("https://github.com/")
+        || url.starts_with("https://objects.githubusercontent.com/")
+        || url.starts_with("https://github-releases.githubusercontent.com/")
+}
+
+/// Parse firmware assets from a GitHub release's asset list + checksums.
+fn parse_firmware_assets(
+    assets: &[serde_json::Value],
+    checksums: &HashMap<String, String>,
+) -> HashMap<String, FirmwareAsset> {
+    let mut firmware_assets = HashMap::new();
+    for asset in assets {
+        let name = asset["name"].as_str().unwrap_or("");
+        let url = asset["browser_download_url"]
+            .as_str()
+            .unwrap_or("")
+            .to_string();
+
+        if name == "checksums.txt" {
+            continue;
+        }
+
+        let arch = if name.contains("aarch64") {
+            "aarch64"
+        } else if name.contains("x86_64") {
+            "x86_64"
+        } else {
+            continue;
+        };
+
+        if !is_safe_github_url(&url) {
+            tracing::warn!(name, url, "skipping asset with non-GitHub URL");
+            continue;
+        }
+
+        let sha256 = match checksums.get(name).cloned() {
+            Some(h) if !h.is_empty() => h,
+            _ => {
+                tracing::warn!(name, "no checksum found for asset, skipping");
+                continue;
+            }
+        };
+
+        firmware_assets.insert(arch.to_string(), FirmwareAsset { url, sha256 });
+    }
+    firmware_assets
+}
+
 /// POST /api/v1/webhooks/github
 ///
 /// Public endpoint (no auth middleware). Verified by GitHub webhook HMAC signature.
@@ -90,49 +140,24 @@ pub async fn github_webhook(
     });
 
     let checksums = if let Some(url) = checksums_url {
-        match fetch_checksums(&url).await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!("failed to fetch checksums.txt: {e}");
-                HashMap::new()
+        if !is_safe_github_url(&url) {
+            tracing::warn!(url, "skipping checksums.txt from non-GitHub URL");
+            HashMap::new()
+        } else {
+            match fetch_checksums(&url).await {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!("failed to fetch checksums.txt: {e}");
+                    HashMap::new()
+                }
             }
         }
     } else {
         HashMap::new()
     };
 
-    // Build asset map
-    let mut firmware_assets = HashMap::new();
-    for asset in assets {
-        let name = asset["name"].as_str().unwrap_or("");
-        let url = asset["browser_download_url"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-
-        // Match known binary patterns: ghostcam-camera-{arch}
-        let arch = if name.contains("aarch64") {
-            "aarch64"
-        } else if name.contains("x86_64") {
-            "x86_64"
-        } else {
-            continue;
-        };
-
-        // Skip checksums.txt itself
-        if name == "checksums.txt" {
-            continue;
-        }
-
-        let sha256 = checksums.get(name).cloned().unwrap_or_default();
-        firmware_assets.insert(
-            arch.to_string(),
-            FirmwareAsset {
-                url,
-                sha256,
-            },
-        );
-    }
+    // Build asset map using shared parser
+    let firmware_assets = parse_firmware_assets(assets, &checksums);
 
     if firmware_assets.is_empty() {
         tracing::warn!(version = %version, "no camera firmware assets found in release");
@@ -156,10 +181,7 @@ pub async fn github_webhook(
     }
 
     // Schedule staggered reboot of connected cameras
-    crate::firmware::schedule_staggered_reboot(
-        state.registry.clone(),
-        state.update_stagger_secs,
-    );
+    crate::firmware::schedule_staggered_reboot(&state);
 
     StatusCode::OK.into_response()
 }
@@ -252,29 +274,7 @@ pub async fn fetch_latest_github_release(repo: &str) -> Option<FirmwareRelease> 
         HashMap::new()
     };
 
-    let mut firmware_assets = HashMap::new();
-    for asset in assets {
-        let name = asset["name"].as_str().unwrap_or("");
-        let url = asset["browser_download_url"]
-            .as_str()
-            .unwrap_or("")
-            .to_string();
-
-        let arch = if name.contains("aarch64") {
-            "aarch64"
-        } else if name.contains("x86_64") {
-            "x86_64"
-        } else {
-            continue;
-        };
-
-        if name == "checksums.txt" {
-            continue;
-        }
-
-        let sha256 = checksums.get(name).cloned().unwrap_or_default();
-        firmware_assets.insert(arch.to_string(), FirmwareAsset { url, sha256 });
-    }
+    let firmware_assets = parse_firmware_assets(assets, &checksums);
 
     if firmware_assets.is_empty() {
         return None;

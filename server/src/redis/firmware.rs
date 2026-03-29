@@ -3,6 +3,7 @@ use std::sync::Arc;
 use redis::AsyncCommands;
 
 use super::connection::RedisManager;
+use crate::api::state::AppState;
 
 /// Redis pub/sub channel name for firmware release notifications.
 const FIRMWARE_CHANNEL: &str = "ghostcam:firmware:release";
@@ -14,10 +15,7 @@ pub async fn publish_release(redis: &Arc<RedisManager>, json: &str) {
         return;
     };
 
-    if let Err(e) = conn
-        .publish::<_, _, ()>(FIRMWARE_CHANNEL, json)
-        .await
-    {
+    if let Err(e) = conn.publish::<_, _, ()>(FIRMWARE_CHANNEL, json).await {
         tracing::warn!("failed to publish firmware release to Redis: {e}");
         redis.record_write_error();
     } else {
@@ -29,9 +27,7 @@ pub async fn publish_release(redis: &Arc<RedisManager>, json: &str) {
 /// Runs forever (until cancel).
 pub async fn subscribe_firmware_releases(
     redis_url: &str,
-    firmware_release: Arc<tokio::sync::RwLock<Option<ghostcam::firmware::FirmwareRelease>>>,
-    registry: Arc<crate::ingest::registry::RoutingRegistry>,
-    stagger_secs: u64,
+    state: Arc<AppState>,
     cancel: tokio_util::sync::CancellationToken,
 ) {
     loop {
@@ -89,11 +85,8 @@ pub async fn subscribe_firmware_releases(
                     match serde_json::from_str::<ghostcam::firmware::FirmwareRelease>(&payload) {
                         Ok(release) => {
                             tracing::info!(version = %release.version, "firmware release from Redis pub/sub");
-                            *firmware_release.write().await = Some(release);
-                            crate::firmware::schedule_staggered_reboot(
-                                registry.clone(),
-                                stagger_secs,
-                            );
+                            *state.firmware_release.write().await = Some(release);
+                            crate::firmware::schedule_staggered_reboot(&state);
                         }
                         Err(e) => {
                             tracing::warn!("firmware pub/sub JSON parse error: {e}");
