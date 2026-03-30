@@ -88,7 +88,7 @@ pub async fn handle_enrollment(
 
     let camera = db
         .create_camera(&NewCameraRecord {
-            user_id,
+            user_id: Some(user_id),
             cert_fingerprint: fingerprint.clone(),
             display_name,
         })

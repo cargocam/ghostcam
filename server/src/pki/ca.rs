@@ -162,6 +162,8 @@ impl CaManager {
     }
 
     /// Verify a user association certificate was signed by this CA.
+    /// Kept for backward compatibility with legacy enrolled cameras.
+    #[allow(dead_code)]
     pub fn verify_user_cert(&self, cert_der: &[u8]) -> Result<()> {
         use x509_parser::prelude::*;
 

@@ -171,6 +171,35 @@ pub struct WifiCredential {
     pub psk: String,
 }
 
+/// GET /api/v1/cameras/unclaimed
+pub async fn list_unclaimed(
+    State(state): State<Arc<AppState>>,
+    Extension(_user): Extension<AuthUser>,
+) -> Response {
+    let cameras = match state.db.get_unclaimed_devices().await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("list unclaimed cameras error: {e}");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let mut responses = Vec::new();
+    for cam in cameras {
+        let online = state.registry.is_connected(&cam.device_id).await;
+        responses.push(CameraResponse {
+            device_id: cam.device_id.0,
+            display_name: cam.display_name,
+            enrolled_at: cam.enrolled_at,
+            last_seen_at: cam.last_seen_at,
+            notes: cam.notes,
+            online,
+        });
+    }
+
+    Json(responses).into_response()
+}
+
 /// GET /api/v1/cameras/:device_id
 pub async fn get(
     State(state): State<Arc<AppState>>,
@@ -188,7 +217,7 @@ pub async fn get(
     };
 
     // Verify ownership
-    if camera.user_id != user.user_id {
+    if camera.user_id.as_ref() != Some(&user.user_id) {
         return StatusCode::NOT_FOUND.into_response();
     }
 
@@ -221,7 +250,7 @@ pub async fn update(
 
     // Verify ownership
     match state.db.get_camera(&device_id).await {
-        Ok(Some(c)) if c.user_id == user.user_id => {}
+        Ok(Some(c)) if c.user_id.as_ref() == Some(&user.user_id) => {}
         Ok(Some(_)) | Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
@@ -249,7 +278,7 @@ pub async fn delete(
 
     // Verify ownership
     match state.db.get_camera(&device_id).await {
-        Ok(Some(c)) if c.user_id == user.user_id => {}
+        Ok(Some(c)) if c.user_id.as_ref() == Some(&user.user_id) => {}
         Ok(Some(_)) | Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }

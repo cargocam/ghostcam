@@ -189,6 +189,20 @@ Camera (QUIC/mTLS) ──► IngestSlot ──► broadcast::Sender<VideoFrame>
                                                └──► EgressHandle → Viewer C (WebRTC)
 ```
 
+### Enrollment (Plug-and-Play)
+
+Cameras connect with a self-signed device cert (no user cert needed). The server accepts any client cert and authenticates by fingerprint lookup:
+
+1. Camera connects with device cert only (self-signed, permanent identity)
+2. Server computes fingerprint, looks up in DB. If unknown, auto-registers as unclaimed.
+3. Server sends `DeviceStatus` command: `Unclaimed`, `Active`, or `Suspended`
+4. Unclaimed cameras enter QR scan mode. User shows a claim QR from the web UI (`GET /api/v1/cameras/enroll/qr`).
+5. Camera scans QR, sends `ClaimToken` alert with the JWT. Server validates, assigns ownership.
+6. Server sends `DeviceStatus::Active`, camera starts streaming.
+7. On subsequent connects, the server recognizes the fingerprint as claimed and sends `Active` immediately.
+
+**Ownership is server-side state** (`cameras.user_id`). No user certs, no CSR signing, no CA chain verification.
+
 ### Ingest
 
 Each camera opens persistent QUIC streams: `Alerts` (bidirectional JSON framing), `Video` (length-prefixed H.264 NALs), `Audio` (length-prefixed Opus frames). One-shot upload streams carry fMP4 segments, manifests, and telemetry buffers.
@@ -217,8 +231,9 @@ wire/
   framing.rs  write_frame/read_frame/write_json/read_json — length-prefixed async I/O
   frames.rs   InboundStreamTag enum (Segment/Init/Manifest/TelemetryBuffer/Alerts/Video/Audio)
               VideoFrame, AudioFrame — broadcast channel types
-  command.rs  CameraCommand — server→camera tagged JSON (StartVideo, StopVideo, UploadSegment, Reboot, ...)
-  alert.rs    Alert — camera→server tagged JSON (Handshake, RecordingSegment, Ack, Enrollment, ...)
+  command.rs  CameraCommand — server→camera tagged JSON (DeviceStatus, StartVideo, StopVideo, UploadSegment, Reboot, ...)
+              DeviceStatusKind enum (Unclaimed, Active, Suspended)
+  alert.rs    Alert — camera→server tagged JSON (Handshake, RecordingSegment, Ack, ClaimToken, ...)
 ```
 
 ## Camera Structure
@@ -228,8 +243,8 @@ main.rs          CLI, reconnect loop with exponential backoff + network awarenes
 config.rs        CameraConfig + CameraConfigFile, layered TOML/env/CLI resolution
 firmware.rs      Startup update check (server → cloud fallback), download/verify/swap, health sentinel
 session.rs       Active QUIC session: alerts stream, command gate atomics
-enrollment.rs    JWT enrollment handshake
-qr_enrollment.rs QR code scanning enrollment (rpicam-still + rqrr, Linux only)
+enrollment.rs    Claim token flow (send ClaimToken alert, clear enrollment state)
+qr_enrollment.rs QR code scanning: WiFi QR (w field), claim QR (t field), combined. Linux rpicam-still + rqrr.
 tofu.rs          Server fingerprint pinning (first connect)
 quic.rs          QUIC endpoint with mTLS device cert
 commands.rs      CameraCommand handler → updates watch channels
@@ -304,13 +319,13 @@ stores/
 
 ### CameraCommand (server → camera, on Alerts stream)
 
-Tagged JSON (`"type"` field): `StartVideo`, `StopVideo`, `StartAudio`, `StopAudio`, `UploadSegment { segment_id }`, `UploadInit`, `Reboot`, `NetworkConfig { ssid, psk }`, `RemoveNetwork { ssid }`, `ListNetworks`, `CertRefresh { cert_pem }`, `Unregister`
+Tagged JSON (`"type"` field): `DeviceStatus { status: unclaimed|active|suspended }`, `StartVideo`, `StopVideo`, `StartAudio`, `StopAudio`, `UploadSegment { segment_id }`, `UploadInit`, `Reboot`, `NetworkConfig { ssid, psk }`, `RemoveNetwork { ssid }`, `ListNetworks`, `CertRefresh { cert_pem }` (legacy), `Unregister`
 
 All carry `seq: Seq` for correlation with `Alert::Ack`.
 
 ### Alert (camera → server, on Alerts stream)
 
-Tagged JSON: `Handshake { device_id, cert_fingerprint, capabilities }`, `CapabilityUpdate`, `RecordingSegment { segment_id, duration_ms, size_bytes, start_ts }`, `SegmentEvicted { segment_id }`, `SegmentUploaded { segment_id }`, `SegmentUploadFailed { segment_id, reason }`, `Ack { seq }`, `Enrollment { enrollment_token }`
+Tagged JSON: `Handshake { protocol_version, fw_version, streams }`, `CapabilityUpdate`, `RecordingSegment { device_id, segment_id, start_ts, end_ts, size_bytes }`, `SegmentEvicted { segment_id }`, `SegmentUploaded { seq, segment_id }`, `SegmentUploadFailed { seq, segment_id, reason }`, `Ack { cmd, seq }`, `ClaimToken { token }`, `Enrollment { token }` (legacy), `Csr { csr_pem }` (legacy)
 
 ### RTP (server → browser)
 
@@ -332,9 +347,10 @@ POST   /api/v1/auth/login                  { email, password } → session cooki
 POST   /api/v1/auth/logout
 PATCH  /api/v1/auth/password
 
-GET    /api/v1/cameras                     List enrolled cameras
-POST   /api/v1/cameras                     Enroll new camera
-GET    /api/v1/cameras/enroll/qr           Enrollment QR code (SVG, auth required)
+GET    /api/v1/cameras                     List user's claimed cameras
+POST   /api/v1/cameras                     Generate claim JWT token
+GET    /api/v1/cameras/unclaimed           List unclaimed connected devices
+GET    /api/v1/cameras/enroll/qr           Claim QR code (SVG, auth required)
 GET    /api/v1/cameras/:id                 Camera + latest telemetry
 PATCH  /api/v1/cameras/:id                 Update name/group
 DELETE /api/v1/cameras/:id                 Revoke
@@ -399,6 +415,7 @@ GET    /readyz                             200 when ready (no auth)
 - **QUIC refused**: Verify port 4433/udp is open and the server started successfully.
 - **Telemetry API 503**: `GHOSTCAM_REDIS_URL` is unset or empty — Redis is required for telemetry history.
 - **Camera offline after server restart**: Cameras auto-reconnect with backoff (1s → 30s). Wait or restart cameras manually.
+- **Camera unclaimed**: New cameras auto-register as unclaimed on first connect. Claim via QR code in the web UI (`GET /api/v1/cameras/enroll/qr`) or API (`POST /api/v1/cameras` to get a claim JWT). The camera scans the QR and sends a `ClaimToken` alert. View unclaimed cameras at `GET /api/v1/cameras/unclaimed`.
 - **Cellular failover**: The network monitor polls `/proc/net/route` every 500ms (Linux only, no-op on macOS). On interface change (e.g. wlan0→wwan0), it debounces 1s then signals the connection loop to reconnect. A 5s send timeout catches dead QUIC connections that haven't errored yet. See `docs/design/cellular-failover.md` for full architecture.
 - **Audit log**: Set `GHOSTCAM_HMAC_KEY` to a secret key for HMAC-SHA256 signing (default: `dev-hmac-key`). Entries are written to `{data_dir}/audit.jsonl` and the `audit_log` PostgreSQL table. Query via `GET /api/v1/audit`.
 - **str0m API**: Pinned at 0.6.x. Key methods: `Rtc::builder().set_ice_lite(true)`, `sdp_api().accept_offer(offer)`, `rtc.writer(mid)`, `channel.write(binary, data)`.

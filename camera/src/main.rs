@@ -18,10 +18,12 @@ use std::time::Duration;
 use anyhow::Result;
 use clap::Parser;
 use ghostcam::config::{RECONNECT_BACKOFF_INITIAL_SECS, RECONNECT_BACKOFF_MAX_SECS};
+use ghostcam::wire::command::DeviceStatusKind;
 use tokio::sync::{mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::capture::CaptureMessage;
+use crate::commands::CommandSignal;
 use crate::config::CameraConfig;
 use crate::network::{spawn_network_monitor, wait_for_route};
 use crate::telemetry::buffer::TelemetryBuffer;
@@ -65,10 +67,6 @@ pub struct Cli {
     #[arg(long)]
     pub data_dir: Option<String>,
 
-    /// Enrollment JWT (bypasses QR scanning for registration)
-    #[arg(long)]
-    pub enrollment_jwt: Option<String>,
-
     /// Disable TOFU server fingerprint verification
     #[arg(long)]
     pub no_tofu: bool,
@@ -85,65 +83,13 @@ async fn main() -> Result<()> {
     // Ensure data directory exists
     std::fs::create_dir_all(&camera_config.data_dir)?;
 
-    // Load or create device certificate
+    // Load or create device certificate (permanent identity)
     let cert_path = Path::new(&camera_config.data_dir).join("device.crt");
     let key_path = Path::new(&camera_config.data_dir).join("device.key");
     let (device_cert, device_key) = certs::load_or_create_device_cert(&cert_path, &key_path)?;
 
-    // Load user association cert (if enrolled)
-    let user_cert_path = Path::new(&camera_config.data_dir).join("user.crt");
-    let user_key_path = Path::new(&camera_config.data_dir).join("user.key");
-    let mut user_cert = certs::load_user_cert(&user_cert_path, &user_key_path)?;
-
     let fingerprint = ghostcam::pki::cert_fingerprint(&device_cert);
     tracing::info!(fingerprint = %fingerprint, "device identity loaded");
-
-    // Handle enrollment if not yet enrolled
-    if user_cert.is_none() {
-        if let Some(jwt) = &cli.enrollment_jwt {
-            tracing::info!("enrollment JWT provided via CLI");
-            match enrollment::parse_enrollment_jwt(jwt) {
-                Ok(enrollment_data) => {
-                    match enrollment::enroll(&enrollment_data, &device_cert, &device_key).await {
-                        Ok(result) => {
-                            enrollment::store_enrollment(
-                                Path::new(&camera_config.data_dir),
-                                &result,
-                                &enrollment_data.server_addr,
-                            )
-                            .await?;
-                            tracing::info!("enrollment complete");
-                            // Reload the user cert now that enrollment stored it
-                            user_cert = certs::load_user_cert(&user_cert_path, &user_key_path)?;
-                        }
-                        Err(e) => {
-                            tracing::error!("enrollment failed: {e}");
-                            return Err(e);
-                        }
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("invalid enrollment JWT: {e}");
-                    return Err(e);
-                }
-            }
-        } else {
-            // No JWT provided — try QR code scanning
-            tracing::info!("no enrollment found — entering QR scan mode");
-            match qr_enrollment::scan_and_enroll(&camera_config.data_dir, &device_cert, &device_key)
-                .await
-            {
-                Ok(()) => {
-                    tracing::info!("enrollment via QR complete");
-                    user_cert = certs::load_user_cert(&user_cert_path, &user_key_path)?;
-                }
-                Err(e) => {
-                    tracing::error!("QR enrollment failed: {e}");
-                    tracing::warn!("use --enrollment-jwt to enroll this camera manually");
-                }
-            }
-        }
-    }
 
     // Check for firmware updates before connecting to server (best-effort)
     firmware::check_for_update(
@@ -244,7 +190,6 @@ async fn main() -> Result<()> {
         &camera_config,
         &device_cert,
         &device_key,
-        user_cert.as_ref().map(|(c, _)| c.as_slice()),
         &telemetry_buffer,
         &fingerprint.0,
         video_rx,
@@ -266,7 +211,6 @@ async fn run_connection_loop(
     config: &CameraConfig,
     device_cert: &[u8],
     device_key: &[u8],
-    user_cert: Option<&[u8]>,
     telemetry_buffer: &TelemetryBuffer,
     device_fingerprint: &str,
     video_rx: mpsc::Receiver<CaptureMessage>,
@@ -286,7 +230,6 @@ async fn run_connection_loop(
         }
 
         // Wait for a default route before attempting to connect.
-        // After WiFi drops, cellular may take 10-30s to come up.
         wait_for_route().await;
 
         tracing::info!(addr = %config.server_addr, "connecting to server");
@@ -298,7 +241,6 @@ async fn run_connection_loop(
             config,
             device_cert,
             device_key,
-            user_cert,
             telemetry_buffer,
             device_fingerprint,
             &mut video_rx,
@@ -336,7 +278,6 @@ async fn try_connect_and_run(
     config: &CameraConfig,
     device_cert: &[u8],
     device_key: &[u8],
-    user_cert: Option<&[u8]>,
     telemetry_buffer: &TelemetryBuffer,
     device_fingerprint: &str,
     video_rx: &mut mpsc::Receiver<CaptureMessage>,
@@ -348,7 +289,6 @@ async fn try_connect_and_run(
     let endpoint = quic::build_client_endpoint(
         device_cert,
         device_key,
-        user_cert,
         config.no_tofu,
         std::path::Path::new(&config.data_dir),
     )?;
@@ -386,6 +326,12 @@ async fn try_connect_and_run(
             _ = cancel.cancelled() => break Ok(()),
             result = &mut sess_handle => {
                 break match result {
+                    Ok(Ok(Some(CommandSignal::DeviceStatus(DeviceStatusKind::Unclaimed)))) => {
+                        // Server says we're unclaimed — enter QR scan for claim token.
+                        // This shouldn't normally happen during streaming, but handle it.
+                        tracing::info!("device status: unclaimed — need to claim via QR");
+                        Err(anyhow::anyhow!("device unclaimed — reconnect after claiming"))
+                    }
                     Ok(Ok(_)) => Ok(()),
                     Ok(Err(e)) => Err(e),
                     Err(e) => Err(anyhow::anyhow!("session task panicked: {e}")),
@@ -397,8 +343,6 @@ async fn try_connect_and_run(
             }
             msg = video_rx.recv() => {
                 if let Some(m) = msg {
-                    // Race the channel send against a 5s timeout — dead QUIC
-                    // connections can cause channel backpressure for 30s+.
                     tokio::select! {
                         _ = vid_tx.send(m) => {}
                         _ = tokio::time::sleep(SEND_TIMEOUT) => {

@@ -30,7 +30,7 @@ async fn verify_ownership(
     device_id: &DeviceId,
 ) -> Result<(), StatusCode> {
     match state.db.get_camera(device_id).await {
-        Ok(Some(c)) if c.user_id == user.user_id => Ok(()),
+        Ok(Some(c)) if c.user_id.as_ref() == Some(&user.user_id) => Ok(()),
         Ok(Some(_)) | Ok(None) => Err(StatusCode::NOT_FOUND),
         Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR),
     }

@@ -9,7 +9,6 @@ use crate::tofu::TofuServerCertVerifier;
 /// Build a Quinn client endpoint with mTLS.
 ///
 /// - `device_cert_der` + `device_key_der`: always presented (device identity)
-/// - `user_cert_der`: presented if enrolled (user association cert)
 /// - `no_tofu`: if true, skip TOFU verification (insecure, for dev/testing)
 /// - `data_dir`: path to data directory (for reading/writing server fingerprint)
 ///
@@ -18,19 +17,10 @@ use crate::tofu::TofuServerCertVerifier;
 pub fn build_client_endpoint(
     device_cert_der: &[u8],
     device_key_der: &[u8],
-    user_cert_der: Option<&[u8]>,
     no_tofu: bool,
     data_dir: &Path,
 ) -> Result<quinn::Endpoint> {
-    let mut certs = Vec::new();
-
-    // Device cert is always first
-    certs.push(CertificateDer::from(device_cert_der.to_vec()));
-
-    // User association cert (if enrolled) goes second
-    if let Some(user_cert) = user_cert_der {
-        certs.push(CertificateDer::from(user_cert.to_vec()));
-    }
+    let certs = vec![CertificateDer::from(device_cert_der.to_vec())];
 
     let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(device_key_der.to_vec()));
 

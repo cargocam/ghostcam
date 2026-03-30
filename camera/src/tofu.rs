@@ -143,6 +143,7 @@ impl ServerCertVerifier for TofuServerCertVerifier {
 }
 
 /// Get the SHA-256 fingerprint of the server's TLS certificate.
+#[allow(dead_code)]
 pub fn get_peer_fingerprint(connection: &quinn::Connection) -> Result<String> {
     let peer_certs = connection
         .peer_identity()

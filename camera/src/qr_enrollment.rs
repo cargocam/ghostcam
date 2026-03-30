@@ -1,32 +1,50 @@
-//! QR code enrollment: scan for a QR code containing server URL + enrollment JWT,
-//! then complete the standard enrollment flow.
+//! QR code scanning for enrollment and WiFi setup.
+//!
+//! Two QR code types distinguished by payload fields:
+//! - WiFi QR: has `w` field → `{"w": "ssid", "p": "password"}`
+//! - Claim QR: has `t` field → `{"t": "claim_jwt"}`
+//! - Combined: `{"w": "ssid", "p": "password", "t": "claim_jwt"}` — configure WiFi AND claim
 //!
 //! On Linux with rpicam-still available, captures raw YUV420 frames and decodes QR codes
-//! from the Y (grayscale) plane. On other platforms (macOS), this module compiles but
-//! returns an error indicating QR scanning is unavailable.
+//! from the Y (grayscale) plane. On other platforms, returns an error.
 
 use anyhow::Result;
 
 #[cfg(target_os = "linux")]
-use std::path::Path;
-#[cfg(target_os = "linux")]
 use std::time::Duration;
 
-#[cfg(target_os = "linux")]
-use crate::enrollment;
-#[cfg(target_os = "linux")]
-use anyhow::Context;
 #[cfg(any(target_os = "linux", test))]
 use serde::Deserialize;
 
-/// QR code JSON payload.
+/// QR code JSON payload — all fields optional to support different QR types.
 #[cfg(any(target_os = "linux", test))]
 #[derive(Debug, Deserialize)]
-struct QrPayload {
-    /// Server HTTP base URL (e.g. "http://10.0.0.1:3000")
-    s: String,
-    /// Enrollment JWT
-    t: String,
+pub struct QrPayload {
+    /// WiFi SSID (presence indicates WiFi QR)
+    #[serde(default)]
+    pub w: Option<String>,
+    /// WiFi password
+    #[serde(default)]
+    pub p: Option<String>,
+    /// Claim JWT (presence indicates claim QR)
+    #[serde(default)]
+    pub t: Option<String>,
+    /// Server URL (legacy field, ignored in new flow — camera is already connected)
+    #[serde(default)]
+    pub s: Option<String>,
+}
+
+/// Result of scanning a QR code.
+#[derive(Debug)]
+#[allow(dead_code)]
+pub enum QrResult {
+    /// WiFi credentials were found and configured. Optionally also has a claim token.
+    Wifi {
+        ssid: String,
+        claim_token: Option<String>,
+    },
+    /// Claim token only (camera already has network).
+    ClaimToken(String),
 }
 
 /// Maximum time to scan for a QR code before giving up.
@@ -61,30 +79,27 @@ fn try_decode_qr(yuv_data: &[u8], width: u32, height: u32) -> Option<String> {
     None
 }
 
-/// Scan for a QR code and complete enrollment.
+/// Scan for a claim QR code and return the token.
 ///
 /// On Linux, uses `rpicam-still` to capture raw YUV420 frames. On other platforms,
 /// returns an error (QR scanning requires rpicam-still).
-pub async fn scan_and_enroll(data_dir: &str, device_cert: &[u8], device_key: &[u8]) -> Result<()> {
+#[allow(dead_code)]
+pub async fn scan_for_claim_token() -> Result<QrResult> {
     #[cfg(target_os = "linux")]
     {
-        scan_and_enroll_linux(data_dir, device_cert, device_key).await
+        scan_for_qr_linux().await
     }
 
     #[cfg(not(target_os = "linux"))]
     {
-        let _ = (data_dir, device_cert, device_key);
         anyhow::bail!("QR code scanning requires rpicam-still (Linux only)")
     }
 }
 
 /// Linux implementation: capture frames via rpicam-still and scan for QR codes.
 #[cfg(target_os = "linux")]
-async fn scan_and_enroll_linux(
-    data_dir: &str,
-    device_cert: &[u8],
-    device_key: &[u8],
-) -> Result<()> {
+async fn scan_for_qr_linux() -> Result<QrResult> {
+    use anyhow::Context;
     use tokio::io::AsyncReadExt;
     use tokio::process::Command;
 
@@ -101,7 +116,7 @@ async fn scan_and_enroll_linux(
     } else {
         anyhow::bail!(
             "neither rpicam-still nor libcamera-still found; \
-             install libcamera-apps or provide --enrollment-jwt"
+             cannot scan QR codes"
         );
     };
 
@@ -175,26 +190,49 @@ async fn scan_and_enroll_linux(
     };
 
     // Parse the QR payload
-    let qr: QrPayload = serde_json::from_str(&payload_str)
-        .context("invalid QR code payload (expected JSON with 's' and 't' fields)")?;
+    let qr: QrPayload =
+        serde_json::from_str(&payload_str).context("invalid QR code payload (expected JSON)")?;
 
-    if qr.s.is_empty() || qr.t.is_empty() {
-        anyhow::bail!("QR code payload has empty server URL or token");
+    // Handle WiFi QR
+    if let Some(ssid) = &qr.w {
+        let psk = qr.p.as_deref().unwrap_or("");
+        tracing::info!(ssid = %ssid, "WiFi QR detected — configuring network");
+        configure_wifi(ssid, psk).await?;
+        return Ok(QrResult::Wifi {
+            ssid: ssid.clone(),
+            claim_token: qr.t,
+        });
     }
 
-    tracing::info!(server = %qr.s, "QR enrollment payload decoded");
+    // Handle claim-only QR
+    if let Some(token) = qr.t {
+        if token.is_empty() {
+            anyhow::bail!("QR code has empty claim token");
+        }
+        return Ok(QrResult::ClaimToken(token));
+    }
 
-    // Parse the JWT to extract the server QUIC address
-    let enrollment_data = enrollment::parse_enrollment_jwt(&qr.t)?;
+    anyhow::bail!("QR code payload has neither WiFi ('w') nor claim token ('t') field");
+}
 
-    // Run the standard enrollment flow
-    let result = enrollment::enroll(&enrollment_data, device_cert, device_key).await?;
+/// Configure WiFi via nmcli.
+#[cfg(target_os = "linux")]
+async fn configure_wifi(ssid: &str, psk: &str) -> Result<()> {
+    use anyhow::Context;
 
-    // Store enrollment data
-    enrollment::store_enrollment(Path::new(data_dir), &result, &enrollment_data.server_addr)
-        .await?;
+    let status = tokio::process::Command::new("nmcli")
+        .args(["device", "wifi", "connect", ssid, "password", psk])
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .status()
+        .await
+        .context("failed to run nmcli")?;
 
-    tracing::info!("QR enrollment complete");
+    if !status.success() {
+        anyhow::bail!("nmcli failed to connect to WiFi network '{ssid}'");
+    }
+
+    tracing::info!(ssid = %ssid, "WiFi configured successfully");
     Ok(())
 }
 
@@ -216,33 +254,59 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_qr_payload() {
-        let json = r#"{"s":"http://10.0.0.1:3000","t":"eyJhbGciOiJFUzI1NiJ9.test.sig"}"#;
+    fn parse_claim_only_qr() {
+        let json = r#"{"t":"eyJhbGciOiJFUzI1NiJ9.test.sig"}"#;
         let qr: QrPayload = serde_json::from_str(json).unwrap();
-        assert_eq!(qr.s, "http://10.0.0.1:3000");
-        assert_eq!(qr.t, "eyJhbGciOiJFUzI1NiJ9.test.sig");
+        assert!(qr.w.is_none());
+        assert_eq!(qr.t.as_deref(), Some("eyJhbGciOiJFUzI1NiJ9.test.sig"));
     }
 
     #[test]
-    fn parse_qr_payload_missing_field() {
-        let json = r#"{"s":"http://10.0.0.1:3000"}"#;
-        let result: Result<QrPayload, _> = serde_json::from_str(json);
-        assert!(result.is_err());
+    fn parse_wifi_only_qr() {
+        let json = r#"{"w":"MyNetwork","p":"secret123"}"#;
+        let qr: QrPayload = serde_json::from_str(json).unwrap();
+        assert_eq!(qr.w.as_deref(), Some("MyNetwork"));
+        assert_eq!(qr.p.as_deref(), Some("secret123"));
+        assert!(qr.t.is_none());
+    }
+
+    #[test]
+    fn parse_combined_qr() {
+        let json = r#"{"w":"MyNetwork","p":"secret123","t":"eyJ.claim.jwt"}"#;
+        let qr: QrPayload = serde_json::from_str(json).unwrap();
+        assert_eq!(qr.w.as_deref(), Some("MyNetwork"));
+        assert_eq!(qr.t.as_deref(), Some("eyJ.claim.jwt"));
+    }
+
+    #[test]
+    fn parse_legacy_qr_with_server_url() {
+        // Legacy QR codes had an 's' field — should still parse
+        let json = r#"{"s":"http://10.0.0.1:3000","t":"eyJ.test.sig"}"#;
+        let qr: QrPayload = serde_json::from_str(json).unwrap();
+        assert_eq!(qr.s.as_deref(), Some("http://10.0.0.1:3000"));
+        assert_eq!(qr.t.as_deref(), Some("eyJ.test.sig"));
+    }
+
+    #[test]
+    fn parse_empty_payload_fails() {
+        // No w or t field — will parse but is useless
+        let json = r#"{}"#;
+        let qr: QrPayload = serde_json::from_str(json).unwrap();
+        assert!(qr.w.is_none());
+        assert!(qr.t.is_none());
     }
 
     #[test]
     fn try_decode_qr_short_buffer() {
-        // Buffer too small for a 640x480 Y plane
         let buf = vec![0u8; 100];
         assert!(try_decode_qr(&buf, 640, 480).is_none());
     }
 
     #[test]
     fn try_decode_qr_no_qr_in_noise() {
-        // Random-ish data, no QR code present
         let y_size = (FRAME_WIDTH * FRAME_HEIGHT) as usize;
         let frame_size = y_size * 3 / 2;
-        let buf = vec![128u8; frame_size]; // uniform gray
+        let buf = vec![128u8; frame_size];
         assert!(try_decode_qr(&buf, FRAME_WIDTH, FRAME_HEIGHT).is_none());
     }
 }

@@ -37,7 +37,7 @@ pub async fn create_session(
 
     // Verify camera belongs to user
     match state.db.get_camera(&device_id).await {
-        Ok(Some(c)) if c.user_id == user.user_id => {}
+        Ok(Some(c)) if c.user_id.as_ref() == Some(&user.user_id) => {}
         Ok(Some(_)) | Ok(None) => return StatusCode::NOT_FOUND.into_response(),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }

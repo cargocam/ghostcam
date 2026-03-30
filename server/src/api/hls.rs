@@ -100,7 +100,7 @@ pub async fn get_manifest(
     let device_id = DeviceId(device_id);
 
     match state.db.get_camera(&device_id).await {
-        Ok(Some(c)) if c.user_id == user.user_id => {}
+        Ok(Some(c)) if c.user_id.as_ref() == Some(&user.user_id) => {}
         _ => return StatusCode::NOT_FOUND.into_response(),
     }
 
@@ -140,7 +140,7 @@ pub async fn get_init(
     let device_id = DeviceId(device_id);
 
     match state.db.get_camera(&device_id).await {
-        Ok(Some(c)) if c.user_id == user.user_id => {}
+        Ok(Some(c)) if c.user_id.as_ref() == Some(&user.user_id) => {}
         _ => return StatusCode::NOT_FOUND.into_response(),
     }
 
@@ -206,7 +206,7 @@ pub async fn get_segment(
     let device_id = DeviceId(device_id);
 
     match state.db.get_camera(&device_id).await {
-        Ok(Some(c)) if c.user_id == user.user_id => {}
+        Ok(Some(c)) if c.user_id.as_ref() == Some(&user.user_id) => {}
         _ => return StatusCode::NOT_FOUND.into_response(),
     }
 
@@ -281,7 +281,7 @@ pub async fn get_coverage(
     let device_id = DeviceId(device_id);
 
     match state.db.get_camera(&device_id).await {
-        Ok(Some(c)) if c.user_id == user.user_id => {}
+        Ok(Some(c)) if c.user_id.as_ref() == Some(&user.user_id) => {}
         _ => return StatusCode::NOT_FOUND.into_response(),
     }
 

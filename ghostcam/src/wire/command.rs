@@ -1,9 +1,26 @@
 use serde::{Deserialize, Serialize};
 
+/// Device status as determined by the server after handshake.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceStatusKind {
+    /// Device is connected but has no owner — enter claim QR scan mode.
+    Unclaimed,
+    /// Device is claimed and active — proceed to streaming.
+    Active,
+    /// Device is suspended (e.g. billing issue) — idle.
+    Suspended,
+}
+
 /// Server → Camera command messages, sent on the command unidirectional QUIC stream.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Command {
+    /// Tells the camera its ownership/activation status.
+    DeviceStatus {
+        seq: u64,
+        status: DeviceStatusKind,
+    },
     StartVideo {
         seq: u64,
     },
@@ -100,7 +117,8 @@ impl Command {
     /// Extract the sequence number from any command variant.
     pub fn seq(&self) -> u64 {
         match self {
-            Command::StartVideo { seq }
+            Command::DeviceStatus { seq, .. }
+            | Command::StartVideo { seq }
             | Command::StopVideo { seq }
             | Command::StartAudio { seq }
             | Command::StopAudio { seq }
@@ -123,6 +141,18 @@ mod tests {
     #[test]
     fn command_all_variants_roundtrip() {
         let commands = vec![
+            Command::DeviceStatus {
+                seq: 0,
+                status: DeviceStatusKind::Unclaimed,
+            },
+            Command::DeviceStatus {
+                seq: 0,
+                status: DeviceStatusKind::Active,
+            },
+            Command::DeviceStatus {
+                seq: 0,
+                status: DeviceStatusKind::Suspended,
+            },
             Command::StartVideo { seq: 1 },
             Command::StopVideo { seq: 2 },
             Command::StartAudio { seq: 3 },

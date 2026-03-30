@@ -41,6 +41,10 @@ pub enum Alert {
     Csr {
         csr_pem: String,
     },
+    /// Camera sends a claim token (from QR scan) to the server to claim ownership.
+    ClaimToken {
+        token: String,
+    },
     StorageFull {
         free_bytes: u64,
     },
@@ -138,6 +142,7 @@ impl Alert {
             Alert::Ack { cmd, .. } => check_short("cmd", cmd),
             Alert::Enrollment { token } => check_short("token", token),
             Alert::Csr { csr_pem } => check_pem("csr_pem", csr_pem),
+            Alert::ClaimToken { token } => check_pem("claim_token", token),
             Alert::UpdateApplying { version } | Alert::UpdateSucceeded { version } => {
                 check_short("version", version)
             }
@@ -218,6 +223,9 @@ mod tests {
                 csr_pem:
                     "-----BEGIN CERTIFICATE REQUEST-----\ntest\n-----END CERTIFICATE REQUEST-----"
                         .into(),
+            },
+            Alert::ClaimToken {
+                token: "eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiJ9.claim.test".into(),
             },
             Alert::StorageFull { free_bytes: 0 },
             Alert::StorageResumed {
