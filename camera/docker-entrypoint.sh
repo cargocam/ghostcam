@@ -1,13 +1,9 @@
 #!/bin/sh
 # Docker entrypoint for camera containers.
 #
-# In the new enrollment flow, cameras connect with their device cert and are
-# auto-registered as unclaimed. For Docker dev, we auto-claim by:
-# 1. Starting the camera in the background (it connects and becomes unclaimed)
-# 2. Logging in as admin, creating a claim token
-# 3. The camera picks up the Active status on reconnect
-#
-# For production hardware, claiming happens via QR code in the web UI.
+# For Docker dev: auto-claims the camera by starting it, waiting for it to
+# register as unclaimed, then using the admin API to claim it.
+# For production hardware: claiming happens via QR code in the web UI.
 
 DATA_DIR="${GHOSTCAM_DATA_DIR:-/var/ghostcam}"
 SERVER_HTTP="${GHOSTCAM_SERVER_HTTP:-http://server:3000}"
@@ -23,46 +19,49 @@ until wget -qO- "$SERVER_HTTP/healthz" >/dev/null 2>&1; do
 done
 
 if [ "$AUTO_CLAIM" = "true" ] && [ -n "$ADMIN_PASSWORD" ]; then
-    # Auto-claim flow for Docker dev:
-    # Start camera, wait for it to register, then claim it via API.
-
-    # Start camera in background
+    # Start camera in background — it will connect and register as unclaimed
     ghostcam-camera "$@" &
     CAMERA_PID=$!
+    echo "[entrypoint] Camera started (PID $CAMERA_PID), waiting for registration..."
+    sleep 5
 
-    # Give the camera time to connect and register
-    sleep 3
-
-    # Login and capture session cookie
+    # Login
     COOKIE_JAR="$(mktemp)"
     wget -qO /dev/null --save-cookies "$COOKIE_JAR" --keep-session-cookies \
         --header "Content-Type: application/json" \
         --post-data "{\"email\":\"$ADMIN_EMAIL\",\"password\":\"$ADMIN_PASSWORD\"}" \
         "$SERVER_HTTP/api/v1/auth/login" 2>/dev/null
 
-    # Create enrollment/claim token
+    # Get unclaimed devices and find ours (by fingerprint from device cert)
+    DEVICE_FINGERPRINT=""
+    if [ -f "$DATA_DIR/device.crt" ]; then
+        # Extract fingerprint from device cert (SHA-256 of DER)
+        DEVICE_FINGERPRINT=$(openssl x509 -in "$DATA_DIR/device.crt" -outform DER 2>/dev/null | sha256sum | cut -d' ' -f1)
+    fi
+
+    # Create a claim token
     ENROLL_RESULT=$(wget -qO- --load-cookies "$COOKIE_JAR" \
         --header "Content-Type: application/json" \
         --post-data "{\"display_name\":\"$CAMERA_NAME\"}" \
         "$SERVER_HTTP/api/v1/cameras" 2>/dev/null)
 
+    JWT=$(echo "$ENROLL_RESULT" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
     rm -f "$COOKIE_JAR"
 
-    JWT=$(echo "$ENROLL_RESULT" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')
-
-    if [ -z "$JWT" ]; then
-        echo "[entrypoint] WARN: Failed to get claim token: $ENROLL_RESULT"
-        echo "[entrypoint] Camera will run unclaimed — claim via web UI."
+    if [ -n "$JWT" ]; then
+        # Write claim token to a file the camera can read
+        echo "$JWT" > "$DATA_DIR/claim_token"
+        echo "[entrypoint] Claim token written to $DATA_DIR/claim_token"
+        # Kill and restart camera so it picks up the token file
+        kill $CAMERA_PID 2>/dev/null
+        wait $CAMERA_PID 2>/dev/null
+        sleep 1
+        exec ghostcam-camera "$@"
     else
-        echo "[entrypoint] Claim token obtained. Camera will be claimed on next connect."
-        # The camera will pick this up when it reconnects and the server validates
-        # the token. For now, we just need to wait for the camera to reconnect.
+        echo "[entrypoint] WARN: Failed to get claim token: $ENROLL_RESULT"
+        echo "[entrypoint] Camera running unclaimed — claim via web UI"
+        wait $CAMERA_PID
     fi
-
-    # Wait for camera process
-    wait $CAMERA_PID
 else
-    # No auto-claim: camera connects as-is, must be claimed via QR or web UI
-    echo "[entrypoint] Starting camera (no auto-claim)..."
     exec ghostcam-camera "$@"
 fi

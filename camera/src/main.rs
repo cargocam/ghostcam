@@ -300,7 +300,7 @@ async fn try_connect_and_run(
     let session_cancel = cancel.child_token();
     let data_dir = std::path::PathBuf::from(&config.data_dir);
     let segment_dir = std::path::PathBuf::from(&config.segment_dir);
-    let sess = session::Session::establish(
+    let mut sess = session::Session::establish(
         connection,
         telemetry_buffer,
         session_cancel,
@@ -309,6 +309,9 @@ async fn try_connect_and_run(
         device_fingerprint.to_string(),
     )
     .await?;
+
+    // Wait for DeviceStatus — handle claim flow if unclaimed
+    sess.wait_for_active_status().await?;
 
     // Mark healthy for watchdog
     firmware::mark_healthy(std::path::Path::new(&config.data_dir)).await;
@@ -327,10 +330,9 @@ async fn try_connect_and_run(
             result = &mut sess_handle => {
                 break match result {
                     Ok(Ok(Some(CommandSignal::DeviceStatus(DeviceStatusKind::Unclaimed)))) => {
-                        // Server says we're unclaimed — enter QR scan for claim token.
-                        // This shouldn't normally happen during streaming, but handle it.
-                        tracing::info!("device status: unclaimed — need to claim via QR");
-                        Err(anyhow::anyhow!("device unclaimed — reconnect after claiming"))
+                        // Server revoked ownership mid-session — reconnect to re-enter claim flow
+                        tracing::warn!("device ownership revoked during session — reconnecting");
+                        Err(anyhow::anyhow!("device unclaimed mid-session"))
                     }
                     Ok(Ok(_)) => Ok(()),
                     Ok(Err(e)) => Err(e),

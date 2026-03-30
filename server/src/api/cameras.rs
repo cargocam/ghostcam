@@ -172,6 +172,9 @@ pub struct WifiCredential {
 }
 
 /// GET /api/v1/cameras/unclaimed
+///
+/// Returns all unclaimed devices. Any authenticated user can see and claim them.
+/// TODO: for multi-tenant, restrict visibility or require admin role.
 pub async fn list_unclaimed(
     State(state): State<Arc<AppState>>,
     Extension(_user): Extension<AuthUser>,

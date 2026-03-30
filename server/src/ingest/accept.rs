@@ -152,17 +152,6 @@ async fn handle_connection(
             fw_version,
             streams,
         } => (*protocol_version, fw_version.clone(), streams.clone()),
-        // Support legacy enrollment alerts for backward compatibility
-        Alert::Enrollment { token } => {
-            return handle_legacy_enrollment(
-                connection,
-                fingerprint,
-                token.clone(),
-                &ca,
-                db.as_ref(),
-            )
-            .await;
-        }
         other => {
             anyhow::bail!("expected handshake alert, got: {:?}", other);
         }
@@ -382,17 +371,4 @@ async fn wait_for_claim(
         .map_err(|e| anyhow::anyhow!("failed to send Active status: {e}"))?;
 
     Ok(user_id)
-}
-
-/// Handle legacy enrollment connections (cameras sending Enrollment alert as first message).
-/// This preserves backward compatibility with old camera firmware.
-async fn handle_legacy_enrollment(
-    connection: quinn::Connection,
-    fingerprint: ghostcam::types::CertFingerprint,
-    _token: String,
-    ca: &CaManager,
-    db: &dyn Database,
-) -> Result<()> {
-    tracing::info!(fingerprint = %fingerprint.0, "legacy enrollment connection");
-    super::enrollment::handle_enrollment(connection, fingerprint, ca, db).await
 }

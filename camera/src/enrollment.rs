@@ -8,7 +8,6 @@ use tokio::sync::Mutex;
 /// Send a ClaimToken alert to the server on the control stream.
 ///
 /// Called when the camera scans a claim QR code while in unclaimed mode.
-#[allow(dead_code)]
 pub async fn send_claim_token(alerts_tx: &Mutex<quinn::SendStream>, token: &str) -> Result<()> {
     let alert = Alert::ClaimToken {
         token: token.to_string(),

@@ -29,8 +29,9 @@ pub struct QrPayload {
     /// Claim JWT (presence indicates claim QR)
     #[serde(default)]
     pub t: Option<String>,
-    /// Server URL (legacy field, ignored in new flow — camera is already connected)
+    /// Server URL (legacy field, accepted for backward compat but unused)
     #[serde(default)]
+    #[allow(dead_code)]
     pub s: Option<String>,
 }
 

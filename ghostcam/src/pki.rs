@@ -1,9 +1,5 @@
 use crate::types::CertFingerprint;
-use rcgen::{
-    CertificateParams, CertificateSigningRequestParams, DnType, ExtendedKeyUsagePurpose, IsCa,
-    KeyPair, KeyUsagePurpose,
-};
-use rustls::pki_types::CertificateDer;
+use rcgen::{CertificateParams, DnType, ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -73,43 +69,6 @@ pub fn create_device_cert() -> Result<(Vec<u8>, KeyPair), PkiError> {
     .into();
     let cert = params.self_signed(&kp)?;
     Ok((cert.der().to_vec(), kp))
-}
-
-/// Create a Certificate Signing Request PEM from a key pair.
-pub fn create_csr(cn: &str, key_pair: &KeyPair) -> Result<String, PkiError> {
-    let mut params = CertificateParams::new(vec![])?;
-    params.distinguished_name.push(DnType::CommonName, cn);
-    let csr = params.serialize_request(key_pair)?;
-    Ok(csr.pem()?)
-}
-
-/// Sign a CSR with a CA, issuing a user association certificate.
-/// Subject CN = device_id. clientAuth usage. Returns signed cert PEM.
-pub fn sign_csr(
-    csr_pem: &str,
-    ca_cert_der: &[u8],
-    ca_key: &KeyPair,
-    device_id: &str,
-) -> Result<String, PkiError> {
-    let csr = CertificateSigningRequestParams::from_pem(csr_pem)?;
-    let mut params = csr.params;
-    params
-        .distinguished_name
-        .push(DnType::CommonName, device_id);
-    params.is_ca = IsCa::NoCa;
-    params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
-    params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
-    params.not_before = std::time::SystemTime::now().into();
-    params.not_after = (std::time::SystemTime::now()
-        + std::time::Duration::from_secs(100 * 365 * 24 * 3600))
-    .into();
-
-    // Reconstruct the CA cert from DER so we can use it as an issuer
-    let ca_cert_der_typed = CertificateDer::from(ca_cert_der.to_vec());
-    let ca_cert_params = CertificateParams::from_ca_cert_der(&ca_cert_der_typed)?;
-    let ca_cert = ca_cert_params.self_signed(ca_key)?;
-    let signed = params.signed_by(&csr.public_key, &ca_cert, ca_key)?;
-    Ok(signed.pem())
 }
 
 /// Compute SHA-256 fingerprint of DER-encoded certificate bytes.
@@ -182,22 +141,6 @@ mod tests {
     }
 
     #[test]
-    fn csr_roundtrip() {
-        let (kp, _) = generate_key_pair().unwrap();
-        let csr = create_csr("test-device", &kp).unwrap();
-        assert!(csr.contains("BEGIN CERTIFICATE REQUEST"));
-    }
-
-    #[test]
-    fn sign_csr_produces_cert() {
-        let (ca_cert, ca_kp) = create_self_signed_ca("Test CA", 20).unwrap();
-        let (device_kp, _) = generate_key_pair().unwrap();
-        let csr = create_csr("test-device", &device_kp).unwrap();
-        let signed = sign_csr(&csr, &ca_cert, &ca_kp, "cam-01").unwrap();
-        assert!(signed.contains("BEGIN CERTIFICATE"));
-    }
-
-    #[test]
     fn cert_fingerprint_deterministic() {
         let (cert, _) = create_device_cert().unwrap();
         let fp1 = cert_fingerprint(&cert);
@@ -255,12 +198,12 @@ mod tests {
 
     #[test]
     fn pem_to_der_roundtrip() {
-        let (ca_cert, ca_kp) = create_self_signed_ca("Test CA", 1).unwrap();
-        let (device_kp, _) = generate_key_pair().unwrap();
-        let csr = create_csr("dev-01", &device_kp).unwrap();
-        let cert_pem = sign_csr(&csr, &ca_cert, &ca_kp, "dev-01").unwrap();
+        let (ca_cert_der, _) = create_self_signed_ca("Test CA", 1).unwrap();
+        let pem_encoded = pem::Pem::new("CERTIFICATE", ca_cert_der.clone());
+        let cert_pem = pem::encode(&pem_encoded);
         let cert_der = pem_to_der(&cert_pem).unwrap();
+        assert_eq!(cert_der, ca_cert_der);
         let cn = extract_cn(&cert_der).unwrap();
-        assert_eq!(cn, "dev-01");
+        assert_eq!(cn, "Test CA");
     }
 }

@@ -1,8 +1,7 @@
 use crate::auth;
 use crate::db_trait::{
     ApiTokenRecord, AuditLogRecord, CameraRecord, CameraUpdate, Database, NewApiToken,
-    NewCameraRecord, NewEnrollmentToken, NewSession, SessionRecord, SubscriptionRecord, UserRecord,
-    UserUpdate,
+    NewEnrollmentToken, NewSession, SessionRecord, SubscriptionRecord, UserRecord, UserUpdate,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -175,32 +174,6 @@ impl Database for PostgresDatabase {
                 notes: r.get("notes"),
             })
             .collect())
-    }
-
-    async fn create_camera(&self, record: &NewCameraRecord) -> Result<CameraRecord> {
-        let device_id = uuid::Uuid::new_v4().to_string();
-        let now = now_unix() as i64;
-
-        sqlx::query(
-            "INSERT INTO cameras (device_id, user_id, cert_fingerprint, display_name, enrolled_at) VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind(&device_id)
-        .bind(record.user_id.as_ref().map(|u| &u.0))
-        .bind(&record.cert_fingerprint.0)
-        .bind(&record.display_name)
-        .bind(now)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(CameraRecord {
-            device_id: DeviceId(device_id),
-            user_id: record.user_id.clone(),
-            cert_fingerprint: record.cert_fingerprint.clone(),
-            display_name: record.display_name.clone(),
-            enrolled_at: now as u64,
-            last_seen_at: None,
-            notes: None,
-        })
     }
 
     async fn update_camera(&self, device_id: &DeviceId, update: &CameraUpdate) -> Result<()> {

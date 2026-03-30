@@ -15,14 +15,6 @@ pub struct CameraRecord {
     pub notes: Option<String>,
 }
 
-/// Fields for creating a new camera record.
-#[derive(Debug, Clone)]
-pub struct NewCameraRecord {
-    pub user_id: Option<UserId>,
-    pub cert_fingerprint: CertFingerprint,
-    pub display_name: String,
-}
-
 /// Fields for updating an existing camera record.
 #[derive(Debug, Clone, Default)]
 pub struct CameraUpdate {
@@ -136,7 +128,6 @@ pub trait Database: Send + Sync + 'static {
     ) -> Result<Option<CameraRecord>>;
     async fn get_camera(&self, device_id: &DeviceId) -> Result<Option<CameraRecord>>;
     async fn list_cameras(&self, user_id: &UserId) -> Result<Vec<CameraRecord>>;
-    async fn create_camera(&self, record: &NewCameraRecord) -> Result<CameraRecord>;
     async fn update_camera(&self, device_id: &DeviceId, update: &CameraUpdate) -> Result<()>;
     async fn delete_camera(&self, device_id: &DeviceId) -> Result<()>;
     async fn update_last_seen(&self, device_id: &DeviceId) -> Result<()>;
