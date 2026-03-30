@@ -3,7 +3,10 @@
 	import { Separator } from '$lib/components/ui/separator/index.js';
 	import { ScrollArea } from '$lib/components/ui/scroll-area/index.js';
 	import CameraList from '$lib/components/camera/CameraList.svelte';
+	import AddCameraDialog from '$lib/components/camera/AddCameraDialog.svelte';
 	import TelemetryPanel from '$lib/components/telemetry/TelemetryPanel.svelte';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { Plus } from 'lucide-svelte';
 	import { cn } from '$lib/utils.js';
 
 	let {
@@ -11,6 +14,8 @@
 	}: {
 		class?: string;
 	} = $props();
+
+	let addCameraOpen = $state(false);
 </script>
 
 <aside
@@ -22,16 +27,21 @@
 >
 	<!-- Camera list -->
 	<div class="flex-1 min-h-0">
-		<div class="px-4 py-3">
+		<div class="px-4 py-3 flex items-center justify-between">
 			<h2 class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
 				Cameras
 				<span class="ml-2 text-primary">{cameraStore.onlineCount}</span>
 			</h2>
+			<Button variant="ghost" size="icon" class="h-6 w-6" onclick={() => (addCameraOpen = true)}>
+				<Plus class="h-3.5 w-3.5" />
+			</Button>
 		</div>
 		<ScrollArea class="flex-1 px-2">
 			<CameraList />
 		</ScrollArea>
 	</div>
+
+	<AddCameraDialog bind:open={addCameraOpen} />
 
 	<Separator />
 

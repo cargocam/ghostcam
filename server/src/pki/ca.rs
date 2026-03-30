@@ -176,4 +176,15 @@ mod tests {
         let result = ca_b.verify_enrollment_jwt(&token);
         assert!(result.is_err());
     }
+
+    #[test]
+    fn claim_token_roundtrip() {
+        let (ca, _, _) = CaManager::generate_instance_ca().unwrap();
+        let claims = EnrollmentClaims::new_claim("10.0.0.1:4433", "user-42", 86400);
+        let token = ca.sign_enrollment_jwt(&claims).unwrap();
+        let decoded = ca.verify_enrollment_jwt(&token).unwrap();
+        assert_eq!(decoded.sub.as_deref(), Some("user-42"));
+        assert_eq!(decoded.server_addr, "10.0.0.1:4433");
+        assert!(decoded.iat > 0);
+    }
 }

@@ -196,10 +196,12 @@ Cameras connect with a self-signed device cert (no user cert needed). The server
 1. Camera connects with device cert only (self-signed, permanent identity)
 2. Server computes fingerprint, looks up in DB. If unknown, auto-registers as unclaimed.
 3. Server sends `DeviceStatus` command: `Unclaimed`, `Active`, or `Suspended`
-4. Unclaimed cameras enter QR scan mode. User shows a claim QR from the web UI (`GET /api/v1/cameras/enroll/qr`).
+4. Unclaimed cameras enter QR scan mode. User shows a claim QR from the web UI (`POST /api/v1/cameras/enroll/qr`).
 5. Camera scans QR, sends `ClaimToken` alert with the JWT. Server validates, assigns ownership.
 6. Server sends `DeviceStatus::Active`, camera starts streaming.
 7. On subsequent connects, the server recognizes the fingerprint as claimed and sends `Active` immediately.
+
+**Stateless claim tokens**: Claim JWTs embed the owner's `user_id` in the `sub` claim. The server verifies the signature and reads `sub` directly -- no database lookup of enrollment tokens needed. A single QR code can claim multiple cameras. The QR payload is `{"w": "ssid", "p": "password", "s": "host:port", "t": "<jwt>"}` with WiFi fields optional.
 
 **Ownership is server-side state** (`cameras.user_id`). No user certs, no CSR signing, no CA chain verification.
 
@@ -348,9 +350,10 @@ POST   /api/v1/auth/logout
 PATCH  /api/v1/auth/password
 
 GET    /api/v1/cameras                     List user's claimed cameras
-POST   /api/v1/cameras                     Generate claim JWT token
+POST   /api/v1/cameras                     Generate stateless claim JWT token
 GET    /api/v1/cameras/unclaimed           List unclaimed connected devices
-GET    /api/v1/cameras/enroll/qr           Claim QR code (SVG, auth required)
+POST   /api/v1/cameras/enroll/qr           Combined QR code (SVG) with claim token + optional WiFi
+GET    /api/v1/cameras/enroll/qr           Same as POST with defaults (24h TTL, no WiFi)
 GET    /api/v1/cameras/:id                 Camera + latest telemetry
 PATCH  /api/v1/cameras/:id                 Update name/group
 DELETE /api/v1/cameras/:id                 Revoke

@@ -61,7 +61,7 @@ pub async fn list(
 pub async fn enroll(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
-    Json(body): Json<EnrollRequest>,
+    Json(_body): Json<EnrollRequest>,
 ) -> Response {
     // Check camera limit (billing enforcement)
     match crate::billing::enforcement::check_camera_limit(
@@ -114,31 +114,14 @@ pub async fn enroll(
         }
     }
 
-    let claims = crate::pki::enrollment::EnrollmentClaims::new(
+    // Generate a stateless claim token with sub = user_id (no DB write needed)
+    let claims = crate::pki::enrollment::EnrollmentClaims::new_claim(
         &state.enrollment_addr,
-        body.display_name,
-        body.wifi.map(|w| {
-            w.into_iter()
-                .map(|c| crate::pki::enrollment::WifiCredential {
-                    ssid: c.ssid,
-                    psk: c.psk,
-                })
-                .collect()
-        }),
+        &user.user_id.0,
+        ghostcam::config::ENROLLMENT_TOKEN_TTL_SECS,
     );
     let expires_at = claims.exp;
     let jti = claims.jti.clone();
-
-    // Store enrollment token in DB
-    let token_record = crate::db_trait::NewEnrollmentToken {
-        jti: jti.clone(),
-        user_id: user.user_id.clone(),
-        expires_at,
-    };
-    if let Err(e) = state.db.create_enrollment_token(&token_record).await {
-        tracing::error!("failed to store enrollment token: {e}");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
 
     // Sign JWT
     let token = match state.ca.sign_enrollment_jwt(&claims) {
@@ -159,13 +142,18 @@ pub async fn enroll(
     Json(EnrollResponse { token, expires_at }).into_response()
 }
 
+/// Legacy request body for POST /api/v1/cameras.
+/// Fields are accepted for backward compat (Docker entrypoint) but no longer
+/// embedded in the JWT -- claim tokens are now stateless with just `sub`.
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct EnrollRequest {
     pub display_name: Option<String>,
     pub wifi: Option<Vec<WifiCredential>>,
 }
 
 #[derive(Deserialize, Serialize)]
+#[allow(dead_code)]
 pub struct WifiCredential {
     pub ssid: String,
     pub psk: String,

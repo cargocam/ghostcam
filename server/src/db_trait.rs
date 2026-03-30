@@ -22,7 +22,8 @@ pub struct CameraUpdate {
     pub notes: Option<String>,
 }
 
-/// Fields for creating an enrollment token.
+/// Fields for creating an enrollment token (legacy DB-backed flow).
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct NewEnrollmentToken {
     pub jti: String,
@@ -149,7 +150,8 @@ pub trait Database: Send + Sync + 'static {
     #[allow(dead_code)]
     async fn get_device_owner(&self, device_id: &DeviceId) -> Result<Option<UserId>>;
 
-    // --- Enrollment tokens ---
+    // --- Enrollment tokens (legacy DB-backed flow, kept for backward compat) ---
+    #[allow(dead_code)]
     async fn create_enrollment_token(&self, token: &NewEnrollmentToken) -> Result<()>;
     async fn claim_enrollment_token(&self, jti: &str, device_id: &DeviceId) -> Result<bool>;
     #[allow(dead_code)]

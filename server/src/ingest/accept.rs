@@ -286,7 +286,11 @@ async fn handle_connection(
 }
 
 /// Wait for a ClaimToken alert from an unclaimed camera.
-/// Validates the JWT, claims the device, and returns the owner's UserId.
+/// Validates the stateless JWT, claims the device, and returns the owner's UserId.
+///
+/// Claim tokens are stateless: the server verifies the JWT signature and reads
+/// the `sub` claim directly as user_id. No database lookup of enrollment tokens
+/// is needed. The token can be reused across multiple cameras.
 async fn wait_for_claim(
     alerts_stream: &mut quinn::RecvStream,
     commands_stream: &mut quinn::SendStream,
@@ -328,24 +332,30 @@ async fn wait_for_claim(
         }
     };
 
-    // Verify the claim JWT
+    // Verify the claim JWT (signature + expiry)
     let claims = ca
         .verify_enrollment_jwt(&token)
         .map_err(|e| anyhow::anyhow!("claim token verification failed: {e}"))?;
 
-    let jti = claims.jti.clone();
+    // Extract user_id from the stateless `sub` claim.
+    // Falls back to DB lookup for backward compatibility with old single-use tokens.
+    let user_id = if let Some(sub) = &claims.sub {
+        UserId(sub.clone())
+    } else {
+        // Legacy path: look up jti in enrollment_tokens table
+        let jti = &claims.jti;
+        let uid = db
+            .get_enrollment_token_user_id(jti)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("claim token has no sub claim and no DB record"))?;
 
-    // Look up the user who created this enrollment token
-    let user_id = db
-        .get_enrollment_token_user_id(&jti)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("claim token has no associated user or is expired"))?;
-
-    // Claim the enrollment token (mark it used)
-    let claimed = db.claim_enrollment_token(&jti, device_id).await?;
-    if !claimed {
-        anyhow::bail!("claim token already used");
-    }
+        // Mark legacy token as used
+        let claimed = db.claim_enrollment_token(jti, device_id).await?;
+        if !claimed {
+            anyhow::bail!("legacy claim token already used");
+        }
+        uid
+    };
 
     // Assign ownership
     db.claim_device(device_id, &user_id).await?;

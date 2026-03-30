@@ -29,9 +29,8 @@ pub struct QrPayload {
     /// Claim JWT (presence indicates claim QR)
     #[serde(default)]
     pub t: Option<String>,
-    /// Server URL (legacy field, accepted for backward compat but unused)
+    /// Server address (host:port for QUIC connection)
     #[serde(default)]
-    #[allow(dead_code)]
     pub s: Option<String>,
 }
 
@@ -39,13 +38,17 @@ pub struct QrPayload {
 #[derive(Debug)]
 #[allow(dead_code)]
 pub enum QrResult {
-    /// WiFi credentials were found and configured. Optionally also has a claim token.
+    /// WiFi credentials were found and configured. Optionally also has a claim token and server address.
     Wifi {
         ssid: String,
         claim_token: Option<String>,
+        server_addr: Option<String>,
     },
-    /// Claim token only (camera already has network).
-    ClaimToken(String),
+    /// Claim token only (camera already has network). Optionally has a server address.
+    ClaimToken {
+        token: String,
+        server_addr: Option<String>,
+    },
 }
 
 /// Maximum time to scan for a QR code before giving up.
@@ -202,6 +205,7 @@ async fn scan_for_qr_linux() -> Result<QrResult> {
         return Ok(QrResult::Wifi {
             ssid: ssid.clone(),
             claim_token: qr.t,
+            server_addr: qr.s,
         });
     }
 
@@ -210,7 +214,10 @@ async fn scan_for_qr_linux() -> Result<QrResult> {
         if token.is_empty() {
             anyhow::bail!("QR code has empty claim token");
         }
-        return Ok(QrResult::ClaimToken(token));
+        return Ok(QrResult::ClaimToken {
+            token,
+            server_addr: qr.s,
+        });
     }
 
     anyhow::bail!("QR code payload has neither WiFi ('w') nor claim token ('t') field");

@@ -180,8 +180,20 @@ impl Session {
             tracing::info!("scanning for claim QR code...");
             let qr_result = crate::qr_enrollment::scan_for_claim_token().await?;
             match qr_result {
-                crate::qr_enrollment::QrResult::ClaimToken(t) => Ok(t),
-                crate::qr_enrollment::QrResult::Wifi { claim_token, .. } => {
+                crate::qr_enrollment::QrResult::ClaimToken { token, server_addr } => {
+                    if let Some(addr) = server_addr {
+                        tracing::info!(server_addr = %addr, "QR code contains server address (will use on next connect)");
+                    }
+                    Ok(token)
+                }
+                crate::qr_enrollment::QrResult::Wifi {
+                    claim_token,
+                    server_addr,
+                    ..
+                } => {
+                    if let Some(addr) = server_addr {
+                        tracing::info!(server_addr = %addr, "QR code contains server address (will use on next connect)");
+                    }
                     claim_token.ok_or_else(|| {
                         anyhow::anyhow!("WiFi QR scanned but no claim token — reconnect to retry")
                     })

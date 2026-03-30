@@ -4,61 +4,55 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
+use axum::Json;
+use serde::Deserialize;
 
 use super::auth::AuthUser;
 use super::state::AppState;
 
-/// GET /api/v1/cameras/enroll/qr
+/// Default claim token TTL: 24 hours.
+const DEFAULT_TTL_HOURS: u64 = 24;
+/// Maximum allowed TTL: 7 days.
+const MAX_TTL_HOURS: u64 = 7 * 24;
+
+#[derive(Deserialize)]
+pub struct QrRequest {
+    /// WiFi SSID to embed in QR (optional).
+    pub wifi_ssid: Option<String>,
+    /// WiFi password to embed in QR (optional).
+    pub wifi_password: Option<String>,
+    /// Token time-to-live in hours (default 24, max 168).
+    pub ttl_hours: Option<u64>,
+}
+
+/// POST /api/v1/cameras/enroll/qr
 ///
-/// Generates an enrollment JWT, encodes it with the server URL into a QR code,
-/// and returns the QR code as an SVG image.
+/// Generates a stateless claim JWT with the user's ID embedded as `sub`,
+/// and returns a QR code SVG containing the token, server address, and
+/// optional WiFi credentials.
+///
+/// The token is multi-use: any number of unclaimed cameras can scan it.
+/// No database write is needed.
 pub async fn enrollment_qr(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
+    body: Option<Json<QrRequest>>,
 ) -> Response {
-    // Check camera limit before generating a token
-    match crate::billing::enforcement::check_camera_limit(
-        state.db.as_ref(),
-        &user.user_id,
-        &state.tiers,
-        state.stripe.is_some(),
-    )
-    .await
-    {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => {
-            return (
-                StatusCode::PAYMENT_REQUIRED,
-                serde_json::json!({ "error": e.to_string() }).to_string(),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            tracing::error!("camera limit check failed: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    }
+    let body = body.map(|Json(b)| b);
 
-    // Generate enrollment claims (same as POST /api/v1/cameras)
-    let claims = crate::pki::enrollment::EnrollmentClaims::new(
+    let ttl_hours = body
+        .as_ref()
+        .and_then(|b| b.ttl_hours)
+        .unwrap_or(DEFAULT_TTL_HOURS)
+        .clamp(1, MAX_TTL_HOURS);
+    let ttl_secs = ttl_hours * 3600;
+
+    // Generate stateless claim JWT with sub = user_id
+    let claims = crate::pki::enrollment::EnrollmentClaims::new_claim(
         &state.enrollment_addr,
-        None, // QR enrollment doesn't carry display_name
-        None, // or wifi credentials
+        &user.user_id.0,
+        ttl_secs,
     );
-
-    let jti = claims.jti.clone();
-    let expires_at = claims.exp;
-
-    // Store enrollment token in DB
-    let token_record = crate::db_trait::NewEnrollmentToken {
-        jti: jti.clone(),
-        user_id: user.user_id.clone(),
-        expires_at,
-    };
-    if let Err(e) = state.db.create_enrollment_token(&token_record).await {
-        tracing::error!("failed to store enrollment token: {e}");
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    }
 
     // Sign the JWT
     let jwt = match state.ca.sign_enrollment_jwt(&claims) {
@@ -69,11 +63,31 @@ pub async fn enrollment_qr(
         }
     };
 
-    // Build QR payload — just the claim token (camera is already connected to server)
-    let payload = serde_json::json!({
-        "t": jwt,
-    });
-    let payload_str = payload.to_string();
+    // Build QR payload
+    let mut payload = serde_json::Map::new();
+
+    // Add WiFi credentials if provided
+    if let Some(ref b) = body {
+        if let Some(ref ssid) = b.wifi_ssid {
+            if !ssid.is_empty() {
+                payload.insert("w".into(), serde_json::Value::String(ssid.clone()));
+                if let Some(ref psk) = b.wifi_password {
+                    payload.insert("p".into(), serde_json::Value::String(psk.clone()));
+                }
+            }
+        }
+    }
+
+    // Server address (includes port for non-standard deployments)
+    payload.insert(
+        "s".into(),
+        serde_json::Value::String(state.enrollment_addr.clone()),
+    );
+
+    // Claim token
+    payload.insert("t".into(), serde_json::Value::String(jwt));
+
+    let payload_str = serde_json::Value::Object(payload).to_string();
 
     // Generate QR code SVG
     let code = match qrcode::QrCode::new(payload_str.as_bytes()) {
@@ -92,7 +106,7 @@ pub async fn enrollment_qr(
     state
         .audit
         .log(crate::audit::AuditEvent::EnrollmentStarted {
-            device_id: jti,
+            device_id: format!("qr-claim-{}", &claims.jti[..8]),
             owner_id: user.user_id.0.clone(),
         });
 

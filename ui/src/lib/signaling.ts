@@ -138,6 +138,33 @@ export async function sendPrefetchHint(
 	}
 }
 
+// --- Enrollment QR ---
+
+export interface EnrollQrRequest {
+	wifi_ssid?: string;
+	wifi_password?: string;
+	ttl_hours?: number;
+}
+
+/**
+ * Generate a QR code SVG for camera enrollment.
+ * Returns the raw SVG string.
+ */
+export async function generateEnrollmentQr(opts?: EnrollQrRequest): Promise<string> {
+	const body = opts ? JSON.stringify(opts) : '{}';
+	const res = await fetch(`${API_BASE}/cameras/enroll/qr`, {
+		method: 'POST',
+		headers: headers(),
+		body,
+		credentials: 'include',
+	});
+	if (!res.ok) {
+		const text = await res.text();
+		throw new Error(`generateEnrollmentQr failed: ${res.status} ${text}`);
+	}
+	return res.text();
+}
+
 // --- Telemetry ---
 
 export async function fetchTelemetryRange(
