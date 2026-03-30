@@ -17,6 +17,7 @@ ghostcam/
 ├── server/          Server binary: QUIC ingest, WebRTC egress, HTTP API, Redis telemetry, PostgreSQL
 ├── ui/              Svelte 5 SPA: live WebRTC view, HLS playback, timeline scrubber, GPS map
 ├── pi/              Pi system files: systemd services, GPS, NetworkManager configs
+│   └── image/       rpi-image-gen build system: device configs, layer, files for flashable .img
 ├── scripts/         Developer tools: pi.sh (camera manager CLI)
 ├── Dockerfile       Multi-stage: server + camera targets
 ├── docker-compose.yml
@@ -97,6 +98,11 @@ The Pi camera connects to the Docker server via the host's LAN IP (`GHOSTCAM_PUB
 - **rust**: `cargo fmt`, `cargo clippy -D warnings`, `cargo test --workspace`
 - **ui**: `bun install --frozen-lockfile`, `bun run check`, `bun run build`
 - **docker**: builds both server and camera targets with BuildKit cache
+
+`.github/workflows/build-image.yml` — triggers on tags (`v*`):
+- **build-camera-deb**: cross-compiles camera binary for aarch64, packages as `.deb`
+- **build-pi-image**: builds flashable `.img` for zero2w, pi4, pi5 using `rpi-image-gen`
+- **release**: attaches `.img.xz` files to the GitHub Release
 
 ## Key Ports
 

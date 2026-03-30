@@ -1,0 +1,145 @@
+name: Build Pi Image
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build-camera-deb:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Install cross-compilation dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu libasound2-dev libopus-dev pkg-config
+
+      - name: Configure cross-compilation environment
+        run: |
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_SYSROOT_DIR=/" >> "$GITHUB_ENV"
+
+      - name: Build camera binary
+        run: cargo build --release --target aarch64-unknown-linux-gnu -p camera
+
+      - name: Extract version from tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Package as .deb
+        run: |
+          PKG_DIR="ghostcam-camera_${{ steps.version.outputs.version }}_arm64"
+          mkdir -p "$PKG_DIR/DEBIAN"
+          mkdir -p "$PKG_DIR/usr/local/bin"
+
+          cp target/aarch64-unknown-linux-gnu/release/camera "$PKG_DIR/usr/local/bin/ghostcam-camera"
+
+          cat > "$PKG_DIR/DEBIAN/control" << EOF
+          Package: ghostcam-camera
+          Version: ${{ steps.version.outputs.version }}
+          Architecture: arm64
+          Maintainer: Ghostcam <noreply@ghostcam.dev>
+          Depends: libasound2, libopus0, ca-certificates
+          Description: Ghostcam camera agent
+           Streams H.264 video and Opus audio from Raspberry Pi cameras
+           to the Ghostcam server over QUIC/mTLS.
+          EOF
+
+          # Remove leading whitespace from control file (heredoc indentation)
+          sed -i 's/^          //' "$PKG_DIR/DEBIAN/control"
+
+          dpkg-deb --build "$PKG_DIR"
+
+      - name: Upload .deb artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghostcam-camera-deb
+          path: ghostcam-camera_*.deb
+
+  build-pi-image:
+    needs: build-camera-deb
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        device: [zero2w, pi4, pi5]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rpi-image-gen dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            binfmt-support \
+            qemu-user-static \
+            kpartx \
+            fdisk \
+            dosfstools \
+            e2fsprogs \
+            debootstrap \
+            systemd-container \
+            xz-utils
+
+      - name: Clone rpi-image-gen
+        run: |
+          git clone --depth 1 https://github.com/raspberrypi/rpi-image-gen.git /tmp/rpi-image-gen
+
+      - name: Download camera .deb
+        uses: actions/download-artifact@v4
+        with:
+          name: ghostcam-camera-deb
+          path: pi/image/pkgs
+
+      - name: Build image for ${{ matrix.device }}
+        run: |
+          cd /tmp/rpi-image-gen
+
+          # Copy ghostcam layer and files into rpi-image-gen tree
+          cp -r "$GITHUB_WORKSPACE/pi/image/layer/ghostcam.yaml" layers/ghostcam.yaml
+          cp -r "$GITHUB_WORKSPACE/pi/image/files" layers/ghostcam-files
+          cp -r "$GITHUB_WORKSPACE/pi/image/pkgs" layers/ghostcam-pkgs
+
+          # Update layer to use correct paths relative to rpi-image-gen
+          sed -i 's|files/|layers/ghostcam-files/|g' layers/ghostcam.yaml
+          sed -i 's|pkgs/|layers/ghostcam-pkgs/|g' layers/ghostcam.yaml
+
+          sudo ./build.sh "$GITHUB_WORKSPACE/pi/image/config/ghostcam-${{ matrix.device }}.yaml"
+
+      - name: Compress image
+        run: |
+          IMG=$(find /tmp/rpi-image-gen/output -name '*.img' | head -1)
+          xz -9 -T0 "$IMG"
+          cp "${IMG}.xz" "ghostcam-${{ matrix.device }}-${{ github.ref_name }}.img.xz"
+
+      - name: Upload image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ghostcam-${{ matrix.device }}-image
+          path: ghostcam-${{ matrix.device }}-*.img.xz
+
+  release:
+    needs: [build-pi-image]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all image artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ghostcam-*-image
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: sha256sum ghostcam-*.img.xz > pi-image-checksums.txt
+
+      - name: Attach images to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ghostcam-*.img.xz
+            pi-image-checksums.txt
