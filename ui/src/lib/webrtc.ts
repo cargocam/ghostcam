@@ -59,6 +59,17 @@ export class CameraConnection {
 		this.pc.ontrack = (event) => {
 			const stream = event.streams[0] ?? new MediaStream([event.track]);
 
+			// Minimize playout delay for low-latency live streaming.
+			// playoutDelayHint tells the browser to reduce its jitter buffer.
+			const receiver = event.receiver;
+			if (receiver && 'playoutDelayHint' in receiver) {
+				(receiver as any).playoutDelayHint = 0;
+			}
+			// jitterBufferTarget (newer API) — set to 0 for minimum buffering.
+			if (receiver && 'jitterBufferTarget' in receiver) {
+				(receiver as any).jitterBufferTarget = 0;
+			}
+
 			if (event.track.kind === 'video') {
 				this.callbacks.onVideoTrack(stream);
 			} else if (event.track.kind === 'audio') {

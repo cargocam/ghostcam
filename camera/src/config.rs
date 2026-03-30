@@ -113,25 +113,25 @@ impl CameraConfig {
             .unwrap_or_else(|| format!("{data_dir}/segments"));
 
         // Video profile presets: applied between config file and individual env vars
-        let (profile_width, profile_height, profile_bitrate) =
+        let (profile_width, profile_height, profile_bitrate, profile_keyframe) =
             match env_opt("GHOSTCAM_VIDEO_PROFILE").as_deref() {
                 Some("zero2w" | "480p") => {
                     tracing::info!(profile = "zero2w/480p", "applying video profile");
-                    (Some(854u32), Some(480u32), Some(1_000_000u32))
+                    (Some(854u32), Some(480u32), Some(1_000_000u32), Some(30u32))
                 }
                 Some("pi4" | "720p") => {
                     tracing::info!(profile = "pi4/720p", "applying video profile");
-                    (Some(1280), Some(720), Some(2_000_000))
+                    (Some(1280), Some(720), Some(2_000_000), Some(30))
                 }
                 Some("pi5" | "1080p") => {
                     tracing::info!(profile = "pi5/1080p", "applying video profile");
-                    (Some(1920), Some(1080), Some(4_000_000))
+                    (Some(1920), Some(1080), Some(4_000_000), Some(30))
                 }
                 Some(other) => {
                     tracing::warn!(profile = other, "unknown video profile, ignoring");
-                    (None, None, None)
+                    (None, None, None, None)
                 }
-                None => (None, None, None),
+                None => (None, None, None, None),
             };
 
         let video_width = env_opt("GHOSTCAM_VIDEO_WIDTH")
@@ -159,8 +159,9 @@ impl CameraConfig {
 
         let video_keyframe_interval = env_opt("GHOSTCAM_VIDEO_KEYFRAME_INTERVAL")
             .and_then(|s| s.parse().ok())
+            .or(profile_keyframe)
             .or(file_conf.video_keyframe_interval)
-            .unwrap_or(60);
+            .unwrap_or(30);
 
         let config = CameraConfig {
             server_addr,

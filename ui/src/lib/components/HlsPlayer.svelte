@@ -73,7 +73,15 @@
 			};
 			const attachHls = (startPosition?: number) => {
 				if (disposed) return;
-				const instance = new Hls({ enableWorker: true, autoStartLoad: false });
+				const instance = new Hls({
+					enableWorker: true,
+					autoStartLoad: false,
+					// Segments are fetched on-demand from the camera via the server.
+					// Over the internet this can take 15-30s, so increase timeouts.
+					fragLoadingTimeOut: 30000,
+					fragLoadingMaxRetry: 3,
+					fragLoadingRetryDelay: 2000,
+				});
 				hls = instance;
 				instance.loadSource(src);
 				instance.attachMedia(mediaEl);
