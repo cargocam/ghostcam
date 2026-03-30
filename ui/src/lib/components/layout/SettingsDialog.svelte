@@ -175,7 +175,7 @@
 				<DialogDescription>Select a plan to upgrade your account.</DialogDescription>
 			</DialogHeader>
 			<div class="mt-2">
-				{@html `<stripe-pricing-table pricing-table-id="${billingStore.stripePricingTableId}" publishable-key="${billingStore.stripePublicKey}"></stripe-pricing-table>`}
+				{@html `<stripe-pricing-table pricing-table-id="${billingStore.stripePricingTableId}" publishable-key="${billingStore.stripePublicKey}" theme="night"></stripe-pricing-table>`}
 			</div>
 		</DialogContent>
 	</Dialog>
