@@ -51,7 +51,8 @@ Axum HTTP router. Authentication is enforced via middleware on all protected rou
 |--------|------|---------|-------------|
 | `GET` | `/hls/:id/init.mp4` | `hls::get_init` | fMP4 init segment from camera ring buffer |
 | `GET` | `/hls/:id/playlist.m3u8` | `hls::get_manifest` | HLS manifest |
-| `GET` | `/hls/:id/:segment_id` | `hls::get_segment` | fMP4 media segment (memory or disk) |
+| `POST` | `/hls/:id/prefetch` | `hls::prefetch` | Pre-fetch hint: `{ from_ms, to_ms }` → 202 |
+| `GET` | `/hls/:id/:segment_id` | `hls::get_segment` | fMP4 media segment (on-demand from camera, 60s timeout) |
 
 ### SSE
 

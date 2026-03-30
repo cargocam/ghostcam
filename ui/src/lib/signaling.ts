@@ -118,6 +118,26 @@ export async function createPortal(returnUrl: string): Promise<{ url: string }> 
 	return res.json();
 }
 
+// --- HLS Prefetch ---
+
+/** Hint the server to pre-fetch segments covering a time range (best-effort, fire-and-forget). */
+export async function sendPrefetchHint(
+	deviceId: string,
+	fromMs: number,
+	toMs: number,
+): Promise<void> {
+	try {
+		await fetch(`/hls/${encodeURIComponent(deviceId)}/prefetch`, {
+			method: 'POST',
+			headers: headers(),
+			body: JSON.stringify({ from_ms: Math.floor(fromMs), to_ms: Math.floor(toMs) }),
+			credentials: 'include',
+		});
+	} catch {
+		// Best-effort — silently ignore failures
+	}
+}
+
 // --- Telemetry ---
 
 export async function fetchTelemetryRange(

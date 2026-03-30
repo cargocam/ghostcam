@@ -9,6 +9,7 @@
 		class: className = '',
 		onManifestParsed = undefined,
 		onError = undefined,
+		onTimeUpdate = undefined,
 	}: {
 		src: string;
 		seekTime?: number;
@@ -16,10 +17,13 @@
 		class?: string;
 		onManifestParsed?: (details: { startTime: number; endTime: number }) => void;
 		onError?: (error: string) => void;
+		/** Called with the current epoch time as video plays. */
+		onTimeUpdate?: (epochTime: number) => void;
 	} = $props();
 
 	let videoEl = $state<HTMLVideoElement | undefined>(undefined);
 	let hls: Hls | null = null;
+	let loading = $state<boolean>(false);
 	let manifestEpochStart = $state<number | null>(null);
 	let manifestEpochEnd = $state<number | null>(null);
 	let lastForcedSeekTo = $state<number | null>(null);
@@ -77,8 +81,8 @@
 					enableWorker: true,
 					autoStartLoad: false,
 					// Segments are fetched on-demand from the camera via the server.
-					// Over the internet this can take 15-30s, so increase timeouts.
-					fragLoadingTimeOut: 30000,
+					// Over the internet this can take 15-60s, so increase timeouts.
+					fragLoadingTimeOut: 60000,
 					fragLoadingMaxRetry: 3,
 					fragLoadingRetryDelay: 2000,
 				});
@@ -95,6 +99,12 @@
 				});
 				instance.on(Hls.Events.LEVEL_LOADED, (_event, data) => {
 					updateManifestWindow(data?.details);
+				});
+				instance.on(Hls.Events.FRAG_LOADING, () => {
+					loading = true;
+				});
+				instance.on(Hls.Events.FRAG_LOADED, () => {
+					loading = false;
 				});
 				instance.on(Hls.Events.ERROR, (_event, data) => {
 					const errMsg = data.error instanceof Error ? data.error.message : String(data.error ?? '');
@@ -155,6 +165,7 @@
 			manifestEpochStart = null;
 			manifestEpochEnd = null;
 			lastForcedSeekTo = null;
+			loading = false;
 		};
 	});
 
@@ -189,10 +200,22 @@
 	});
 </script>
 
-<video
-	bind:this={videoEl}
-	autoplay
-	playsinline
-	{muted}
-	class={cn('w-full h-full object-cover', className)}
-></video>
+<div class="relative w-full h-full">
+	<video
+		bind:this={videoEl}
+		autoplay
+		playsinline
+		{muted}
+		class={cn('w-full h-full object-cover', className)}
+		ontimeupdate={() => {
+			if (videoEl && onTimeUpdate && manifestEpochStart != null) {
+				onTimeUpdate(manifestEpochStart + videoEl.currentTime);
+			}
+		}}
+	></video>
+	{#if loading}
+		<div class="absolute inset-0 grid place-items-center pointer-events-none">
+			<div class="h-8 w-8 rounded-full border-2 border-white/30 border-t-white/90 animate-spin"></div>
+		</div>
+	{/if}
+</div>

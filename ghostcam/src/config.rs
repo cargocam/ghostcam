@@ -31,7 +31,7 @@ pub const TELEMETRY_HEARTBEAT_INTERVAL_SECS: u64 = 30;
 pub const TELEMETRY_BUFFER_CAP: usize = 100_000;
 
 /// fMP4 segment duration.
-pub const SEGMENT_DURATION_SECS: u64 = 10;
+pub const SEGMENT_DURATION_SECS: u64 = 5;
 
 /// Segment coalescing buffer TTL.
 pub const SEGMENT_BUFFER_TTL_SECS: u64 = 60;

@@ -1,5 +1,13 @@
+import { sendPrefetchHint } from '$lib/signaling.js';
+import { cameraStore } from '$lib/stores/cameras.svelte.js';
+
 type ScrubberMode = 'live' | 'playback';
 type ModeChangeCallback = (mode: ScrubberMode, playheadTime: number) => void;
+
+/** Prefetch window: request segments covering 30s ahead of the scrub position. */
+const PREFETCH_WINDOW_MS = 30_000;
+/** Debounce delay for prefetch hints (ms). */
+const PREFETCH_DEBOUNCE_MS = 500;
 
 class ScrubberStore {
 	mode = $state<ScrubberMode>('live');
@@ -9,8 +17,8 @@ class ScrubberStore {
 	cameraCoverage = $state<Map<string, { start: number; end: number }[]>>(new Map());
 
 	private animationFrame: number | null = null;
-	private lastFrameTime: number | null = null;
 	private modeChangeCallbacks: ModeChangeCallback[] = [];
+	private prefetchTimer: ReturnType<typeof setTimeout> | null = null;
 
 	/** Register a callback for mode changes (live↔playback). */
 	onModeChange(cb: ModeChangeCallback) {
@@ -40,16 +48,40 @@ class ScrubberStore {
 		this.playheadTime = time;
 		this.playing = true;
 		this.stopTick();
-		this.startPlaybackTick();
+		// Don't start playback tick — HLS player drives the playhead via reportPlaybackTime()
 		if (wasLive) {
 			this.notifyModeChange();
 		}
+		this.debouncePrefetch(time);
+	}
+
+	/** Send a debounced prefetch hint for all online cameras at the given time. */
+	private debouncePrefetch(timeSec: number) {
+		if (this.prefetchTimer != null) {
+			clearTimeout(this.prefetchTimer);
+		}
+		this.prefetchTimer = setTimeout(() => {
+			this.prefetchTimer = null;
+			const fromMs = timeSec * 1000;
+			const toMs = fromMs + PREFETCH_WINDOW_MS;
+			for (const cam of cameraStore.cameras) {
+				if (cam.online) {
+					sendPrefetchHint(cam.device_id, fromMs, toMs);
+				}
+			}
+		}, PREFETCH_DEBOUNCE_MS);
+	}
+
+	/** Called by the HLS player to report actual playback position.
+	 *  This drives the timeline in playback mode instead of wall-clock time. */
+	reportPlaybackTime(epochTime: number) {
+		if (this.mode !== 'playback') return;
+		this.playheadTime = epochTime;
 	}
 
 	play() {
 		if (this.mode !== 'playback') return;
 		this.playing = true;
-		this.startPlaybackTick();
 	}
 
 	pause() {
@@ -105,32 +137,11 @@ class ScrubberStore {
 		this.animationFrame = requestAnimationFrame(tick);
 	}
 
-	private startPlaybackTick() {
-		this.stopTick();
-		this.lastFrameTime = performance.now();
-		const tick = () => {
-			if (this.mode !== 'playback' || !this.playing) return;
-			const now = performance.now();
-			const delta = (now - (this.lastFrameTime ?? now)) / 1000;
-			this.lastFrameTime = now;
-			this.playheadTime += delta;
-			if (this.availableWindow && this.playheadTime > this.availableWindow.end) {
-				this.playheadTime = this.availableWindow.end;
-				this.playing = false;
-				this.stopTick();
-				return;
-			}
-			this.animationFrame = requestAnimationFrame(tick);
-		};
-		this.animationFrame = requestAnimationFrame(tick);
-	}
-
 	private stopTick() {
 		if (this.animationFrame != null) {
 			cancelAnimationFrame(this.animationFrame);
 			this.animationFrame = null;
 		}
-		this.lastFrameTime = null;
 	}
 }
 

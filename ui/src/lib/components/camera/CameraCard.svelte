@@ -145,6 +145,9 @@
 					hlsLastError = err;
 					console.warn(`HLS error for ${deviceId}:`, err);
 				}}
+				onTimeUpdate={(epochTime) => {
+					scrubberStore.reportPlaybackTime(epochTime);
+				}}
 			/>
 		</div>
 	{/if}

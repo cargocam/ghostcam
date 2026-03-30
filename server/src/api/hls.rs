@@ -3,17 +3,20 @@ use std::sync::Arc;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::Extension;
+use axum::{Extension, Json};
 use bytes::Bytes;
 use ghostcam::types::DeviceId;
 use ghostcam::wire::command::Command;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 use tokio::time::{timeout, Duration};
 
 use super::auth::AuthUser;
 use super::state::AppState;
 use crate::ingest::slot::SegmentState;
+
+/// Number of segments to pre-fetch ahead when a segment is requested on-demand.
+const PREFETCH_LOOKAHEAD: usize = 3;
 
 pub(crate) fn normalize_manifest_for_browser(manifest: &str) -> String {
     manifest
@@ -248,9 +251,13 @@ pub async fn get_segment(
                 segment_id: segment_id.clone(),
             })
             .await;
+
+        // Parallel pre-fetch: request the next N segments from the manifest so they
+        // are already uploading by the time HLS.js asks for them.
+        prefetch_next_segments(&slot, &segment_id).await;
     }
 
-    match timeout(Duration::from_secs(30), rx).await {
+    match timeout(Duration::from_secs(60), rx).await {
         Ok(Ok(Ok(data))) => segment_response(data),
         Ok(Ok(Err(e))) => {
             tracing::warn!(device_id = %device_id, segment_id, "segment upload failed: {e}");
@@ -268,6 +275,131 @@ fn segment_response(data: Bytes) -> Response {
         .header("cache-control", "private, max-age=3600")
         .body(axum::body::Body::from(data))
         .expect("segment response")
+}
+
+/// Fire-and-forget: request upload of the next N segments after `current_segment_id`
+/// from the manifest. This creates `Uploading` state entries so the actual get_segment
+/// handler will coalesce onto the already-in-progress upload.
+async fn prefetch_next_segments(
+    slot: &Arc<crate::ingest::slot::IngestSlot>,
+    current_segment_id: &str,
+) {
+    let manifest = slot.manifest_normalized.read().await.clone();
+    let manifest = match manifest {
+        Some(m) => m,
+        None => return,
+    };
+
+    let all_segments = parse_manifest_segments(&manifest);
+    let pos = all_segments.iter().position(|s| s.id == current_segment_id);
+    let pos = match pos {
+        Some(p) => p,
+        None => return,
+    };
+
+    let lookahead =
+        &all_segments[pos + 1..std::cmp::min(pos + 1 + PREFETCH_LOOKAHEAD, all_segments.len())];
+
+    // Collect IDs to prefetch under the lock, then drop it before sending commands.
+    let to_prefetch = {
+        let mut segments = slot.segments.write().await;
+        let mut ids = Vec::new();
+        for seg in lookahead {
+            if !segments.contains_key(&seg.id) {
+                segments.insert(seg.id.clone(), SegmentState::Uploading { waiters: vec![] });
+                ids.push(seg.id.clone());
+            }
+        }
+        ids
+    };
+
+    for id in to_prefetch {
+        let _ = slot
+            .send_command(Command::UploadSegment {
+                seq: slot.next_seq(),
+                segment_id: id,
+            })
+            .await;
+    }
+}
+
+#[derive(Deserialize)]
+pub struct PrefetchRequest {
+    pub from_ms: u64,
+    pub to_ms: u64,
+}
+
+/// POST /hls/:device_id/prefetch
+/// Hint endpoint: tells the server to pre-fetch segments covering a time range.
+/// Returns 202 immediately — does not wait for uploads to complete.
+pub async fn prefetch(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(device_id): Path<String>,
+    Json(body): Json<PrefetchRequest>,
+) -> Response {
+    let device_id = DeviceId(device_id);
+
+    match state.db.get_camera(&device_id).await {
+        Ok(Some(c)) if c.user_id.as_ref() == Some(&user.user_id) => {}
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    }
+
+    let slot = match state.registry.get_slot(&device_id).await {
+        Some(s) => s,
+        None => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    };
+
+    // Read manifest and find segments overlapping the requested time range
+    let manifest = slot.manifest_normalized.read().await.clone();
+    let manifest = match manifest {
+        Some(m) => m,
+        None => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    let all_segments = parse_manifest_segments(&manifest);
+    let matching_ids: Vec<String> = all_segments
+        .iter()
+        .filter(|s| s.start_ms < body.to_ms && s.end_ms > body.from_ms)
+        .map(|s| s.id.clone())
+        .collect();
+
+    if matching_ids.is_empty() {
+        return StatusCode::ACCEPTED.into_response();
+    }
+
+    // Collect IDs under the lock, then drop it before sending commands.
+    let to_prefetch = {
+        let mut segments = slot.segments.write().await;
+        let mut ids = Vec::new();
+        for id in &matching_ids {
+            if !segments.contains_key(id) {
+                segments.insert(id.clone(), SegmentState::Uploading { waiters: vec![] });
+                ids.push(id.clone());
+            }
+        }
+        ids
+    };
+
+    for id in &to_prefetch {
+        let _ = slot
+            .send_command(Command::UploadSegment {
+                seq: slot.next_seq(),
+                segment_id: id.clone(),
+            })
+            .await;
+    }
+
+    tracing::debug!(
+        device_id = %device_id,
+        from_ms = body.from_ms,
+        to_ms = body.to_ms,
+        total = matching_ids.len(),
+        requested = to_prefetch.len(),
+        "prefetch hint processed"
+    );
+
+    StatusCode::ACCEPTED.into_response()
 }
 
 /// GET /hls/:device_id/coverage
