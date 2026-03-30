@@ -167,7 +167,7 @@ pub async fn run_real_video(
 /// boundaries. It searches for Annex B start codes (0x00 0x00 0x01 or
 /// 0x00 0x00 0x00 0x01) to delimit NAL units.
 fn read_and_parse_nals<R: Read>(mut reader: R, tx: CaptureSender, cancel: CancellationToken) {
-    let mut buf = vec![0u8; 32768]; // 32KB read buffer
+    let mut buf = vec![0u8; 16384]; // 16KB read buffer
     let mut accum = Vec::with_capacity(65536); // accumulates data between start codes
     let mut found_first_start_code = false;
     let mut total_nals = 0u64;

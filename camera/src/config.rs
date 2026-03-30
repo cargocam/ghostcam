@@ -112,13 +112,37 @@ impl CameraConfig {
             .or(file_conf.segment_dir)
             .unwrap_or_else(|| format!("{data_dir}/segments"));
 
+        // Video profile presets: applied between config file and individual env vars
+        let (profile_width, profile_height, profile_bitrate) =
+            match env_opt("GHOSTCAM_VIDEO_PROFILE").as_deref() {
+                Some("zero2w" | "480p") => {
+                    tracing::info!(profile = "zero2w/480p", "applying video profile");
+                    (Some(854u32), Some(480u32), Some(1_000_000u32))
+                }
+                Some("pi4" | "720p") => {
+                    tracing::info!(profile = "pi4/720p", "applying video profile");
+                    (Some(1280), Some(720), Some(2_000_000))
+                }
+                Some("pi5" | "1080p") => {
+                    tracing::info!(profile = "pi5/1080p", "applying video profile");
+                    (Some(1920), Some(1080), Some(4_000_000))
+                }
+                Some(other) => {
+                    tracing::warn!(profile = other, "unknown video profile, ignoring");
+                    (None, None, None)
+                }
+                None => (None, None, None),
+            };
+
         let video_width = env_opt("GHOSTCAM_VIDEO_WIDTH")
             .and_then(|s| s.parse().ok())
+            .or(profile_width)
             .or(file_conf.video_width)
             .unwrap_or(1280);
 
         let video_height = env_opt("GHOSTCAM_VIDEO_HEIGHT")
             .and_then(|s| s.parse().ok())
+            .or(profile_height)
             .or(file_conf.video_height)
             .unwrap_or(720);
 
@@ -129,6 +153,7 @@ impl CameraConfig {
 
         let video_bitrate = env_opt("GHOSTCAM_VIDEO_BITRATE")
             .and_then(|s| s.parse().ok())
+            .or(profile_bitrate)
             .or(file_conf.video_bitrate)
             .unwrap_or(2_000_000);
 

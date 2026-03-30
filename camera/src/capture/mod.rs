@@ -27,7 +27,7 @@ pub async fn start_capture(
     config: &CameraConfig,
     cancel: CancellationToken,
 ) -> anyhow::Result<CaptureReceiver> {
-    let (tx, rx) = mpsc::channel(256);
+    let (tx, rx) = mpsc::channel(64);
 
     if config.test_source {
         // Test video source

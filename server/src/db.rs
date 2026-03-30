@@ -490,6 +490,10 @@ impl Database for PostgresDatabase {
             .execute(&self.pool)
             .await
             .context("failed to run migration 004")?;
+        sqlx::raw_sql(include_str!("../migrations/005_fk_cascade.sql"))
+            .execute(&self.pool)
+            .await
+            .context("failed to run migration 005")?;
         Ok(())
     }
 

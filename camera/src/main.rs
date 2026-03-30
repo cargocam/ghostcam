@@ -162,8 +162,8 @@ async fn main() -> Result<()> {
     let capture_rx = capture::start_capture(&camera_config, cancel.clone()).await?;
 
     // Fan out capture messages to video and audio channels
-    let (video_tx, video_rx) = mpsc::channel::<CaptureMessage>(256);
-    let (audio_tx, audio_rx) = mpsc::channel::<CaptureMessage>(256);
+    let (video_tx, video_rx) = mpsc::channel::<CaptureMessage>(32);
+    let (audio_tx, audio_rx) = mpsc::channel::<CaptureMessage>(64);
     let fanout_cancel = cancel.clone();
     tokio::spawn(fanout_capture(
         capture_rx,
@@ -207,6 +207,31 @@ async fn main() -> Result<()> {
             }
         }
     });
+
+    // Periodic RSS memory logging (Linux only, every 60s)
+    #[cfg(target_os = "linux")]
+    {
+        let mem_cancel = cancel.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(60));
+            interval.tick().await; // skip first immediate tick
+            loop {
+                tokio::select! {
+                    _ = mem_cancel.cancelled() => break,
+                    _ = interval.tick() => {
+                        if let Ok(statm) = tokio::fs::read_to_string("/proc/self/statm").await {
+                            // Fields: size resident shared text lib data dt (in pages)
+                            let fields: Vec<&str> = statm.split_whitespace().collect();
+                            if let Some(rss_pages) = fields.get(1).and_then(|s| s.parse::<u64>().ok()) {
+                                let rss_mb = (rss_pages * 4096) / (1024 * 1024);
+                                tracing::info!(rss_mb, "memory usage");
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
 
     // Shutdown signal handler
     tokio::spawn(shutdown_signal(cancel.clone()));
@@ -349,8 +374,8 @@ async fn try_connect_and_run(
     firmware::mark_healthy(std::path::Path::new(&config.data_dir)).await;
 
     // Bridge the persistent capture channels into per-session channels.
-    let (vid_tx, vid_rx) = mpsc::channel(256);
-    let (aud_tx, aud_rx) = mpsc::channel(256);
+    let (vid_tx, vid_rx) = mpsc::channel(32);
+    let (aud_tx, aud_rx) = mpsc::channel(64);
 
     let mut sess_handle = tokio::spawn(async move { sess.run(vid_rx, aud_rx).await });
 

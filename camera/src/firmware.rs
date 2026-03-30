@@ -25,10 +25,14 @@ pub async fn check_for_update(server_addr: &str, data_dir: &Path) {
         .rsplit_once(':')
         .map(|(host, _)| host)
         .unwrap_or(server_addr);
-    let enrolled_url = format!(
-        "http://{http_host}:{}/api/v1/firmware/latest",
-        ghostcam::config::HTTP_PORT
-    );
+    let enrolled_url = if http_host.parse::<std::net::IpAddr>().is_ok() {
+        format!(
+            "http://{http_host}:{}/api/v1/firmware/latest",
+            ghostcam::config::HTTP_PORT
+        )
+    } else {
+        format!("https://{http_host}/api/v1/firmware/latest")
+    };
     match fetch_firmware_metadata(&enrolled_url).await {
         Ok(resp) => {
             if try_update_from_response(&resp, current_version, data_dir).await {

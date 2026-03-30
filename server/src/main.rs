@@ -200,6 +200,33 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // --- Hourly cleanup of expired tokens and sessions ---
+    {
+        let cleanup_db = db.clone();
+        let cleanup_cancel = cancel.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            interval.tick().await; // skip first immediate tick
+            loop {
+                tokio::select! {
+                    _ = cleanup_cancel.cancelled() => break,
+                    _ = interval.tick() => {
+                        match cleanup_db.cleanup_expired_tokens().await {
+                            Ok(n) if n > 0 => tracing::info!(count = n, "cleaned up expired enrollment tokens"),
+                            Err(e) => tracing::warn!("token cleanup failed: {e}"),
+                            _ => {}
+                        }
+                        match cleanup_db.cleanup_expired_sessions().await {
+                            Ok(n) if n > 0 => tracing::info!(count = n, "cleaned up expired sessions"),
+                            Err(e) => tracing::warn!("session cleanup failed: {e}"),
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        });
+    }
+
     // --- QUIC listener ---
     let quic_bind: SocketAddr = format!("0.0.0.0:{}", cfg.quic_port).parse()?;
     let endpoint =
