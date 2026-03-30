@@ -118,6 +118,30 @@ cmd_setup() {
     echo "  Packages: ${packages}"
     pi_ssh "sudo apt-get update -qq && sudo apt-get install -y -qq ${packages} 2>&1 | tail -5"
 
+    # --- Swap setup (1GB) ---
+    echo ""
+    echo "=== Configuring swap (1GB) ==="
+    pi_ssh "
+if command -v dphys-swapfile >/dev/null 2>&1; then
+    sudo sed -i 's/^CONF_SWAPSIZE=.*/CONF_SWAPSIZE=1024/' /etc/dphys-swapfile
+    sudo dphys-swapfile setup
+    sudo dphys-swapfile swapon
+    echo 'Swap configured via dphys-swapfile'
+elif [ ! -f /swapfile ] || [ \$(stat -c%s /swapfile 2>/dev/null || echo 0) -lt 1073741824 ]; then
+    sudo swapoff /swapfile 2>/dev/null || true
+    sudo rm -f /swapfile
+    sudo fallocate -l 1G /swapfile
+    sudo chmod 600 /swapfile
+    sudo mkswap /swapfile
+    sudo swapon /swapfile
+    grep -q '/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+    echo 'Swap configured via swapfile'
+else
+    echo 'Swap already configured'
+fi
+free -h | grep -i swap
+"
+
     # --- Add user to groups ---
     echo ""
     echo "=== Configuring user groups ==="

@@ -4,12 +4,13 @@ use std::sync::Arc;
 use anyhow::Result;
 use ghostcam::config::QUIC_MAX_CONNECTIONS;
 use ghostcam::firmware::FirmwareRelease;
+use ghostcam::types::UserId;
 use ghostcam::wire::alert::Alert;
+use ghostcam::wire::command::{Command, DeviceStatusKind};
 use ghostcam::wire::framing;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 
-use super::enrollment::handle_enrollment;
 use super::registry::RoutingRegistry;
 use super::slot::IngestSlot;
 use crate::audit::{AuditEvent, AuditLogger};
@@ -44,10 +45,6 @@ pub async fn run_accept_loop(
             incoming = endpoint.accept() => {
                 let Some(incoming) = incoming else { break };
 
-                // Enforce application-level connection limit (quinn 0.11 does
-                // not expose ServerConfig::concurrent_connections).
-                // Use fetch_add-first to avoid a TOCTOU race between load()
-                // and fetch_add() that could overshoot the limit.
                 let prev = active_connections.fetch_add(1, Ordering::Relaxed);
                 if prev >= QUIC_MAX_CONNECTIONS {
                     active_connections.fetch_sub(1, Ordering::Relaxed);
@@ -106,71 +103,33 @@ async fn handle_connection(
     // 2. Compute fingerprint of the device cert (first cert in chain)
     let fingerprint = ghostcam::pki::cert_fingerprint(&peer_certs[0]);
 
-    // 3. Check for user association cert (second cert in chain)
-    let has_association_cert = peer_certs.len() >= 2;
-
-    if !has_association_cert {
-        // Enrollment path
-        tracing::info!(fingerprint = %fingerprint.0, "enrollment connection");
-        return handle_enrollment(connection, fingerprint, &ca, db.as_ref()).await;
-    }
-
-    // Normal path — verify user association cert
-    let user_cert_der = &peer_certs[1];
-
-    // 4. Check revocation cache (using cert fingerprint as key)
-    let user_cert_serial = ghostcam::pki::cert_serial_hex(user_cert_der).unwrap_or_default();
-    if revocation_cache.is_revoked(&user_cert_serial).await {
-        tracing::warn!(fingerprint = %fingerprint.0, serial = %user_cert_serial, "revoked certificate — rejecting");
-        connection.close(3u32.into(), b"certificate revoked");
-        return Ok(());
-    }
-
-    // 5. Verify user association cert was signed by our CA
-    if let Err(e) = ca.verify_user_cert(user_cert_der) {
-        tracing::warn!(fingerprint = %fingerprint.0, "user cert verification failed: {e}");
-        connection.close(4u32.into(), b"invalid user certificate");
-        return Ok(());
-    }
-
-    // 6. Extract device_id from user association cert CN
-    let device_id_from_cert = ghostcam::pki::extract_cn(user_cert_der)?;
-
-    // 7. Database lookup by fingerprint
-    let camera = db
-        .get_camera_by_fingerprint(&fingerprint)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("device not enrolled"))?;
-
-    // 8. Verify device_id from cert matches database record
-    if camera.device_id.0 != device_id_from_cert {
-        tracing::warn!(
-            fingerprint = %fingerprint.0,
-            cert_device_id = %device_id_from_cert,
-            db_device_id = %camera.device_id,
-            "device identity mismatch"
-        );
-        connection.close(4u32.into(), b"device identity mismatch");
-        return Err(anyhow::anyhow!("device_id mismatch"));
-    }
-
-    // 9. Check revocation by fingerprint too
+    // 3. Check revocation
     if revocation_cache.is_revoked(&fingerprint.0).await {
         tracing::warn!(fingerprint = %fingerprint.0, "revoked fingerprint — rejecting");
         connection.close(3u32.into(), b"certificate revoked");
         return Ok(());
     }
 
-    // 10. Update last_seen
+    // 4. Look up device by fingerprint, or auto-register if unknown
+    let camera = match db.get_camera_by_fingerprint(&fingerprint).await? {
+        Some(cam) => cam,
+        None => {
+            // Auto-register: create unclaimed device record
+            tracing::info!(fingerprint = %fingerprint.0, "new device — auto-registering as unclaimed");
+            db.register_device(&fingerprint, "Camera").await?
+        }
+    };
+
+    // 5. Update last_seen
     db.update_last_seen(&camera.device_id).await?;
 
-    // 11. Accept the control bidirectional stream.
-    let (commands_stream, mut alerts_stream) = connection
+    // 6. Accept the control bidirectional stream.
+    let (mut commands_stream, mut alerts_stream) = connection
         .accept_bi()
         .await
         .map_err(|e| anyhow::anyhow!("failed to accept control stream: {e}"))?;
 
-    // 12. Read the stream tag — must be Alerts
+    // 7. Read the stream tag — must be Alerts
     let mut tag_buf = [0u8; 1];
     alerts_stream.read_exact(&mut tag_buf).await?;
     let tag = InboundStreamTag::try_from(tag_buf[0])?;
@@ -181,7 +140,7 @@ async fn handle_connection(
         );
     }
 
-    // 13. Read the handshake alert
+    // 8. Read the handshake alert
     let handshake: Alert = framing::read_json(&mut alerts_stream)
         .await
         .map_err(|e| anyhow::anyhow!("failed to read handshake: {e}"))?
@@ -205,11 +164,56 @@ async fn handle_connection(
 
     let peer_ip = connection.remote_address().ip().to_string();
 
-    tracing::info!(
-        device_id = %camera.device_id,
-        fw_version = %fw_version,
-        "camera connected"
-    );
+    // 9. Determine device status and send DeviceStatus command
+    let user_id = match &camera.user_id {
+        Some(uid) => {
+            // Device is claimed — send Active status
+            tracing::info!(
+                device_id = %camera.device_id,
+                fw_version = %fw_version,
+                "claimed camera connected"
+            );
+
+            let status_cmd = Command::DeviceStatus {
+                seq: 0,
+                status: DeviceStatusKind::Active,
+            };
+            framing::write_json(&mut commands_stream, &status_cmd)
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to send DeviceStatus: {e}"))?;
+
+            uid.clone()
+        }
+        None => {
+            // Device is unclaimed — send Unclaimed status, wait for ClaimToken
+            tracing::info!(
+                device_id = %camera.device_id,
+                fingerprint = %fingerprint.0,
+                "unclaimed camera connected — waiting for claim"
+            );
+
+            let status_cmd = Command::DeviceStatus {
+                seq: 0,
+                status: DeviceStatusKind::Unclaimed,
+            };
+            framing::write_json(&mut commands_stream, &status_cmd)
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to send DeviceStatus: {e}"))?;
+
+            // Wait for ClaimToken alert (with timeout)
+            let claim_result = wait_for_claim(
+                &mut alerts_stream,
+                &mut commands_stream,
+                &camera.device_id,
+                &ca,
+                db.as_ref(),
+                &audit,
+            )
+            .await?;
+
+            claim_result
+        }
+    };
 
     audit.log(AuditEvent::CameraConnected {
         device_id: camera.device_id.0.clone(),
@@ -217,10 +221,10 @@ async fn handle_connection(
         firmware_version: fw_version.clone(),
     });
 
-    // 14. Create IngestSlot and register
+    // 10. Create IngestSlot and register
     let (slot, supervisor) = IngestSlot::spawn(
         camera.device_id.clone(),
-        camera.user_id.clone(),
+        user_id.clone(),
         connection,
         alerts_stream,
         commands_stream,
@@ -233,7 +237,7 @@ async fn handle_connection(
 
     registry.register(slot.clone()).await;
 
-    // 14b. Check if camera firmware is stale and send Reboot if needed
+    // 10b. Check if camera firmware is stale and send Reboot if needed
     {
         let latest = firmware_release.read().await.clone();
         crate::firmware::check_and_reboot_if_stale(
@@ -245,26 +249,26 @@ async fn handle_connection(
         .await;
     }
 
-    // 15. Publish SSE camera_online event
+    // 11. Publish SSE camera_online event
     sse_bus
         .publish(
-            &camera.user_id,
+            &user_id,
             crate::sse::SseEvent::CameraOnline {
                 device_id: camera.device_id.0.clone(),
             },
         )
         .await;
 
-    // 16. Wait for the slot supervisor to finish (camera disconnect or error)
+    // 12. Wait for the slot supervisor to finish (camera disconnect or error)
     let _ = supervisor.await;
 
-    // 17. Unregister on disconnect (only if this is still the active slot)
+    // 13. Unregister on disconnect (only if this is still the active slot)
     registry.unregister(&camera.device_id, &slot).await;
 
-    // 18. Publish SSE camera_offline event
+    // 14. Publish SSE camera_offline event
     sse_bus
         .publish(
-            &camera.user_id,
+            &user_id,
             crate::sse::SseEvent::CameraOffline {
                 device_id: camera.device_id.0.clone(),
             },
@@ -279,4 +283,92 @@ async fn handle_connection(
     tracing::info!(device_id = %camera.device_id, "camera disconnected");
 
     Ok(())
+}
+
+/// Wait for a ClaimToken alert from an unclaimed camera.
+/// Validates the JWT, claims the device, and returns the owner's UserId.
+async fn wait_for_claim(
+    alerts_stream: &mut quinn::RecvStream,
+    commands_stream: &mut quinn::SendStream,
+    device_id: &ghostcam::types::DeviceId,
+    ca: &CaManager,
+    db: &dyn Database,
+    audit: &AuditLogger,
+) -> Result<UserId> {
+    // Wait up to 10 minutes for a claim token (camera is in QR scan mode)
+    let timeout = std::time::Duration::from_secs(600);
+
+    let alert_result = tokio::time::timeout(timeout, async {
+        loop {
+            let alert: Alert = framing::read_json(alerts_stream)
+                .await
+                .map_err(|e| anyhow::anyhow!("failed to read alert while waiting for claim: {e}"))?
+                .ok_or_else(|| anyhow::anyhow!("stream closed while waiting for claim"))?;
+
+            match alert {
+                Alert::ClaimToken { token } => return Ok(token),
+                Alert::Ack { .. } => {
+                    // Ignore acks
+                    continue;
+                }
+                other => {
+                    tracing::debug!(device_id = %device_id, "ignoring alert while waiting for claim: {:?}", other);
+                    continue;
+                }
+            }
+        }
+    })
+    .await;
+
+    let token = match alert_result {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => return Err(e),
+        Err(_) => {
+            anyhow::bail!("timeout waiting for claim token from device {}", device_id);
+        }
+    };
+
+    // Verify the claim JWT
+    let claims = ca
+        .verify_enrollment_jwt(&token)
+        .map_err(|e| anyhow::anyhow!("claim token verification failed: {e}"))?;
+
+    let jti = claims.jti.clone();
+
+    // Look up the user who created this enrollment token
+    let user_id = db
+        .get_enrollment_token_user_id(&jti)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("claim token has no associated user or is expired"))?;
+
+    // Claim the enrollment token (mark it used)
+    let claimed = db.claim_enrollment_token(&jti, device_id).await?;
+    if !claimed {
+        anyhow::bail!("claim token already used");
+    }
+
+    // Assign ownership
+    db.claim_device(device_id, &user_id).await?;
+
+    tracing::info!(
+        device_id = %device_id,
+        user_id = %user_id,
+        "device claimed successfully"
+    );
+
+    audit.log(AuditEvent::EnrollmentCompleted {
+        device_id: device_id.0.clone(),
+        owner_id: user_id.0.clone(),
+    });
+
+    // Send Active status
+    let status_cmd = Command::DeviceStatus {
+        seq: 1,
+        status: DeviceStatusKind::Active,
+    };
+    framing::write_json(commands_stream, &status_cmd)
+        .await
+        .map_err(|e| anyhow::anyhow!("failed to send Active status: {e}"))?;
+
+    Ok(user_id)
 }

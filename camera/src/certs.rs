@@ -35,6 +35,8 @@ pub fn load_or_create_device_cert(cert_path: &Path, key_path: &Path) -> Result<(
 
 /// Load the user association certificate and key from disk.
 /// Returns None if not enrolled (files don't exist).
+/// Kept for backward compatibility with legacy enrolled cameras.
+#[allow(dead_code)]
 pub fn load_user_cert(cert_path: &Path, key_path: &Path) -> Result<Option<(Vec<u8>, Vec<u8>)>> {
     if !cert_path.exists() || !key_path.exists() {
         return Ok(None);

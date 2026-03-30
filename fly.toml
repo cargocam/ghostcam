@@ -5,6 +5,10 @@ primary_region = "ord"
   dockerfile = "Dockerfile"
   target = "server"
 
+[mounts]
+  source = "ghostcam_data"
+  destination = "/var/ghostcam"
+
 [env]
   RUST_LOG = "server=info,str0m=warn"
 

@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use ghostcam::wire::alert::Alert;
-use ghostcam::wire::command::Command;
+use ghostcam::wire::command::{Command, DeviceStatusKind};
 use ghostcam::wire::framing;
 use tokio::sync::{mpsc, Mutex};
 
@@ -15,6 +15,8 @@ use crate::recording::uploads::UploadCommand;
 pub enum CommandSignal {
     /// Camera was unregistered — clear enrollment and re-enter registration
     Unregistered,
+    /// Server reported device status change
+    DeviceStatus(DeviceStatusKind),
 }
 
 /// Read commands from the server and dispatch them.
@@ -41,6 +43,11 @@ pub async fn run_command_reader(
         tracing::debug!(?cmd, "received command");
 
         match cmd {
+            Command::DeviceStatus { status, .. } => {
+                tracing::info!(?status, "received device status");
+                let _ = signal_tx.send(CommandSignal::DeviceStatus(status)).await;
+                // Don't return — continue processing commands
+            }
             Command::StartVideo { .. } => {
                 video_enabled.store(true, Ordering::SeqCst);
                 tracing::info!("video streaming enabled");

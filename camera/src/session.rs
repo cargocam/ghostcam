@@ -95,6 +95,109 @@ impl Session {
         })
     }
 
+    /// Wait for the initial DeviceStatus from the server after handshake.
+    /// If Unclaimed, scans QR for a claim token, sends it, and waits for Active.
+    /// Returns Ok(()) when the device is Active and ready to stream.
+    pub async fn wait_for_active_status(&mut self) -> Result<()> {
+        use ghostcam::wire::command::{Command, DeviceStatusKind};
+
+        // Read the first command — should be DeviceStatus
+        let cmd: Command = framing::read_json(&mut self.commands_rx)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to read DeviceStatus: {e}"))?
+            .ok_or_else(|| anyhow::anyhow!("command stream closed before DeviceStatus"))?;
+
+        match cmd {
+            Command::DeviceStatus {
+                status: DeviceStatusKind::Active,
+                ..
+            } => {
+                tracing::info!("device status: active — ready to stream");
+                return Ok(());
+            }
+            Command::DeviceStatus {
+                status: DeviceStatusKind::Unclaimed,
+                ..
+            } => {
+                tracing::info!("device status: unclaimed — entering QR claim mode");
+            }
+            Command::DeviceStatus {
+                status: DeviceStatusKind::Suspended,
+                ..
+            } => {
+                anyhow::bail!("device is suspended");
+            }
+            other => {
+                anyhow::bail!("expected DeviceStatus, got: {:?}", other);
+            }
+        }
+
+        // We're unclaimed — try to get a claim token from:
+        // 1. A claim_token file in the data dir (Docker auto-claim)
+        // 2. QR code scanning (real hardware)
+        let token = self.get_claim_token().await?;
+
+        // Send ClaimToken alert
+        crate::enrollment::send_claim_token(&self.alerts_tx, &token).await?;
+
+        // Wait for Active status
+        let cmd: Command = framing::read_json(&mut self.commands_rx)
+            .await
+            .map_err(|e| anyhow::anyhow!("failed to read status after claim: {e}"))?
+            .ok_or_else(|| anyhow::anyhow!("stream closed after claim"))?;
+
+        match cmd {
+            Command::DeviceStatus {
+                status: DeviceStatusKind::Active,
+                ..
+            } => {
+                tracing::info!("device claimed successfully — ready to stream");
+                // Clean up claim token file if it existed
+                let _ = tokio::fs::remove_file(self.data_dir.join("claim_token")).await;
+                Ok(())
+            }
+            other => {
+                anyhow::bail!("expected Active after claim, got: {:?}", other);
+            }
+        }
+    }
+
+    /// Try to get a claim token from a file (Docker) or QR scan (hardware).
+    async fn get_claim_token(&self) -> Result<String> {
+        // Check for a pre-provisioned claim token file (Docker auto-claim)
+        let token_file = self.data_dir.join("claim_token");
+        if let Ok(token) = tokio::fs::read_to_string(&token_file).await {
+            let token = token.trim().to_string();
+            if !token.is_empty() {
+                tracing::info!("claim token loaded from file");
+                return Ok(token);
+            }
+        }
+
+        // No file — scan QR code (real hardware, Linux only)
+        #[cfg(target_os = "linux")]
+        {
+            tracing::info!("scanning for claim QR code...");
+            let qr_result = crate::qr_enrollment::scan_for_claim_token().await?;
+            match qr_result {
+                crate::qr_enrollment::QrResult::ClaimToken(t) => Ok(t),
+                crate::qr_enrollment::QrResult::Wifi { claim_token, .. } => {
+                    claim_token.ok_or_else(|| {
+                        anyhow::anyhow!("WiFi QR scanned but no claim token — reconnect to retry")
+                    })
+                }
+            }
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            anyhow::bail!(
+                "device is unclaimed — place a claim_token file in {} or scan QR on Linux",
+                self.data_dir.display()
+            );
+        }
+    }
+
     /// Run the session. Spawns concurrent tasks and waits for any to fail.
     /// Returns Some(CommandSignal) if a signal was received from the command handler.
     pub async fn run(

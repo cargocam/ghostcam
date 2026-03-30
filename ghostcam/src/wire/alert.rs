@@ -35,11 +35,9 @@ pub enum Alert {
         cmd: String,
         seq: u64,
     },
-    Enrollment {
+    /// Camera sends a claim token (from QR scan) to the server to claim ownership.
+    ClaimToken {
         token: String,
-    },
-    Csr {
-        csr_pem: String,
     },
     StorageFull {
         free_bytes: u64,
@@ -100,19 +98,8 @@ pub struct NetworkEntry {
 /// Maximum length for short string fields (IDs, versions, SSIDs).
 const MAX_SHORT_STRING: usize = 256;
 
-/// Maximum length for PEM certificate/CSR fields.
-const MAX_PEM_STRING: usize = 8192;
-
 fn check_short(field: &str, val: &str) -> Result<(), String> {
     if val.len() > MAX_SHORT_STRING {
-        Err(format!("{field} too long: {} bytes", val.len()))
-    } else {
-        Ok(())
-    }
-}
-
-fn check_pem(field: &str, val: &str) -> Result<(), String> {
-    if val.len() > MAX_PEM_STRING {
         Err(format!("{field} too long: {} bytes", val.len()))
     } else {
         Ok(())
@@ -136,8 +123,7 @@ impl Alert {
             Alert::SegmentUploaded { segment_id, .. } => check_short("segment_id", segment_id),
             Alert::SegmentUploadFailed { segment_id, .. } => check_short("segment_id", segment_id),
             Alert::Ack { cmd, .. } => check_short("cmd", cmd),
-            Alert::Enrollment { token } => check_short("token", token),
-            Alert::Csr { csr_pem } => check_pem("csr_pem", csr_pem),
+            Alert::ClaimToken { token } => check_short("claim_token", token),
             Alert::UpdateApplying { version } | Alert::UpdateSucceeded { version } => {
                 check_short("version", version)
             }
@@ -211,13 +197,8 @@ mod tests {
                 cmd: "start_video".into(),
                 seq: 3,
             },
-            Alert::Enrollment {
-                token: "eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiJ9.test".into(),
-            },
-            Alert::Csr {
-                csr_pem:
-                    "-----BEGIN CERTIFICATE REQUEST-----\ntest\n-----END CERTIFICATE REQUEST-----"
-                        .into(),
+            Alert::ClaimToken {
+                token: "eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiJ9.claim.test".into(),
             },
             Alert::StorageFull { free_bytes: 0 },
             Alert::StorageResumed {

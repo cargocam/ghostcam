@@ -23,6 +23,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
     let protected = Router::new()
         // Cameras
         .route("/api/v1/cameras", get(cameras::list).post(cameras::enroll))
+        .route("/api/v1/cameras/unclaimed", get(cameras::list_unclaimed))
         .route("/api/v1/cameras/enroll/qr", get(qr::enrollment_qr))
         .route(
             "/api/v1/cameras/:device_id",

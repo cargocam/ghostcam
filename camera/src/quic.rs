@@ -9,7 +9,6 @@ use crate::tofu::TofuServerCertVerifier;
 /// Build a Quinn client endpoint with mTLS.
 ///
 /// - `device_cert_der` + `device_key_der`: always presented (device identity)
-/// - `user_cert_der`: presented if enrolled (user association cert)
 /// - `no_tofu`: if true, skip TOFU verification (insecure, for dev/testing)
 /// - `data_dir`: path to data directory (for reading/writing server fingerprint)
 ///
@@ -18,19 +17,10 @@ use crate::tofu::TofuServerCertVerifier;
 pub fn build_client_endpoint(
     device_cert_der: &[u8],
     device_key_der: &[u8],
-    user_cert_der: Option<&[u8]>,
     no_tofu: bool,
     data_dir: &Path,
 ) -> Result<quinn::Endpoint> {
-    let mut certs = Vec::new();
-
-    // Device cert is always first
-    certs.push(CertificateDer::from(device_cert_der.to_vec()));
-
-    // User association cert (if enrolled) goes second
-    if let Some(user_cert) = user_cert_der {
-        certs.push(CertificateDer::from(user_cert.to_vec()));
-    }
+    let certs = vec![CertificateDer::from(device_cert_der.to_vec())];
 
     let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(device_key_der.to_vec()));
 
@@ -46,11 +36,24 @@ pub fn build_client_endpoint(
         .with_client_auth_cert(certs, key)
         .context("failed to build TLS client config")?;
 
-    let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse()?)?;
-    endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(
+    let mut transport = quinn::TransportConfig::default();
+    transport.keep_alive_interval(Some(std::time::Duration::from_secs(
+        ghostcam::config::KEEPALIVE_INTERVAL_SECS,
+    )));
+    transport.max_idle_timeout(Some(
+        std::time::Duration::from_secs(ghostcam::config::KEEPALIVE_INTERVAL_SECS * 3)
+            .try_into()
+            .expect("idle timeout"),
+    ));
+
+    let mut client_config = quinn::ClientConfig::new(Arc::new(
         quinn::crypto::rustls::QuicClientConfig::try_from(tls_config)
             .context("failed to build QUIC client config")?,
-    )));
+    ));
+    client_config.transport_config(Arc::new(transport));
+
+    let mut endpoint = quinn::Endpoint::client("0.0.0.0:0".parse()?)?;
+    endpoint.set_default_client_config(client_config);
 
     Ok(endpoint)
 }

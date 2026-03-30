@@ -1,8 +1,7 @@
 use crate::auth;
 use crate::db_trait::{
     ApiTokenRecord, AuditLogRecord, CameraRecord, CameraUpdate, Database, NewApiToken,
-    NewCameraRecord, NewEnrollmentToken, NewSession, SessionRecord, SubscriptionRecord, UserRecord,
-    UserUpdate,
+    NewEnrollmentToken, NewSession, SessionRecord, SubscriptionRecord, UserRecord, UserUpdate,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -127,7 +126,7 @@ impl Database for PostgresDatabase {
 
         Ok(row.map(|r| CameraRecord {
             device_id: DeviceId(r.get("device_id")),
-            user_id: UserId(r.get("user_id")),
+            user_id: r.get::<Option<String>, _>("user_id").map(UserId),
             cert_fingerprint: CertFingerprint(r.get("cert_fingerprint")),
             display_name: r.get("display_name"),
             enrolled_at: r.get::<i64, _>("enrolled_at") as u64,
@@ -146,7 +145,7 @@ impl Database for PostgresDatabase {
 
         Ok(row.map(|r| CameraRecord {
             device_id: DeviceId(r.get("device_id")),
-            user_id: UserId(r.get("user_id")),
+            user_id: r.get::<Option<String>, _>("user_id").map(UserId),
             cert_fingerprint: CertFingerprint(r.get("cert_fingerprint")),
             display_name: r.get("display_name"),
             enrolled_at: r.get::<i64, _>("enrolled_at") as u64,
@@ -167,7 +166,7 @@ impl Database for PostgresDatabase {
             .into_iter()
             .map(|r| CameraRecord {
                 device_id: DeviceId(r.get("device_id")),
-                user_id: UserId(r.get("user_id")),
+                user_id: r.get::<Option<String>, _>("user_id").map(UserId),
                 cert_fingerprint: CertFingerprint(r.get("cert_fingerprint")),
                 display_name: r.get("display_name"),
                 enrolled_at: r.get::<i64, _>("enrolled_at") as u64,
@@ -175,32 +174,6 @@ impl Database for PostgresDatabase {
                 notes: r.get("notes"),
             })
             .collect())
-    }
-
-    async fn create_camera(&self, record: &NewCameraRecord) -> Result<CameraRecord> {
-        let device_id = uuid::Uuid::new_v4().to_string();
-        let now = now_unix() as i64;
-
-        sqlx::query(
-            "INSERT INTO cameras (device_id, user_id, cert_fingerprint, display_name, enrolled_at) VALUES ($1, $2, $3, $4, $5)",
-        )
-        .bind(&device_id)
-        .bind(&record.user_id.0)
-        .bind(&record.cert_fingerprint.0)
-        .bind(&record.display_name)
-        .bind(now)
-        .execute(&self.pool)
-        .await?;
-
-        Ok(CameraRecord {
-            device_id: DeviceId(device_id),
-            user_id: record.user_id.clone(),
-            cert_fingerprint: record.cert_fingerprint.clone(),
-            display_name: record.display_name.clone(),
-            enrolled_at: now as u64,
-            last_seen_at: None,
-            notes: None,
-        })
     }
 
     async fn update_camera(&self, device_id: &DeviceId, update: &CameraUpdate) -> Result<()> {
@@ -237,6 +210,74 @@ impl Database for PostgresDatabase {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    async fn register_device(
+        &self,
+        fingerprint: &CertFingerprint,
+        display_name: &str,
+    ) -> Result<CameraRecord> {
+        let device_id = uuid::Uuid::new_v4().to_string();
+        let now = now_unix() as i64;
+
+        sqlx::query(
+            "INSERT INTO cameras (device_id, user_id, cert_fingerprint, display_name, enrolled_at) VALUES ($1, NULL, $2, $3, $4)",
+        )
+        .bind(&device_id)
+        .bind(&fingerprint.0)
+        .bind(display_name)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(CameraRecord {
+            device_id: DeviceId(device_id),
+            user_id: None,
+            cert_fingerprint: fingerprint.clone(),
+            display_name: display_name.to_string(),
+            enrolled_at: now as u64,
+            last_seen_at: None,
+            notes: None,
+        })
+    }
+
+    async fn claim_device(&self, device_id: &DeviceId, user_id: &UserId) -> Result<()> {
+        sqlx::query("UPDATE cameras SET user_id = $1 WHERE device_id = $2")
+            .bind(&user_id.0)
+            .bind(&device_id.0)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    async fn get_unclaimed_devices(&self) -> Result<Vec<CameraRecord>> {
+        let rows = sqlx::query(
+            "SELECT device_id, user_id, cert_fingerprint, display_name, enrolled_at, last_seen_at, notes FROM cameras WHERE user_id IS NULL ORDER BY enrolled_at",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| CameraRecord {
+                device_id: DeviceId(r.get("device_id")),
+                user_id: None,
+                cert_fingerprint: CertFingerprint(r.get("cert_fingerprint")),
+                display_name: r.get("display_name"),
+                enrolled_at: r.get::<i64, _>("enrolled_at") as u64,
+                last_seen_at: r.get::<Option<i64>, _>("last_seen_at").map(|v| v as u64),
+                notes: r.get("notes"),
+            })
+            .collect())
+    }
+
+    async fn get_device_owner(&self, device_id: &DeviceId) -> Result<Option<UserId>> {
+        let row = sqlx::query("SELECT user_id FROM cameras WHERE device_id = $1")
+            .bind(&device_id.0)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(row.and_then(|r| r.get::<Option<String>, _>("user_id").map(UserId)))
     }
 
     // --- Enrollment tokens ---
@@ -490,6 +531,14 @@ impl Database for PostgresDatabase {
             .execute(&self.pool)
             .await
             .context("failed to run migration 004")?;
+        sqlx::raw_sql(include_str!("../migrations/005_fk_cascade.sql"))
+            .execute(&self.pool)
+            .await
+            .context("failed to run migration 005")?;
+        sqlx::raw_sql(include_str!("../migrations/006_ownership.sql"))
+            .execute(&self.pool)
+            .await
+            .context("failed to run migration 006")?;
         Ok(())
     }
 

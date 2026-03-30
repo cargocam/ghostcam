@@ -6,20 +6,13 @@ use ghostcam::types::{CertFingerprint, DeviceId, SessionId, TokenId, UserId};
 #[derive(Debug, Clone)]
 pub struct CameraRecord {
     pub device_id: DeviceId,
-    pub user_id: UserId,
+    /// Owner user ID. None if the device is unclaimed.
+    pub user_id: Option<UserId>,
     pub cert_fingerprint: CertFingerprint,
     pub display_name: String,
     pub enrolled_at: u64,
     pub last_seen_at: Option<u64>,
     pub notes: Option<String>,
-}
-
-/// Fields for creating a new camera record.
-#[derive(Debug, Clone)]
-pub struct NewCameraRecord {
-    pub user_id: UserId,
-    pub cert_fingerprint: CertFingerprint,
-    pub display_name: String,
 }
 
 /// Fields for updating an existing camera record.
@@ -135,10 +128,26 @@ pub trait Database: Send + Sync + 'static {
     ) -> Result<Option<CameraRecord>>;
     async fn get_camera(&self, device_id: &DeviceId) -> Result<Option<CameraRecord>>;
     async fn list_cameras(&self, user_id: &UserId) -> Result<Vec<CameraRecord>>;
-    async fn create_camera(&self, record: &NewCameraRecord) -> Result<CameraRecord>;
     async fn update_camera(&self, device_id: &DeviceId, update: &CameraUpdate) -> Result<()>;
     async fn delete_camera(&self, device_id: &DeviceId) -> Result<()>;
     async fn update_last_seen(&self, device_id: &DeviceId) -> Result<()>;
+
+    /// Register a device (auto-registration on first QUIC connect). No owner.
+    async fn register_device(
+        &self,
+        fingerprint: &CertFingerprint,
+        display_name: &str,
+    ) -> Result<CameraRecord>;
+
+    /// Claim a device — assign it to a user.
+    async fn claim_device(&self, device_id: &DeviceId, user_id: &UserId) -> Result<()>;
+
+    /// Get unclaimed devices (user_id IS NULL).
+    async fn get_unclaimed_devices(&self) -> Result<Vec<CameraRecord>>;
+
+    /// Get the owner of a device. Returns None if unclaimed.
+    #[allow(dead_code)]
+    async fn get_device_owner(&self, device_id: &DeviceId) -> Result<Option<UserId>>;
 
     // --- Enrollment tokens ---
     async fn create_enrollment_token(&self, token: &NewEnrollmentToken) -> Result<()>;
