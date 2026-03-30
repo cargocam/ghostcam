@@ -24,9 +24,13 @@ pub struct SharedWebRtcSocket {
 }
 
 impl SharedWebRtcSocket {
-    /// Bind a UDP socket on `0.0.0.0:<port>`.
+    /// Bind a UDP socket for WebRTC.
+    ///
+    /// On Fly.io, binds to `fly-global-services` (required for UDP to work
+    /// through Fly's eBPF packet forwarding). Elsewhere, binds to `0.0.0.0`.
     pub async fn bind(port: u16) -> Result<Arc<Self>> {
-        let socket = UdpSocket::bind(format!("0.0.0.0:{port}")).await?;
+        let bind_addr = resolve_udp_bind_addr(port).await?;
+        let socket = UdpSocket::bind(bind_addr).await?;
         let local_addr = socket.local_addr()?;
         Ok(Arc::new(Self {
             socket: Arc::new(socket),
@@ -132,6 +136,22 @@ impl SharedWebRtcSocket {
                 tracing::debug!(ufrag = %ufrag, "no session for ufrag, dropping");
             }
         }
+    }
+}
+
+/// Resolve the UDP bind address. On Fly.io, resolves `fly-global-services` to
+/// a private IP that works with Fly's eBPF packet forwarding. Elsewhere, returns
+/// `0.0.0.0`.
+pub async fn resolve_udp_bind_addr(port: u16) -> Result<SocketAddr> {
+    if std::env::var("FLY_APP_NAME").is_ok() {
+        let addr = tokio::net::lookup_host(format!("fly-global-services:{port}"))
+            .await?
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("cannot resolve fly-global-services"))?;
+        tracing::info!(%addr, "Fly.io detected — binding UDP to fly-global-services");
+        Ok(addr)
+    } else {
+        Ok(format!("0.0.0.0:{port}").parse()?)
     }
 }
 

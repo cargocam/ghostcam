@@ -228,7 +228,7 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // --- QUIC listener ---
-    let quic_bind: SocketAddr = format!("0.0.0.0:{}", cfg.quic_port).parse()?;
+    let quic_bind = crate::egress::udp::resolve_udp_bind_addr(cfg.quic_port).await?;
     let endpoint =
         build_server_endpoint(&pki.server_tls.cert_der, &pki.server_tls.key_der, quic_bind)?;
     tracing::info!(%quic_bind, "QUIC listening");
