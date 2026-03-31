@@ -54,6 +54,7 @@ pub fn build_router(state: Arc<AppState>) -> Router {
         .route("/events", get(sse::handle_sse))
         // HLS
         .route("/hls/:device_id/coverage", get(hls::get_coverage))
+        .route("/hls/:device_id/cache-status", get(hls::get_cache_status))
         .route("/hls/:device_id/init.mp4", get(hls::get_init))
         .route("/hls/:device_id/playlist.m3u8", get(hls::get_manifest))
         .route("/hls/:device_id/prefetch", post(hls::prefetch))

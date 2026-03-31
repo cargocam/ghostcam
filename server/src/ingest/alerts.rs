@@ -1,7 +1,9 @@
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 use bytes::Bytes;
 use ghostcam::wire::alert::{Alert, UploadFailReason};
+use ghostcam::wire::command::Command;
 
 use super::slot::{IngestSlot, SegmentState};
 
@@ -30,6 +32,32 @@ pub async fn handle_alert(slot: &Arc<IngestSlot>, alert: Alert) {
                 size_bytes,
                 "recording segment"
             );
+
+            // Auto-cache: if viewers are watching, proactively fetch the segment
+            // so it's ready for instant playback when the browser requests it.
+            let viewers = slot.video_subscribers.load(Ordering::SeqCst);
+            if viewers > 0 {
+                let mut segments = slot.segments.write().await;
+                if !segments.contains_key(&segment_id) {
+                    segments.insert(
+                        segment_id.clone(),
+                        SegmentState::Uploading { waiters: vec![] },
+                    );
+                    drop(segments);
+                    let _ = slot
+                        .send_command(Command::UploadSegment {
+                            seq: slot.next_seq(),
+                            segment_id: segment_id.clone(),
+                        })
+                        .await;
+                    tracing::debug!(
+                        device_id = %slot.device_id,
+                        segment_id,
+                        viewers,
+                        "auto-caching segment for active viewers"
+                    );
+                }
+            }
         }
         Alert::SegmentEvicted { segment_id } => {
             tracing::info!(device_id = %slot.device_id, segment_id, "segment evicted");
@@ -99,7 +127,7 @@ pub async fn complete_segment_upload(slot: &Arc<IngestSlot>, segment_id: &str, d
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ingest::slot::test_slot;
+    use crate::ingest::slot::{test_slot, test_slot_with_commands};
     use ghostcam::wire::alert::StreamKind;
 
     #[tokio::test]
@@ -189,5 +217,63 @@ mod tests {
         let slot = test_slot("cam-1", "user-1");
         // StorageFull is handled by the catch-all arm
         handle_alert(&slot, Alert::StorageFull { free_bytes: 0 }).await;
+    }
+
+    #[tokio::test]
+    async fn recording_segment_auto_caches_when_viewers_present() {
+        let (slot, mut cmd_rx) = test_slot_with_commands("cam-1", "user-1");
+
+        // Simulate an active viewer
+        slot.video_subscribers
+            .store(1, std::sync::atomic::Ordering::SeqCst);
+
+        handle_alert(
+            &slot,
+            Alert::RecordingSegment {
+                device_id: "cam-1".to_string(),
+                segment_id: "seg-42".to_string(),
+                start_ts: 1000,
+                end_ts: 2000,
+                size_bytes: 5000,
+            },
+        )
+        .await;
+
+        // Should have sent an UploadSegment command
+        let cmd = cmd_rx.try_recv().unwrap();
+        assert!(matches!(cmd, Command::UploadSegment { segment_id, .. } if segment_id == "seg-42"));
+
+        // Segment should be in Uploading state
+        let segments = slot.segments.read().await;
+        assert!(matches!(
+            segments.get("seg-42"),
+            Some(SegmentState::Uploading { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn recording_segment_skips_cache_when_no_viewers() {
+        let (slot, mut cmd_rx) = test_slot_with_commands("cam-1", "user-1");
+
+        // No viewers — video_subscribers is 0 by default
+
+        handle_alert(
+            &slot,
+            Alert::RecordingSegment {
+                device_id: "cam-1".to_string(),
+                segment_id: "seg-42".to_string(),
+                start_ts: 1000,
+                end_ts: 2000,
+                size_bytes: 5000,
+            },
+        )
+        .await;
+
+        // No command should have been sent
+        assert!(cmd_rx.try_recv().is_err());
+
+        // No segment state entry
+        let segments = slot.segments.read().await;
+        assert!(segments.get("seg-42").is_none());
     }
 }

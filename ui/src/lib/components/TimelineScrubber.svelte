@@ -62,22 +62,43 @@
 		trackEl?.releasePointerCapture(e.pointerId);
 	}
 
-	// Coverage bars for each camera
+	// Segment bars with cache state for each camera
+	type SegmentBar = { left: number; width: number; state: 'cached' | 'uploading' | 'available' };
 	let coverageBars = $derived.by(() => {
-		const bars: { deviceId: string; segments: { left: number; width: number }[] }[] = [];
+		const bars: { deviceId: string; segments: SegmentBar[] }[] = [];
 		const range = windowEnd - windowStart;
 		if (range <= 0) return bars;
 
-		for (const [deviceId, segments] of scrubberStore.cameraCoverage) {
-			const segs = segments
-				.map((s) => {
-					const left = Math.max(0, ((s.start - windowStart) / range) * 100);
-					const right = Math.min(100, ((s.end - windowStart) / range) * 100);
-					return { left, width: right - left };
-				})
-				.filter((s) => s.width > 0);
-			if (segs.length > 0) {
-				bars.push({ deviceId, segments: segs });
+		for (const [deviceId] of scrubberStore.cameraCoverage) {
+			const segStates = scrubberStore.cameraSegmentStates.get(deviceId);
+
+			if (segStates && segStates.length > 0) {
+				// Use per-segment cache state for detailed visualization
+				const segs: SegmentBar[] = segStates
+					.map((s) => {
+						const left = Math.max(0, ((s.start - windowStart) / range) * 100);
+						const right = Math.min(100, ((s.end - windowStart) / range) * 100);
+						return { left, width: right - left, state: s.state };
+					})
+					.filter((s) => s.width > 0);
+				if (segs.length > 0) {
+					bars.push({ deviceId, segments: segs });
+				}
+			} else {
+				// Fallback to coverage data (no cache state info)
+				const coverage = scrubberStore.cameraCoverage.get(deviceId);
+				if (coverage) {
+					const segs: SegmentBar[] = coverage
+						.map((s) => {
+							const left = Math.max(0, ((s.start - windowStart) / range) * 100);
+							const right = Math.min(100, ((s.end - windowStart) / range) * 100);
+							return { left, width: right - left, state: 'available' as const };
+						})
+						.filter((s) => s.width > 0);
+					if (segs.length > 0) {
+						bars.push({ deviceId, segments: segs });
+					}
+				}
 			}
 		}
 		return bars;
@@ -106,11 +127,16 @@
 		<!-- Background track -->
 		<div class="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-white/10"></div>
 
-		<!-- Coverage indicators -->
+		<!-- Coverage indicators: green outline = available, solid green = cached, animated blue = uploading -->
 		{#each coverageBars as bar}
 			{#each bar.segments as seg}
 				<div
-					class="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-emerald-500/40"
+					class={cn(
+						'absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full',
+						seg.state === 'cached' && 'bg-green-500',
+						seg.state === 'uploading' && 'bg-blue-500 animate-pulse',
+						seg.state === 'available' && 'border border-green-500 bg-transparent',
+					)}
 					style="left: {seg.left}%; width: {seg.width}%"
 				></div>
 			{/each}

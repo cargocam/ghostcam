@@ -1,8 +1,11 @@
 import { sendPrefetchHint } from '$lib/signaling.js';
+import type { CacheStatusSegment } from '$lib/signaling.js';
 import { cameraStore } from '$lib/stores/cameras.svelte.js';
 
 type ScrubberMode = 'live' | 'playback';
 type ModeChangeCallback = (mode: ScrubberMode, playheadTime: number) => void;
+
+export type SegmentCacheState = 'cached' | 'uploading' | 'available';
 
 /** Prefetch window: request segments covering 30s ahead of the scrub position. */
 const PREFETCH_WINDOW_MS = 30_000;
@@ -15,6 +18,10 @@ class ScrubberStore {
 	playing = $state<boolean>(false);
 	availableWindow = $state<{ start: number; end: number } | null>(null);
 	cameraCoverage = $state<Map<string, { start: number; end: number }[]>>(new Map());
+	/** Per-camera segment cache states for timeline visualization. */
+	cameraSegmentStates = $state<
+		Map<string, { start: number; end: number; state: SegmentCacheState }[]>
+	>(new Map());
 
 	private animationFrame: number | null = null;
 	private modeChangeCallbacks: ModeChangeCallback[] = [];
@@ -124,6 +131,16 @@ class ScrubberStore {
 			}
 		}
 		this.cameraCoverage = new Map(this.cameraCoverage).set(deviceId, merged);
+	}
+
+	/** Update per-segment cache states from the cache-status API. */
+	setCameraSegmentStates(deviceId: string, segments: CacheStatusSegment[]) {
+		const mapped = segments.map((s) => ({
+			start: s.start_ms / 1000,
+			end: s.end_ms / 1000,
+			state: s.state,
+		}));
+		this.cameraSegmentStates = new Map(this.cameraSegmentStates).set(deviceId, mapped);
 	}
 
 	private startLiveTick() {

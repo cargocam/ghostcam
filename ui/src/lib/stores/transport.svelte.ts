@@ -1,5 +1,5 @@
 import { checkSession, login as authLogin, register as authRegister, logout as authLogout } from '$lib/auth.js';
-import { listCameras, fetchCoverage } from '$lib/signaling.js';
+import { listCameras, fetchCoverage, fetchCacheStatus } from '$lib/signaling.js';
 import { connectSse, type SseEvent } from '$lib/sse.js';
 import { ConnectionManager } from '$lib/connection-manager.js';
 import { cameraStore } from '$lib/stores/cameras.svelte.js';
@@ -25,6 +25,7 @@ class TransportStore {
 
 	private sse: EventSource | null = null;
 	private connManager: ConnectionManager | null = null;
+	private cacheStatusInterval: ReturnType<typeof setInterval> | null = null;
 
 	async initialize() {
 		this.authenticated = await checkSession();
@@ -52,7 +53,17 @@ class TransportStore {
 			await Promise.all([
 				...cameras.filter((c) => c.online).map((c) => this.connManager!.connectCamera(c.device_id)),
 				...cameras.map((c) => this.refreshCoverage(c.device_id)),
+				...cameras.filter((c) => c.online).map((c) => this.refreshCacheStatus(c.device_id)),
 			]);
+
+			// Poll cache status every 5s for online cameras
+			this.cacheStatusInterval = setInterval(() => {
+				for (const cam of cameraStore.cameras) {
+					if (cam.online) {
+						this.refreshCacheStatus(cam.device_id);
+					}
+				}
+			}, 5000);
 
 			this.error = null;
 		} catch (e) {
@@ -72,6 +83,16 @@ class TransportStore {
 			this.updateAvailableWindow();
 		} catch {
 			// Coverage unavailable for this camera — not fatal
+		}
+	}
+
+	/** Fetch cache status for one camera and update the scrubber. */
+	async refreshCacheStatus(deviceId: string): Promise<void> {
+		try {
+			const status = await fetchCacheStatus(deviceId);
+			scrubberStore.setCameraSegmentStates(deviceId, status.segments);
+		} catch {
+			// Cache status unavailable — not fatal
 		}
 	}
 
@@ -144,6 +165,10 @@ class TransportStore {
 		this.authenticated = false;
 		this.sse?.close();
 		this.sse = null;
+		if (this.cacheStatusInterval) {
+			clearInterval(this.cacheStatusInterval);
+			this.cacheStatusInterval = null;
+		}
 		await this.connManager?.disconnectAll();
 		this.connManager = null;
 		cameraStore.clear();
@@ -168,6 +193,10 @@ class TransportStore {
 
 	destroy() {
 		this.sse?.close();
+		if (this.cacheStatusInterval) {
+			clearInterval(this.cacheStatusInterval);
+			this.cacheStatusInterval = null;
+		}
 		this.connManager?.disconnectAll();
 	}
 }

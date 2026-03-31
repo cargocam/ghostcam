@@ -402,6 +402,93 @@ pub async fn prefetch(
     StatusCode::ACCEPTED.into_response()
 }
 
+/// Per-segment cache state for the browser timeline.
+#[derive(Serialize)]
+pub struct CacheStatusSegment {
+    pub id: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub state: &'static str,
+}
+
+#[derive(Serialize)]
+pub struct CacheStatusResponse {
+    pub segments: Vec<CacheStatusSegment>,
+}
+
+/// GET /hls/:device_id/cache-status
+/// Returns all known segments with their cache state:
+/// - "cached": segment data is buffered on the server (instant playback)
+/// - "uploading": upload is in progress
+/// - "available": segment exists on camera but not cached on server
+pub async fn get_cache_status(
+    State(state): State<Arc<AppState>>,
+    Extension(user): Extension<AuthUser>,
+    Path(device_id): Path<String>,
+) -> Response {
+    let device_id = DeviceId(device_id);
+
+    match state.db.get_camera(&device_id).await {
+        Ok(Some(c)) if c.user_id.as_ref() == Some(&user.user_id) => {}
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    }
+
+    let slot = state.registry.get_slot(&device_id).await;
+
+    // Read manifest: live slot (pre-normalized) -> Redis fallback
+    let manifest_text = if let Some(ref slot) = slot {
+        slot.manifest_normalized.read().await.clone()
+    } else {
+        None
+    };
+
+    let manifest_text = if manifest_text.is_some() {
+        manifest_text
+    } else if let Some(ref redis) = state.redis {
+        crate::redis::manifest::get_manifest(redis, &device_id).await
+    } else {
+        None
+    };
+
+    let all_segments = manifest_text
+        .as_deref()
+        .map(parse_manifest_segments)
+        .unwrap_or_default();
+
+    // Read segment cache state from the slot (if online)
+    let segments: Vec<CacheStatusSegment> = if let Some(ref slot) = slot {
+        let cache = slot.segments.read().await;
+        all_segments
+            .into_iter()
+            .map(|seg| {
+                let state = match cache.get(&seg.id) {
+                    Some(SegmentState::Buffered { .. }) => "cached",
+                    Some(SegmentState::Uploading { .. }) => "uploading",
+                    None => "available",
+                };
+                CacheStatusSegment {
+                    id: seg.id,
+                    start_ms: seg.start_ms,
+                    end_ms: seg.end_ms,
+                    state,
+                }
+            })
+            .collect()
+    } else {
+        all_segments
+            .into_iter()
+            .map(|seg| CacheStatusSegment {
+                id: seg.id,
+                start_ms: seg.start_ms,
+                end_ms: seg.end_ms,
+                state: "available",
+            })
+            .collect()
+    };
+
+    axum::Json(CacheStatusResponse { segments }).into_response()
+}
+
 /// GET /hls/:device_id/coverage
 /// Returns the segment time windows available for this camera.
 /// Works whether the camera is online (reads from slot) or offline (reads from Redis).

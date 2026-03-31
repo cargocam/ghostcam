@@ -93,6 +93,27 @@ export async function fetchCoverage(deviceId: string): Promise<CoverageResponse>
 	return res.json();
 }
 
+// --- Cache Status ---
+
+export interface CacheStatusSegment {
+	id: string;
+	start_ms: number;
+	end_ms: number;
+	state: 'cached' | 'uploading' | 'available';
+}
+
+interface CacheStatusResponse {
+	segments: CacheStatusSegment[];
+}
+
+export async function fetchCacheStatus(deviceId: string): Promise<CacheStatusResponse> {
+	const res = await fetch(`/hls/${encodeURIComponent(deviceId)}/cache-status`, {
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`fetchCacheStatus failed: ${res.status}`);
+	return res.json();
+}
+
 // --- Billing ---
 
 export async function getSubscription(): Promise<SubscriptionInfo> {

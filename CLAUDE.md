@@ -374,6 +374,7 @@ GET    /api/v1/telemetry/:id               ?from=<ms>&to=<ms>&limit=<n>
 GET    /hls/:id/playlist.m3u8
 GET    /hls/:id/init.mp4
 GET    /hls/:id/:segment_id
+GET    /hls/:id/cache-status               Segment cache states (cached/uploading/available)
 POST   /hls/:id/prefetch                   { from_ms, to_ms } → 202 (pre-fetch hint)
 
 GET    /events                             SSE stream
