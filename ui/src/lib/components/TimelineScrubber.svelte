@@ -62,8 +62,26 @@
 		trackEl?.releasePointerCapture(e.pointerId);
 	}
 
-	// Segment bars with cache state for each camera
+	// Merge adjacent segments with the same state into continuous bars.
+	// Gap threshold: segments within 15s of each other are merged.
 	type SegmentBar = { left: number; width: number; state: 'cached' | 'uploading' | 'available' };
+	type RawSeg = { start: number; end: number; state: 'cached' | 'uploading' | 'available' };
+
+	function mergeSegments(segs: RawSeg[]): RawSeg[] {
+		const GAP_THRESHOLD = 15; // seconds
+		const sorted = [...segs].sort((a, b) => a.start - b.start);
+		const merged: RawSeg[] = [];
+		for (const seg of sorted) {
+			const last = merged[merged.length - 1];
+			if (last && seg.state === last.state && seg.start - last.end <= GAP_THRESHOLD) {
+				last.end = Math.max(last.end, seg.end);
+			} else {
+				merged.push({ ...seg });
+			}
+		}
+		return merged;
+	}
+
 	let coverageBars = $derived.by(() => {
 		const bars: { deviceId: string; segments: SegmentBar[] }[] = [];
 		const range = windowEnd - windowStart;
@@ -73,8 +91,11 @@
 			const segStates = scrubberStore.cameraSegmentStates.get(deviceId);
 
 			if (segStates && segStates.length > 0) {
-				// Use per-segment cache state for detailed visualization
-				const segs: SegmentBar[] = segStates
+				// Use per-segment cache state, merged by state
+				const merged = mergeSegments(
+					segStates.map((s) => ({ start: s.start, end: s.end, state: s.state })),
+				);
+				const segs: SegmentBar[] = merged
 					.map((s) => {
 						const left = Math.max(0, ((s.start - windowStart) / range) * 100);
 						const right = Math.min(100, ((s.end - windowStart) / range) * 100);
@@ -85,7 +106,7 @@
 					bars.push({ deviceId, segments: segs });
 				}
 			} else {
-				// Fallback to coverage data (no cache state info)
+				// Fallback to coverage data (all shown as available)
 				const coverage = scrubberStore.cameraCoverage.get(deviceId);
 				if (coverage) {
 					const segs: SegmentBar[] = coverage
