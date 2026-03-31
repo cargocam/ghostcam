@@ -30,7 +30,8 @@ use crate::telemetry::buffer::TelemetryBuffer;
 
 /// Timeout for individual frame sends. QUIC connections can hang for 30s+
 /// without signaling an error; this ensures we detect dead links quickly.
-const SEND_TIMEOUT: Duration = Duration::from_secs(5);
+/// Set to 15s to tolerate transient network delays through Fly's UDP proxy.
+const SEND_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Parser)]
 #[command(name = "ghostcam-camera")]
