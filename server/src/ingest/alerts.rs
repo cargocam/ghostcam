@@ -87,7 +87,13 @@ pub async fn complete_segment_upload(slot: &Arc<IngestSlot>, segment_id: &str, d
     }
 
     // Store as buffered
-    segments.insert(segment_id.to_string(), SegmentState::Buffered { data });
+    segments.insert(
+        segment_id.to_string(),
+        SegmentState::Buffered {
+            data,
+            buffered_at: std::time::Instant::now(),
+        },
+    );
 }
 
 #[cfg(test)]

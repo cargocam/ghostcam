@@ -25,8 +25,11 @@ pub enum SegmentState {
     Uploading {
         waiters: Vec<oneshot::Sender<Result<Bytes>>>,
     },
-    /// Upload complete. Data buffered for a TTL period.
-    Buffered { data: Bytes },
+    /// Upload complete. Data buffered with a timestamp for eviction.
+    Buffered {
+        data: Bytes,
+        buffered_at: std::time::Instant,
+    },
 }
 
 /// Represents a connected camera's server-side state.
@@ -152,6 +155,34 @@ impl IngestSlot {
                 cancel.clone(),
             ));
 
+            // Segment eviction: remove buffered segments older than 60s
+            let evict_segments = slot_clone.segments.clone();
+            let evict_cancel = cancel.clone();
+            let evict_task = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+                loop {
+                    tokio::select! {
+                        _ = evict_cancel.cancelled() => break,
+                        _ = interval.tick() => {
+                            let mut segments = evict_segments.write().await;
+                            let before = segments.len();
+                            segments.retain(|_, state| {
+                                match state {
+                                    SegmentState::Buffered { buffered_at, .. } => {
+                                        buffered_at.elapsed().as_secs() < 60
+                                    }
+                                    _ => true, // keep Uploading states
+                                }
+                            });
+                            let evicted = before - segments.len();
+                            if evicted > 0 {
+                                tracing::debug!(evicted, remaining = segments.len(), "evicted stale segments");
+                            }
+                        }
+                    }
+                }
+            });
+
             // Wait for any task to complete or cancellation
             tokio::select! {
                 _ = cancel.cancelled() => {}
@@ -159,6 +190,7 @@ impl IngestSlot {
                 r = telemetry_task => { tracing::debug!(device_id = %slot_clone.device_id, "telemetry reader finished: {:?}", r); }
                 r = command_task => { tracing::debug!(device_id = %slot_clone.device_id, "command writer finished: {:?}", r); }
                 r = stream_task => { tracing::debug!(device_id = %slot_clone.device_id, "stream acceptor finished: {:?}", r); }
+                _ = evict_task => { tracing::debug!(device_id = %slot_clone.device_id, "segment eviction finished"); }
             }
 
             // Cancel all remaining tasks

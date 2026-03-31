@@ -9,8 +9,10 @@ pub const QUIC_PORT: u16 = 4433;
 pub const HTTP_PORT: u16 = 3000;
 
 /// Broadcast channel capacity for frame distribution.
-/// At 30fps video, 2048 frames ≈ 68 seconds of buffer before lagging.
-pub const BROADCAST_CAPACITY: usize = 2048;
+/// At 30fps video, 128 frames ≈ 4 seconds of buffer before lagging.
+/// Lagging viewers drop frames and catch up — this is intentional for
+/// live surveillance (prefer low latency over lossless delivery).
+pub const BROADCAST_CAPACITY: usize = 128;
 
 /// Maximum length-prefixed frame size (4 MB).
 pub const MAX_FRAME_SIZE: u32 = 4 * 1024 * 1024;
