@@ -9,7 +9,7 @@
 
 set -euo pipefail
 
-REPO="cargocam/ghostcam"
+REPO="cargocam/ghostcam-firmware"
 VERSION="${VERSION:-latest}"
 DATA_DIR="/var/ghostcam"
 CONFIG_DIR="/etc/ghostcam"

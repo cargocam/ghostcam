@@ -168,7 +168,7 @@ jobs:
           merge-multiple: true
       - name: Generate checksums
         run: sha256sum ghostcam-camera-* ghostcam-*.img.xz > checksums.txt 2>/dev/null || sha256sum ghostcam-camera-* > checksums.txt
-      - name: Create GitHub Release
+      - name: Create GitHub Release (private repo)
         uses: softprops/action-gh-release@v2
         with:
           files: |
@@ -178,3 +178,29 @@ jobs:
             ghostcam-*.img.xz
             checksums.txt
           generate_release_notes: true
+      - name: Publish firmware to public repo
+        env:
+          GH_TOKEN: ${{ secrets.FIRMWARE_RELEASE_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          # Create release in public repo (or update if exists)
+          gh release create "$TAG" \
+            --repo cargocam/ghostcam-firmware \
+            --title "Ghostcam Camera Firmware $TAG" \
+            --notes "Camera firmware release $TAG. Install on Raspberry Pi OS Lite (64-bit):
+
+          \`\`\`bash
+          curl -sSL https://raw.githubusercontent.com/cargocam/ghostcam-firmware/main/install.sh | sudo VERSION=$TAG bash
+          \`\`\`" \
+            ghostcam-camera-aarch64 \
+            ghostcam-camera-x86_64 \
+            ghostcam-camera_*.deb \
+            checksums.txt \
+            2>/dev/null || \
+          gh release upload "$TAG" \
+            --repo cargocam/ghostcam-firmware \
+            --clobber \
+            ghostcam-camera-aarch64 \
+            ghostcam-camera-x86_64 \
+            ghostcam-camera_*.deb \
+            checksums.txt
