@@ -158,7 +158,9 @@ jobs:
           path: ghostcam-${{ matrix.device }}-*.img.xz
 
   release:
-    needs: [build-camera, build-camera-deb, build-docker, build-pi-image]
+    needs: [build-camera, build-camera-deb, build-docker]
+    # Pi image build is best-effort — don't block the release
+    if: always() && needs.build-camera.result == 'success' && needs.build-camera-deb.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
