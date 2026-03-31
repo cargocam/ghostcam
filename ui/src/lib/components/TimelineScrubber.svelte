@@ -5,23 +5,33 @@
 	let trackEl = $state<HTMLDivElement | undefined>(undefined);
 	let dragging = $state(false);
 
-	// Display window: last 2 hours
-	let windowDuration = 2 * 60 * 60; // 2 hours in seconds
+	// Display window: fit to available footage with a small margin,
+	// minimum 5 minutes so the timeline isn't too compressed.
+	const MIN_WINDOW_SECS = 5 * 60;
+	const MARGIN_SECS = 30; // padding on each side
 
 	// Freeze the window end when entering playback so ticks don't shift
 	let frozenWindowEnd = $state(Date.now() / 1000);
 
 	$effect(() => {
 		if (scrubberStore.mode === 'live') {
-			// In live mode, continuously update the frozen end to "now"
 			frozenWindowEnd = scrubberStore.playheadTime;
 		}
 	});
 
-	let windowEnd = $derived(frozenWindowEnd);
-	let windowStart = $derived(
-		scrubberStore.availableWindow?.start ?? windowEnd - windowDuration,
-	);
+	let windowEnd = $derived(frozenWindowEnd + MARGIN_SECS);
+	let windowStart = $derived.by(() => {
+		const avail = scrubberStore.availableWindow;
+		if (avail) {
+			// Fit to available footage with minimum width
+			const availDuration = windowEnd - avail.start;
+			if (availDuration < MIN_WINDOW_SECS) {
+				return windowEnd - MIN_WINDOW_SECS;
+			}
+			return avail.start - MARGIN_SECS;
+		}
+		return windowEnd - MIN_WINDOW_SECS;
+	});
 
 	let playheadPercent = $derived.by(() => {
 		const range = windowEnd - windowStart;
