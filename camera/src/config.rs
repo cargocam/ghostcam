@@ -117,7 +117,9 @@ impl CameraConfig {
             match env_opt("GHOSTCAM_VIDEO_PROFILE").as_deref() {
                 Some("zero2w" | "480p") => {
                     tracing::info!(profile = "zero2w/480p", "applying video profile");
-                    (Some(854u32), Some(480u32), Some(1_000_000u32), Some(30u32))
+                    // 750kbps leaves headroom for QUIC overhead, audio, telemetry,
+                    // and manifest pushes within the Pi Zero 2W's ~1.2Mbps WiFi upload
+                    (Some(854u32), Some(480u32), Some(750_000u32), Some(30u32))
                 }
                 Some("pi4" | "720p") => {
                     tracing::info!(profile = "pi4/720p", "applying video profile");
