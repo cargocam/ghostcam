@@ -1,18 +1,31 @@
 use super::ring_buffer::SegmentInfo;
 
+/// Maximum segments to include in the HLS manifest.
+/// The full ring buffer may contain thousands of segments; the manifest only
+/// needs the most recent ones for live playback. The coverage API provides
+/// the complete segment list for the timeline scrubber.
+const MAX_MANIFEST_SEGMENTS: usize = 120; // ~10 minutes at 5s segments
+
 /// Generate an HLS v7 manifest from the current ring buffer contents.
+/// Only includes the most recent `MAX_MANIFEST_SEGMENTS` to keep the
+/// manifest small (~12KB instead of ~400KB).
 pub fn generate_manifest(segments: &[SegmentInfo]) -> String {
+    let recent = if segments.len() > MAX_MANIFEST_SEGMENTS {
+        &segments[segments.len() - MAX_MANIFEST_SEGMENTS..]
+    } else {
+        segments
+    };
+
     let mut m = String::new();
-    let init_version = segments.last().map(|s| s.start_ts).unwrap_or(0);
+    let init_version = recent.last().map(|s| s.start_ts).unwrap_or(0);
     m.push_str("#EXTM3U\n");
     m.push_str("#EXT-X-VERSION:7\n");
     m.push_str("#EXT-X-TARGETDURATION:10\n");
     m.push_str(&format!("#EXT-X-MAP:URI=\"init.mp4?v={init_version}\"\n"));
 
-    for seg in segments {
+    for seg in recent {
         let duration = (seg.end_ts - seg.start_ts) as f64 / 1000.0;
         m.push_str(&format!("#EXTINF:{:.1},\n", duration));
-        // Force explicit relative URI so segment IDs containing ':' are not parsed as URL schemes.
         m.push_str(&format!("./{}.m4s\n", seg.segment_id));
     }
 
