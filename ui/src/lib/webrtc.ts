@@ -35,7 +35,6 @@ export class CameraConnection {
 	private callbacks: CameraCallbacks;
 	private commandsChannel: RTCDataChannel | null = null;
 	private disconnectFired = false;
-	private latencyWatchdog: ReturnType<typeof setInterval> | null = null;
 
 	constructor(deviceId: string, callbacks: CameraCallbacks) {
 		this.deviceId = deviceId;
@@ -59,17 +58,6 @@ export class CameraConnection {
 	private setupTrackHandler() {
 		this.pc.ontrack = (event) => {
 			const stream = event.streams[0] ?? new MediaStream([event.track]);
-
-			// Minimize playout delay for low-latency live streaming.
-			// playoutDelayHint tells the browser to reduce its jitter buffer.
-			const receiver = event.receiver;
-			if (receiver && 'playoutDelayHint' in receiver) {
-				(receiver as any).playoutDelayHint = 0;
-			}
-			// jitterBufferTarget (newer API) — set to 0 for minimum buffering.
-			if (receiver && 'jitterBufferTarget' in receiver) {
-				(receiver as any).jitterBufferTarget = 0;
-			}
 
 			if (event.track.kind === 'video') {
 				this.callbacks.onVideoTrack(stream);
@@ -157,40 +145,9 @@ export class CameraConnection {
 			sdp: fixedSdp,
 		});
 
-		this.startLatencyWatchdog();
-	}
-
-	/** Start a latency watchdog that monitors jitter buffer delay.
-	 *  If the delay exceeds the threshold, triggers a reconnect. */
-	startLatencyWatchdog() {
-		this.latencyWatchdog = setInterval(async () => {
-			try {
-				const stats = await this.pc.getStats();
-				for (const [, report] of stats) {
-					if (report.type === 'inbound-rtp' && report.kind === 'video') {
-						const delay = report.jitterBufferDelay;
-						const emitted = report.jitterBufferEmittedCount;
-						if (delay && emitted && emitted > 0) {
-							const avgDelayMs = (delay / emitted) * 1000;
-							if (avgDelayMs > 5000) {
-								console.warn(`WebRTC latency too high (${Math.round(avgDelayMs)}ms), reconnecting`);
-								this.callbacks.onDisconnect?.();
-								return;
-							}
-						}
-					}
-				}
-			} catch {
-				// Stats not available, ignore
-			}
-		}, 5000);
 	}
 
 	async disconnect(): Promise<void> {
-		if (this.latencyWatchdog) {
-			clearInterval(this.latencyWatchdog);
-			this.latencyWatchdog = null;
-		}
 		if (this.sessionId) {
 			await unwatchCamera(this.sessionId).catch(() => {});
 			this.sessionId = null;
