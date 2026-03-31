@@ -10,10 +10,11 @@ const MAX_MANIFEST_SEGMENTS: usize = 120; // ~10 minutes at 5s segments
 /// Only includes the most recent `MAX_MANIFEST_SEGMENTS` to keep the
 /// manifest small (~12KB instead of ~400KB).
 pub fn generate_manifest(segments: &[SegmentInfo]) -> String {
-    let recent = if segments.len() > MAX_MANIFEST_SEGMENTS {
-        &segments[segments.len() - MAX_MANIFEST_SEGMENTS..]
+    let (recent, media_sequence) = if segments.len() > MAX_MANIFEST_SEGMENTS {
+        let offset = segments.len() - MAX_MANIFEST_SEGMENTS;
+        (&segments[offset..], offset)
     } else {
-        segments
+        (segments, 0)
     };
 
     let mut m = String::new();
@@ -21,6 +22,7 @@ pub fn generate_manifest(segments: &[SegmentInfo]) -> String {
     m.push_str("#EXTM3U\n");
     m.push_str("#EXT-X-VERSION:7\n");
     m.push_str("#EXT-X-TARGETDURATION:10\n");
+    m.push_str(&format!("#EXT-X-MEDIA-SEQUENCE:{media_sequence}\n"));
     m.push_str(&format!("#EXT-X-MAP:URI=\"init.mp4?v={init_version}\"\n"));
 
     for seg in recent {
