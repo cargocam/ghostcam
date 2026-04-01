@@ -1,0 +1,72 @@
+name: ghostcam
+
+packages:
+  # Camera
+  - rpicam-apps
+  # Audio (INMP441 I2S mic)
+  - libasound2
+  - alsa-utils
+  # GPS
+  - gpsd
+  - gpsd-clients
+  # Cellular modem
+  - modemmanager
+  - network-manager
+  - libqmi-utils
+  - usb-modeswitch
+  # Remote access
+  - openssh-server
+  # Utilities
+  - jq
+  - curl
+  - htop
+
+config_txt_append:
+  - camera_auto_detect=1
+  - dtparam=i2s=on
+  - dtoverlay=googlevoicehat-soundcard
+  - enable_uart=1
+  - gpu_mem=128
+
+customize-hooks:
+  # Create ghostcam directories
+  - chroot "$ROOTFS_DIR" mkdir -p /var/ghostcam /etc/ghostcam
+  - chroot "$ROOTFS_DIR" chown 1000:1000 /var/ghostcam
+
+  # Install ghostcam .deb package (camera binary)
+  - cp pkgs/ghostcam-camera_*.deb "$ROOTFS_DIR/tmp/"
+  - chroot "$ROOTFS_DIR" dpkg -i /tmp/ghostcam-camera_*.deb
+  - rm "$ROOTFS_DIR"/tmp/ghostcam-camera_*.deb
+
+  # Install systemd services
+  - cp files/ghostcam-camera.service "$ROOTFS_DIR/etc/systemd/system/"
+  - cp files/ghostcam-gps.service "$ROOTFS_DIR/etc/systemd/system/"
+
+  # Install GPS setup script
+  - cp files/ghostcam-enable-gps.sh "$ROOTFS_DIR/usr/local/bin/"
+  - chmod 755 "$ROOTFS_DIR/usr/local/bin/ghostcam-enable-gps.sh"
+
+  # Install gpsd config
+  - cp files/gpsd.conf "$ROOTFS_DIR/etc/default/gpsd"
+
+  # Install ALSA config for INMP441 I2S mic
+  - cp files/asound.conf "$ROOTFS_DIR/etc/asound.conf"
+
+  # Install NetworkManager configs
+  - mkdir -p "$ROOTFS_DIR/etc/NetworkManager/conf.d"
+  - cp files/no-connectivity-check.conf "$ROOTFS_DIR/etc/NetworkManager/conf.d/"
+  - mkdir -p "$ROOTFS_DIR/etc/NetworkManager/dispatcher.d"
+  - cp files/99-keep-cellular-route "$ROOTFS_DIR/etc/NetworkManager/dispatcher.d/"
+  - chmod 755 "$ROOTFS_DIR/etc/NetworkManager/dispatcher.d/99-keep-cellular-route"
+
+  # Install udev rules for SIM7600 modem
+  - cp files/99-sim7600.rules "$ROOTFS_DIR/etc/udev/rules.d/"
+
+  # Install default environment file
+  - cp files/ghostcam.env "$ROOTFS_DIR/etc/ghostcam/env"
+
+  # Enable services
+  - chroot "$ROOTFS_DIR" systemctl enable ssh.service
+  - chroot "$ROOTFS_DIR" systemctl enable ghostcam-camera.service
+  - chroot "$ROOTFS_DIR" systemctl enable ghostcam-gps.service
+  - chroot "$ROOTFS_DIR" systemctl enable gpsd.service
