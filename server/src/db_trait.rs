@@ -104,6 +104,30 @@ pub struct AuditLogRecord {
     pub hmac: String,
 }
 
+/// A segment metadata record.
+#[derive(Debug, Clone)]
+pub struct SegmentRecord {
+    pub segment_id: String,
+    pub device_id: DeviceId,
+    pub s3_key: String,
+    pub start_ts: u64,
+    pub end_ts: u64,
+    pub size_bytes: u64,
+    pub resolution: String,
+    pub created_at: u64,
+}
+
+/// A provision token record.
+#[derive(Debug, Clone)]
+pub struct ProvisionTokenRecord {
+    pub token_hash: String,
+    pub user_id: UserId,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub claimed_at: Option<u64>,
+    pub device_id: Option<DeviceId>,
+}
+
 /// A subscription record from the database.
 #[derive(Debug, Clone)]
 pub struct SubscriptionRecord {
@@ -217,6 +241,55 @@ pub trait Database: Send + Sync + 'static {
     async fn upsert_subscription(&self, record: &SubscriptionRecord) -> Result<()>;
     async fn get_camera_count(&self, user_id: &UserId) -> Result<i64>;
     async fn list_past_due_expired(&self, now: u64) -> Result<Vec<SubscriptionRecord>>;
+
+    // --- Segments (HLS/S3) ---
+    async fn insert_segments(&self, segments: &[SegmentRecord]) -> Result<()>;
+    async fn list_segments(
+        &self,
+        device_id: &DeviceId,
+        from_ts: u64,
+        to_ts: u64,
+    ) -> Result<Vec<SegmentRecord>>;
+    /// Get the latest segment for a device (for live manifest generation).
+    async fn latest_segment(&self, device_id: &DeviceId) -> Result<Option<SegmentRecord>>;
+
+    // --- Provisioned camera creation ---
+    /// Create a camera via provisioning (with user_id and device_serial set).
+    async fn create_provisioned_camera(
+        &self,
+        device_id: &DeviceId,
+        user_id: &UserId,
+        device_serial: &str,
+    ) -> Result<()>;
+
+    // --- Camera API keys ---
+    /// Look up a camera by its API key hash. Returns (device_id, user_id).
+    async fn get_camera_by_api_key(&self, api_key_hash: &str) -> Result<Option<CameraRecord>>;
+    async fn create_camera_api_key(&self, device_id: &DeviceId, api_key_hash: &str) -> Result<()>;
+
+    // --- Provision tokens ---
+    async fn create_provision_token(
+        &self,
+        token_hash: &str,
+        user_id: &UserId,
+        expires_at: u64,
+    ) -> Result<()>;
+    /// Claim a provision token. Returns the user_id if valid and unclaimed.
+    async fn claim_provision_token(
+        &self,
+        token_hash: &str,
+        device_id: &DeviceId,
+    ) -> Result<Option<UserId>>;
+
+    // --- Camera commands ---
+    /// Queue a command for a camera to pick up on next telemetry poll.
+    async fn enqueue_command(
+        &self,
+        device_id: &DeviceId,
+        command: &serde_json::Value,
+    ) -> Result<()>;
+    /// Claim and return all pending commands for a camera.
+    async fn claim_commands(&self, device_id: &DeviceId) -> Result<Vec<serde_json::Value>>;
 
     // --- Stripe idempotency ---
     async fn try_claim_stripe_event(&self, event_id: &str) -> Result<bool>;

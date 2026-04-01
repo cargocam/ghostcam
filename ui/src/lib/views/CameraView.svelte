@@ -2,7 +2,7 @@
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { cameraConfigStore } from '$lib/stores/cameraConfig.svelte.js';
-	import VideoPlayer from '$lib/components/VideoPlayer.svelte';
+	import HlsPlayer from '$lib/components/HlsPlayer.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { ArrowLeft, Maximize, Minimize, Volume2, VolumeOff, Camera, PictureInPicture2 } from 'lucide-svelte';
 	import { cn } from '$lib/utils.js';
@@ -104,7 +104,7 @@
 		onclick={resetOverlayTimer}
 	>
 		<div class="absolute inset-0">
-			<VideoPlayer deviceId={cameraId} bind:videoElement muted={isMuted} />
+			<HlsPlayer src={`/hls/${encodeURIComponent(cameraId)}/playlist.m3u8`} muted={isMuted} />
 		</div>
 
 		<!-- Top overlay -->

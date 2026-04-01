@@ -8,11 +8,6 @@ anyhow = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 rmp-serde = { workspace = true }
-rcgen = { workspace = true }
-rustls = { workspace = true }
-ring = { workspace = true }
-x509-parser = { workspace = true }
-pem = { workspace = true }
 tokio = { workspace = true }
 bytes = { workspace = true }
 thiserror = { workspace = true }

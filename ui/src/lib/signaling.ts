@@ -13,11 +13,6 @@ interface CoverageResponse {
 
 const API_BASE = '/api/v1';
 
-interface WatchResponse {
-	session_id: string;
-	sdp_answer: string;
-}
-
 export interface TelemetryEntry {
 	ts: number;
 	server_ts: number;
@@ -45,30 +40,6 @@ function headers(): HeadersInit {
 	};
 }
 
-export async function watchCamera(
-	deviceId: string,
-	sdpOffer: string,
-): Promise<WatchResponse> {
-	const res = await fetch(`${API_BASE}/watch`, {
-		method: 'POST',
-		headers: headers(),
-		body: JSON.stringify({ device_id: deviceId, sdp_offer: sdpOffer }),
-		credentials: 'include',
-	});
-	if (!res.ok) {
-		throw new Error(`Watch failed: ${res.status} ${await res.text()}`);
-	}
-	return res.json();
-}
-
-export async function unwatchCamera(sessionId: string): Promise<void> {
-	await fetch(`${API_BASE}/session/${sessionId}`, {
-		method: 'DELETE',
-		headers: headers(),
-		credentials: 'include',
-	});
-}
-
 export async function listCameras(): Promise<CameraInfo[]> {
 	const res = await fetch(`${API_BASE}/cameras`, {
 		credentials: 'include',
@@ -90,27 +61,6 @@ export async function fetchCoverage(deviceId: string): Promise<CoverageResponse>
 		credentials: 'include',
 	});
 	if (!res.ok) throw new Error(`fetchCoverage failed: ${res.status}`);
-	return res.json();
-}
-
-// --- Cache Status ---
-
-export interface CacheStatusSegment {
-	id: string;
-	start_ms: number;
-	end_ms: number;
-	state: 'cached' | 'uploading' | 'available';
-}
-
-interface CacheStatusResponse {
-	segments: CacheStatusSegment[];
-}
-
-export async function fetchCacheStatus(deviceId: string): Promise<CacheStatusResponse> {
-	const res = await fetch(`/hls/${encodeURIComponent(deviceId)}/cache-status`, {
-		credentials: 'include',
-	});
-	if (!res.ok) throw new Error(`fetchCacheStatus failed: ${res.status}`);
 	return res.json();
 }
 
@@ -137,26 +87,6 @@ export async function createPortal(returnUrl: string): Promise<{ url: string }> 
 	});
 	if (!res.ok) throw new Error(`createPortal failed: ${res.status}`);
 	return res.json();
-}
-
-// --- HLS Prefetch ---
-
-/** Hint the server to pre-fetch segments covering a time range (best-effort, fire-and-forget). */
-export async function sendPrefetchHint(
-	deviceId: string,
-	fromMs: number,
-	toMs: number,
-): Promise<void> {
-	try {
-		await fetch(`/hls/${encodeURIComponent(deviceId)}/prefetch`, {
-			method: 'POST',
-			headers: headers(),
-			body: JSON.stringify({ from_ms: Math.floor(fromMs), to_ms: Math.floor(toMs) }),
-			credentials: 'include',
-		});
-	} catch {
-		// Best-effort — silently ignore failures
-	}
 }
 
 // --- Enrollment QR ---

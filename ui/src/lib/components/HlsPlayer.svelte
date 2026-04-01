@@ -31,37 +31,44 @@
 	let lastRebuildAtMs = $state<number>(0);
 	let lastSeekInput = $state<number | null>(null);
 	type ManifestLike = {
-		fragments: Array<{ relurl?: string; url?: string; duration?: number; start?: number }>;
+		fragments: Array<{
+			relurl?: string;
+			url?: string;
+			duration?: number;
+			start?: number;
+			programDateTime?: number | null;
+		}>;
 	};
-
-	function parseSegmentEpochSec(fragment: { relurl?: string; url?: string }): number | null {
-		const source = fragment.relurl ?? fragment.url;
-		if (!source) return null;
-		const m = source.match(/:(\d+)\.m4s$/);
-		if (!m) return null;
-		const ms = Number(m[1]);
-		if (!Number.isFinite(ms)) return null;
-		return ms / 1000;
-	}
 
 	function updateManifestWindow(details: ManifestLike | undefined) {
 		if (!details || details.fragments.length === 0) return;
 		const frags = details.fragments;
+		const firstFrag = frags[0];
 		const lastFrag = frags[frags.length - 1];
-		const lastEpoch = parseSegmentEpochSec(lastFrag);
-		if (lastEpoch == null) return;
+
+		// Use #EXT-X-PROGRAM-DATE-TIME if available (epoch ms from server).
+		// hls.js parses these into fragment.programDateTime (ms since epoch).
+		const firstPdt = firstFrag.programDateTime;
+		const lastPdt = lastFrag.programDateTime;
+
+		if (firstPdt != null && lastPdt != null) {
+			const start = firstPdt / 1000;
+			const end = (lastPdt / 1000) + (lastFrag.duration ?? 0);
+			manifestEpochStart = start;
+			manifestEpochEnd = end;
+			onManifestParsed?.({ startTime: start, endTime: end });
+			return;
+		}
+
+		// Fallback: derive from first fragment's media start offset
 		const lastStart = lastFrag.start ?? 0;
 		const lastDuration = lastFrag.duration ?? 0;
-		// Derive epoch baseline from the last fragment's media timeline offset.
-		// This stays correct even when hls.js presents a sliding subset of fragments.
-		const start = lastEpoch - lastStart;
-		const end = start + lastStart + lastDuration;
-		manifestEpochStart = start;
-		manifestEpochEnd = end;
-		onManifestParsed?.({
-			startTime: start,
-			endTime: end,
-		});
+		const end = lastStart + lastDuration;
+		// Without PDT, epoch start is unknown — approximate from current time
+		const now = Date.now() / 1000;
+		manifestEpochStart = now - end;
+		manifestEpochEnd = now;
+		onManifestParsed?.({ startTime: now - end, endTime: now });
 	}
 
 	$effect(() => {

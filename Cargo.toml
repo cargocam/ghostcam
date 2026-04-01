@@ -14,6 +14,7 @@ rmp-serde = "1"
 rcgen = { version = "0.13", features = ["pem", "x509-parser"] }
 rustls = { version = "0.23", features = ["ring", "std"], default-features = false }
 ring = "0.17"
+sha2 = "0.10"
 x509-parser = "0.16"
 jsonwebtoken = "9"
 pem = "3"
@@ -65,6 +66,14 @@ governor = "0.10"
 
 # Stripe
 async-stripe = { version = "0.39", features = ["runtime-tokio-hyper", "checkout", "webhook-events", "connect"], default-features = false }
+
+# S3 / Tigris
+aws-config = "1"
+aws-sdk-s3 = { version = "1", features = ["behavior-version-latest"] }
+aws-smithy-types = "1"
+
+# HTTP client (camera)
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
 
 # Utilities
 bytes = "1"

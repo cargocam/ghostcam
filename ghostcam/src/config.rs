@@ -23,8 +23,8 @@ pub const KEEPALIVE_INTERVAL_SECS: u64 = 15;
 /// Disconnect timeout (no keepalive received).
 pub const DISCONNECT_TIMEOUT_SECS: u64 = 30;
 
-/// Telemetry polling interval on camera.
-pub const TELEMETRY_POLL_INTERVAL_SECS: u64 = 2;
+/// Telemetry sensor sampling interval on camera (internal).
+pub const TELEMETRY_SAMPLE_INTERVAL_SECS: u64 = 2;
 
 /// Full telemetry heartbeat interval.
 pub const TELEMETRY_HEARTBEAT_INTERVAL_SECS: u64 = 30;
@@ -33,10 +33,25 @@ pub const TELEMETRY_HEARTBEAT_INTERVAL_SECS: u64 = 30;
 pub const TELEMETRY_BUFFER_CAP: usize = 100_000;
 
 /// fMP4 segment duration.
-pub const SEGMENT_DURATION_SECS: u64 = 5;
+pub const SEGMENT_DURATION_SECS: u64 = 6;
 
 /// Segment coalescing buffer TTL.
 pub const SEGMENT_BUFFER_TTL_SECS: u64 = 60;
+
+/// Camera telemetry HTTP poll interval.
+pub const TELEMETRY_POLL_INTERVAL_SECS: u64 = 10;
+
+/// Presigned URL default TTL (seconds).
+pub const PRESIGN_TTL_SECS: u64 = 3600;
+
+/// Presigned URL batch size limit.
+pub const PRESIGN_BATCH_MAX: u32 = 30;
+
+/// Provision token default TTL (seconds). 24 hours.
+pub const PROVISION_TOKEN_TTL_SECS: u64 = 24 * 60 * 60;
+
+/// Camera considered offline after this many seconds without a telemetry poll.
+pub const CAMERA_OFFLINE_THRESHOLD_SECS: u64 = 30;
 
 /// Enrollment token lifetime.
 pub const ENROLLMENT_TOKEN_TTL_SECS: u64 = 600;

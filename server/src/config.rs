@@ -24,6 +24,11 @@ pub struct ServerConfig {
     pub stripe_webhook_secret: Option<String>,
     pub stripe_pricing_table_id: Option<String>,
     pub stripe_portal_config_id: Option<String>,
+    // S3 / Tigris object storage
+    pub s3_bucket: String,
+    pub s3_region: String,
+    pub s3_endpoint: Option<String>,
+    pub s3_presign_ttl_secs: u64,
     // Firmware releases (all optional — no repo = firmware endpoint returns null)
     pub release_repo: Option<String>,
     pub github_webhook_secret: Option<String>,
@@ -111,6 +116,17 @@ impl ServerConfig {
         let stripe_pricing_table_id = env_opt("STRIPE_PRICING_TABLE_ID");
         let stripe_portal_config_id = env_opt("STRIPE_PORTAL_CONFIG_ID");
 
+        // S3 / Tigris
+        let s3_bucket = env_opt("GHOSTCAM_S3_BUCKET")
+            .unwrap_or_else(|| "ghostcam-segments".to_string());
+        let s3_region = env_opt("GHOSTCAM_S3_REGION")
+            .unwrap_or_else(|| "auto".to_string());
+        let s3_endpoint = env_opt("GHOSTCAM_S3_ENDPOINT");
+        let s3_presign_ttl_secs: u64 = env_or(
+            "GHOSTCAM_S3_PRESIGN_TTL_SECS",
+            ghostcam::config::PRESIGN_TTL_SECS,
+        );
+
         // Firmware release config
         let release_repo = env_opt("GHOSTCAM_RELEASE_REPO");
         let github_webhook_secret = env_opt("GITHUB_WEBHOOK_SECRET");
@@ -129,6 +145,10 @@ impl ServerConfig {
             enrollment_addr,
             admin_email,
             admin_password,
+            s3_bucket,
+            s3_region,
+            s3_endpoint,
+            s3_presign_ttl_secs,
             stripe_secret_key,
             stripe_public_key,
             stripe_webhook_secret,
@@ -245,6 +265,10 @@ mod tests {
             enrollment_addr: None,
             admin_email: "admin@localhost".to_string(),
             admin_password: None,
+            s3_bucket: "test-bucket".to_string(),
+            s3_region: "auto".to_string(),
+            s3_endpoint: None,
+            s3_presign_ttl_secs: 3600,
             stripe_secret_key: None,
             stripe_public_key: None,
             stripe_webhook_secret: None,
@@ -270,6 +294,10 @@ mod tests {
             enrollment_addr: Some("server:4433".to_string()),
             admin_email: "admin@localhost".to_string(),
             admin_password: None,
+            s3_bucket: "test-bucket".to_string(),
+            s3_region: "auto".to_string(),
+            s3_endpoint: None,
+            s3_presign_ttl_secs: 3600,
             stripe_secret_key: None,
             stripe_public_key: None,
             stripe_webhook_secret: None,

@@ -1,16 +1,9 @@
-import { sendPrefetchHint } from '$lib/signaling.js';
-import type { CacheStatusSegment } from '$lib/signaling.js';
 import { cameraStore } from '$lib/stores/cameras.svelte.js';
 
 type ScrubberMode = 'live' | 'playback';
 type ModeChangeCallback = (mode: ScrubberMode, playheadTime: number) => void;
 
 export type SegmentCacheState = 'cached' | 'uploading' | 'available';
-
-/** Prefetch window: request segments covering 30s ahead of the scrub position. */
-const PREFETCH_WINDOW_MS = 30_000;
-/** Debounce delay for prefetch hints (ms). */
-const PREFETCH_DEBOUNCE_MS = 500;
 
 class ScrubberStore {
 	mode = $state<ScrubberMode>('live');
@@ -25,7 +18,6 @@ class ScrubberStore {
 
 	private animationFrame: number | null = null;
 	private modeChangeCallbacks: ModeChangeCallback[] = [];
-	private prefetchTimer: ReturnType<typeof setTimeout> | null = null;
 
 	/** Register a callback for mode changes (live↔playback). */
 	onModeChange(cb: ModeChangeCallback) {
@@ -62,22 +54,8 @@ class ScrubberStore {
 		this.debouncePrefetch(time);
 	}
 
-	/** Send a debounced prefetch hint for all online cameras at the given time. */
-	private debouncePrefetch(timeSec: number) {
-		if (this.prefetchTimer != null) {
-			clearTimeout(this.prefetchTimer);
-		}
-		this.prefetchTimer = setTimeout(() => {
-			this.prefetchTimer = null;
-			const fromMs = timeSec * 1000;
-			const toMs = fromMs + PREFETCH_WINDOW_MS;
-			for (const cam of cameraStore.cameras) {
-				if (cam.online) {
-					sendPrefetchHint(cam.device_id, fromMs, toMs);
-				}
-			}
-		}, PREFETCH_DEBOUNCE_MS);
-	}
+	/** No-op: segments are served directly from S3, no prefetch needed. */
+	private debouncePrefetch(_timeSec: number) {}
 
 	/** Called by the HLS player to report actual playback position.
 	 *  This drives the timeline in playback mode instead of wall-clock time. */
@@ -133,12 +111,12 @@ class ScrubberStore {
 		this.cameraCoverage = new Map(this.cameraCoverage).set(deviceId, merged);
 	}
 
-	/** Update per-segment cache states from the cache-status API. */
-	setCameraSegmentStates(deviceId: string, segments: CacheStatusSegment[]) {
+	/** Update per-segment cache states. All S3 segments are "available". */
+	setCameraSegmentStates(deviceId: string, segments: { start_ms: number; end_ms: number }[]) {
 		const mapped = segments.map((s) => ({
 			start: s.start_ms / 1000,
 			end: s.end_ms / 1000,
-			state: s.state,
+			state: 'available' as SegmentCacheState,
 		}));
 		this.cameraSegmentStates = new Map(this.cameraSegmentStates).set(deviceId, mapped);
 	}

@@ -1,8 +1,6 @@
 pub mod connection;
 pub mod firmware;
-pub mod manifest;
 pub mod purge;
-pub mod revocation;
 pub mod telemetry;
 pub mod telemetry_api;
 pub mod telemetry_query;

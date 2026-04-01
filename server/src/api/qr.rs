@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -27,15 +28,13 @@ pub struct QrRequest {
 
 /// POST /api/v1/cameras/enroll/qr
 ///
-/// Generates a stateless claim JWT with the user's ID embedded as `sub`,
-/// and returns a QR code SVG containing the token, server address, and
-/// optional WiFi credentials.
-///
-/// The token is multi-use: any number of unclaimed cameras can scan it.
-/// No database write is needed.
+/// Generates a one-time provision token, stores its HMAC hash in the database,
+/// and returns a QR code SVG containing the raw token, server URL, and optional
+/// WiFi credentials.
 pub async fn enrollment_qr(
     State(state): State<Arc<AppState>>,
     Extension(user): Extension<AuthUser>,
+    axum::extract::Host(host): axum::extract::Host,
     body: Option<Json<QrRequest>>,
 ) -> Response {
     let body = body.map(|Json(b)| b);
@@ -47,21 +46,24 @@ pub async fn enrollment_qr(
         .clamp(1, MAX_TTL_HOURS);
     let ttl_secs = ttl_hours * 3600;
 
-    // Generate stateless claim JWT with sub = user_id
-    let claims = crate::pki::enrollment::EnrollmentClaims::new_claim(
-        &state.enrollment_addr,
-        &user.user_id.0,
-        ttl_secs,
-    );
+    // Generate a one-time provision token
+    let raw_token = crate::auth::generate_random_password();
+    let token_hash = crate::auth::hmac_token(&raw_token, &state.hmac_secret);
 
-    // Sign the JWT
-    let jwt = match state.ca.sign_enrollment_jwt(&claims) {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::error!("failed to sign enrollment JWT: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let expires_at = now + ttl_secs;
+
+    if let Err(e) = state
+        .db
+        .create_provision_token(&token_hash, &user.user_id, expires_at)
+        .await
+    {
+        tracing::error!("failed to create provision token: {e}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
 
     // Build QR payload
     let mut payload = serde_json::Map::new();
@@ -78,14 +80,12 @@ pub async fn enrollment_qr(
         }
     }
 
-    // Server address (includes port for non-standard deployments)
-    payload.insert(
-        "s".into(),
-        serde_json::Value::String(state.enrollment_addr.clone()),
-    );
+    // Server URL derived from the request Host header
+    let server_url = format!("https://{host}");
+    payload.insert("s".into(), serde_json::Value::String(server_url));
 
-    // Claim token
-    payload.insert("t".into(), serde_json::Value::String(jwt));
+    // Provision token
+    payload.insert("t".into(), serde_json::Value::String(raw_token));
 
     let payload_str = serde_json::Value::Object(payload).to_string();
 
@@ -106,7 +106,7 @@ pub async fn enrollment_qr(
     state
         .audit
         .log(crate::audit::AuditEvent::EnrollmentStarted {
-            device_id: format!("qr-claim-{}", &claims.jti[..8]),
+            device_id: format!("qr-provision-{}", &token_hash[..8]),
             owner_id: user.user_id.0.clone(),
         });
 

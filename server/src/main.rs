@@ -5,13 +5,9 @@ mod billing;
 mod config;
 mod db;
 mod db_trait;
-mod egress;
 mod firmware;
-mod frames;
-mod ingest;
-mod pki;
 mod redis;
-mod sse;
+mod s3;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -21,16 +17,8 @@ use crate::api::state::AppState;
 use crate::config::ServerConfig;
 use crate::db::PostgresDatabase;
 use crate::db_trait::Database;
-use crate::egress::sessions::SessionManager;
-use crate::egress::udp::SharedWebRtcSocket;
-use crate::ingest::accept::run_accept_loop;
-use crate::ingest::quic_config::build_server_endpoint;
-use crate::ingest::registry::RoutingRegistry;
-use crate::pki::bootstrap::bootstrap_pki;
-use crate::pki::revocation::RevocationCache;
 use crate::redis::connection::RedisManager;
 use crate::redis::telemetry::TelemetryBatcher;
-use crate::sse::SseEventBus;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -41,17 +29,7 @@ async fn main() -> anyhow::Result<()> {
 
     // --- Configuration ---
     let cfg = ServerConfig::load()?;
-
     std::fs::create_dir_all(&cfg.data_dir)?;
-
-    if let Some(ip) = cfg.public_ip {
-        tracing::info!(ip = %ip, "explicit public IP override");
-    } else {
-        tracing::info!(
-            "no GHOSTCAM_PUBLIC_IP set; ICE candidate IP will be derived from HTTP Host header"
-        );
-    }
-    let enrollment_addr = cfg.resolved_enrollment_addr();
 
     // --- Database ---
     let db = PostgresDatabase::connect(&cfg.database_url).await?;
@@ -69,42 +47,22 @@ async fn main() -> anyhow::Result<()> {
             println!("Log in and change this password.");
             println!();
         }
-        println!("IMPORTANT: Back up {}/ca.key", cfg.data_dir);
-        println!("Losing this file requires re-enrolling all cameras.");
         println!("============================================================");
     }
     let db: Arc<dyn Database> = Arc::new(db);
     tracing::info!("database connected");
 
-    // --- PKI ---
-    let pki = bootstrap_pki(std::path::Path::new(&cfg.data_dir)).await?;
-    let ca = Arc::new(pki.ca);
-    tracing::info!(fingerprint = %pki.server_tls.fingerprint, "PKI ready");
-
-    // --- Revocation cache (must be created before Redis so refresh task can use it) ---
-    let revocation_cache = Arc::new(RevocationCache::new());
-
     // --- Redis (optional) ---
     let cancel = CancellationToken::new();
-    let (redis, telemetry_batcher) = if let Some(url) = &cfg.redis_url {
+    let (redis, _telemetry_batcher) = if let Some(url) = &cfg.redis_url {
         let mgr = RedisManager::new(url, cancel.clone()).await;
         let batcher = Arc::new(TelemetryBatcher::spawn(mgr.clone(), cancel.clone()));
         crate::redis::purge::spawn_telemetry_purge(mgr.clone(), cancel.clone());
-        crate::redis::revocation::spawn_revocation_refresh(
-            mgr.clone(),
-            revocation_cache.clone(),
-            cancel.clone(),
-        );
         (Some(mgr), Some(batcher))
     } else {
         tracing::info!("redis not configured, telemetry history disabled");
         (None, None)
     };
-
-    // --- Shared WebRTC UDP socket ---
-    let webrtc_socket = SharedWebRtcSocket::bind(cfg.webrtc_port).await?;
-    webrtc_socket.clone().spawn_dispatch();
-    tracing::info!(port = cfg.webrtc_port, "WebRTC UDP listening");
 
     // --- Audit logger ---
     let audit_hmac_key =
@@ -139,16 +97,24 @@ async fn main() -> anyhow::Result<()> {
         billing::background::spawn_grace_period_check(db.clone(), audit.clone(), cancel.clone());
     }
 
+    // --- S3 / Tigris ---
+    let s3 = match crate::s3::S3Client::new(&cfg).await {
+        Ok(client) => {
+            tracing::info!(bucket = %cfg.s3_bucket, "S3/Tigris client initialized");
+            Some(Arc::new(client))
+        }
+        Err(e) => {
+            tracing::warn!("S3 client init failed (segment uploads disabled): {e}");
+            None
+        }
+    };
+
     // --- Shared state ---
     let hmac_secret = db.get_hmac_secret().await?;
-    let registry = Arc::new(RoutingRegistry::new());
-    let sessions = Arc::new(SessionManager::new());
-    let sse_bus = Arc::new(SseEventBus::new());
 
     // --- Firmware release state ---
     let firmware_release = Arc::new(tokio::sync::RwLock::new(None));
 
-    // Seed firmware state from GitHub API on startup
     if let Some(ref repo) = cfg.release_repo {
         let fw = firmware_release.clone();
         let repo = repo.clone();
@@ -169,16 +135,9 @@ async fn main() -> anyhow::Result<()> {
     let app_state = Arc::new(AppState {
         db: db.clone(),
         redis: redis.clone(),
-        registry: registry.clone(),
-        sessions: sessions.clone(),
-        sse_bus: sse_bus.clone(),
-        ca: ca.clone(),
-        revocation_cache: revocation_cache.clone(),
         hmac_secret,
         audit: audit.clone(),
-        public_ip_override: cfg.public_ip,
-        enrollment_addr,
-        webrtc_socket,
+        s3,
         stripe,
         tiers,
         stripe_public_key: cfg.stripe_public_key.clone(),
@@ -190,32 +149,17 @@ async fn main() -> anyhow::Result<()> {
         pending_reboot_version: tokio::sync::Mutex::new(None),
     });
 
-    // --- Redis firmware release subscription ---
-    if let Some(ref redis_url) = cfg.redis_url {
-        let url = redis_url.clone();
-        let fw_state = app_state.clone();
-        let fw_cancel = cancel.clone();
-        tokio::spawn(async move {
-            crate::redis::firmware::subscribe_firmware_releases(&url, fw_state, fw_cancel).await;
-        });
-    }
-
-    // --- Hourly cleanup of expired tokens and sessions ---
+    // --- Hourly cleanup of expired sessions ---
     {
         let cleanup_db = db.clone();
         let cleanup_cancel = cancel.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
-            interval.tick().await; // skip first immediate tick
+            interval.tick().await;
             loop {
                 tokio::select! {
                     _ = cleanup_cancel.cancelled() => break,
                     _ = interval.tick() => {
-                        match cleanup_db.cleanup_expired_tokens().await {
-                            Ok(n) if n > 0 => tracing::info!(count = n, "cleaned up expired enrollment tokens"),
-                            Err(e) => tracing::warn!("token cleanup failed: {e}"),
-                            _ => {}
-                        }
                         match cleanup_db.cleanup_expired_sessions().await {
                             Ok(n) if n > 0 => tracing::info!(count = n, "cleaned up expired sessions"),
                             Err(e) => tracing::warn!("session cleanup failed: {e}"),
@@ -226,27 +170,6 @@ async fn main() -> anyhow::Result<()> {
             }
         });
     }
-
-    // --- QUIC listener ---
-    let quic_bind = crate::egress::udp::resolve_udp_bind_addr(cfg.quic_port).await?;
-    let endpoint =
-        build_server_endpoint(&pki.server_tls.cert_der, &pki.server_tls.key_der, quic_bind)?;
-    tracing::info!(%quic_bind, "QUIC listening");
-
-    let quic_cancel = cancel.clone();
-    let quic_handle = tokio::spawn(run_accept_loop(
-        endpoint,
-        registry.clone(),
-        db.clone(),
-        ca.clone(),
-        revocation_cache.clone(),
-        redis.clone(),
-        telemetry_batcher,
-        sse_bus.clone(),
-        audit.clone(),
-        firmware_release.clone(),
-        quic_cancel,
-    ));
 
     // --- HTTP server ---
     let router = build_router(app_state.clone())
@@ -290,7 +213,7 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("shutting down");
     cancel.cancel();
 
-    let _ = tokio::join!(quic_handle, http_handle);
+    let _ = http_handle.await;
     tracing::info!("goodbye");
     Ok(())
 }

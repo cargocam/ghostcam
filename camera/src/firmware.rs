@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use ghostcam::firmware::{is_newer_version, FirmwareLatestResponse};
+use sha2::{Digest, Sha256};
 
 /// Compile-time cloud URL for firmware fallback. Set via `GHOSTCAM_CLOUD_URL`
 /// env var at build time. Official release builds have this; self-hosted builds
@@ -222,7 +223,7 @@ async fn download_and_verify(
     };
 
     // Verify SHA-256
-    let actual = ghostcam::pki::sha256_hex(&bytes);
+    let actual = sha256_hex(&bytes);
     if actual != expected_sha256 {
         anyhow::bail!("firmware hash mismatch: expected {expected_sha256}, got {actual}");
     }
@@ -238,6 +239,12 @@ async fn download_and_verify(
     );
 
     Ok(())
+}
+
+/// Compute SHA-256 hex digest of a byte slice.
+fn sha256_hex(data: &[u8]) -> String {
+    let hash = Sha256::digest(data);
+    hash.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Write health sentinel to indicate camera started successfully.
@@ -268,7 +275,7 @@ mod tests {
         let content = b"test firmware binary content";
         std::fs::write(&src, content).unwrap();
 
-        let hash = ghostcam::pki::sha256_hex(content);
+        let hash = sha256_hex(content);
         let dest = dir.path().join("downloaded");
         let url = format!("file://{}", src.display());
 

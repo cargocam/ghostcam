@@ -8,7 +8,6 @@ use tokio::sync::{broadcast, mpsc, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use super::init::generate_init_segment;
-use super::manifest::generate_manifest;
 use super::ring_buffer::{RingBuffer, SegmentInfo};
 use super::segment::SegmentWriter;
 use super::SegmentEvent;
@@ -131,11 +130,7 @@ impl Muxer {
                                     size_bytes: meta.size_bytes,
                                 }).await;
 
-                                // Update and emit manifest
-                                let manifest = generate_manifest(self.ring_buffer.read().await.segments());
-                                let _ = self.event_tx.send(SegmentEvent::ManifestUpdated {
-                                    manifest,
-                                }).await;
+                                // Server generates manifests — no local manifest needed.
                             }
                     }
 

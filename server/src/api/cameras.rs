@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -17,9 +18,7 @@ pub struct CameraResponse {
     pub device_id: String,
     pub display_name: String,
     pub enrolled_at: u64,
-    pub last_seen_at: Option<u64>,
     pub notes: Option<String>,
-    pub online: bool,
 }
 
 #[derive(Serialize)]
@@ -41,18 +40,15 @@ pub async fn list(
         }
     };
 
-    let mut responses = Vec::new();
-    for cam in cameras {
-        let online = state.registry.is_connected(&cam.device_id).await;
-        responses.push(CameraResponse {
+    let responses: Vec<CameraResponse> = cameras
+        .into_iter()
+        .map(|cam| CameraResponse {
             device_id: cam.device_id.0,
             display_name: cam.display_name,
             enrolled_at: cam.enrolled_at,
-            last_seen_at: cam.last_seen_at,
             notes: cam.notes,
-            online,
-        });
-    }
+        })
+        .collect();
 
     Json(responses).into_response()
 }
@@ -114,32 +110,37 @@ pub async fn enroll(
         }
     }
 
-    // Generate a stateless claim token with sub = user_id (no DB write needed)
-    let claims = crate::pki::enrollment::EnrollmentClaims::new_claim(
-        &state.enrollment_addr,
-        &user.user_id.0,
-        ghostcam::config::ENROLLMENT_TOKEN_TTL_SECS,
-    );
-    let expires_at = claims.exp;
-    let jti = claims.jti.clone();
+    // Generate a one-time provision token
+    let raw_token = crate::auth::generate_random_password();
+    let token_hash = crate::auth::hmac_token(&raw_token, &state.hmac_secret);
 
-    // Sign JWT
-    let token = match state.ca.sign_enrollment_jwt(&claims) {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::error!("failed to sign enrollment JWT: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let expires_at = now + ghostcam::config::PROVISION_TOKEN_TTL_SECS;
+
+    if let Err(e) = state
+        .db
+        .create_provision_token(&token_hash, &user.user_id, expires_at)
+        .await
+    {
+        tracing::error!("failed to create provision token: {e}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
 
     state
         .audit
         .log(crate::audit::AuditEvent::EnrollmentStarted {
-            device_id: jti.clone(),
+            device_id: format!("provision-{}", &token_hash[..8]),
             owner_id: user.user_id.0.clone(),
         });
 
-    Json(EnrollResponse { token, expires_at }).into_response()
+    Json(EnrollResponse {
+        token: raw_token,
+        expires_at,
+    })
+    .into_response()
 }
 
 /// Legacy request body for POST /api/v1/cameras.
@@ -157,38 +158,6 @@ pub struct EnrollRequest {
 pub struct WifiCredential {
     pub ssid: String,
     pub psk: String,
-}
-
-/// GET /api/v1/cameras/unclaimed
-///
-/// Returns all unclaimed devices. Any authenticated user can see and claim them.
-/// TODO: for multi-tenant, restrict visibility or require admin role.
-pub async fn list_unclaimed(
-    State(state): State<Arc<AppState>>,
-    Extension(_user): Extension<AuthUser>,
-) -> Response {
-    let cameras = match state.db.get_unclaimed_devices().await {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("list unclaimed cameras error: {e}");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-
-    let mut responses = Vec::new();
-    for cam in cameras {
-        let online = state.registry.is_connected(&cam.device_id).await;
-        responses.push(CameraResponse {
-            device_id: cam.device_id.0,
-            display_name: cam.display_name,
-            enrolled_at: cam.enrolled_at,
-            last_seen_at: cam.last_seen_at,
-            notes: cam.notes,
-            online,
-        });
-    }
-
-    Json(responses).into_response()
 }
 
 /// GET /api/v1/cameras/:device_id
@@ -212,14 +181,11 @@ pub async fn get(
         return StatusCode::NOT_FOUND.into_response();
     }
 
-    let online = state.registry.is_connected(&device_id).await;
     Json(CameraResponse {
         device_id: camera.device_id.0,
         display_name: camera.display_name,
         enrolled_at: camera.enrolled_at,
-        last_seen_at: camera.last_seen_at,
         notes: camera.notes,
-        online,
     })
     .into_response()
 }
@@ -274,31 +240,17 @@ pub async fn delete(
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 
-    match crate::pki::unregister::unregister_camera(
-        &device_id,
-        &state.registry,
-        state.db.as_ref(),
-        &state.revocation_cache,
-        state.redis.as_deref(),
-    )
-    .await
-    {
-        Ok(_) => {
-            // Teardown any WebRTC sessions
-            state.sessions.teardown_by_device(&device_id).await;
-
-            state
-                .audit
-                .log(crate::audit::AuditEvent::CameraUnregistered {
-                    device_id: device_id.0,
-                    initiated_by: user.user_id.0,
-                });
-
-            StatusCode::OK.into_response()
-        }
-        Err(e) => {
-            tracing::error!("delete camera error: {e}");
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
-        }
+    if let Err(e) = state.db.delete_camera(&device_id).await {
+        tracing::error!("delete camera error: {e}");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
+
+    state
+        .audit
+        .log(crate::audit::AuditEvent::CameraUnregistered {
+            device_id: device_id.0,
+            initiated_by: user.user_id.0,
+        });
+
+    StatusCode::OK.into_response()
 }

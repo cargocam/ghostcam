@@ -98,6 +98,13 @@ pub enum AuditEvent {
         limit: u32,
     },
 
+    // Provisioning (HLS rewrite)
+    CameraProvisioned {
+        device_id: String,
+        user_id: String,
+        device_serial: String,
+    },
+
     // Server
     ServerStarted {
         version: String,
@@ -142,6 +149,7 @@ fn event_type_tag(event: &AuditEvent) -> &'static str {
         AuditEvent::SubscriptionChanged { .. } => "subscription_changed",
         AuditEvent::SubscriptionSuspended { .. } => "subscription_suspended",
         AuditEvent::CameraLimitBlocked { .. } => "camera_limit_blocked",
+        AuditEvent::CameraProvisioned { .. } => "camera_provisioned",
         AuditEvent::ServerStarted { .. } => "server_started",
         AuditEvent::ServerStopped { .. } => "server_stopped",
     }

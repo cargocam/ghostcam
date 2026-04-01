@@ -7,12 +7,43 @@ use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::Extension;
 use axum::Json;
-use ghostcam::types::{SessionId, UserId};
+use ghostcam::types::{DeviceId, SessionId, UserId};
 use serde::{Deserialize, Serialize};
 
 use super::state::AppState;
 use crate::auth;
 use crate::db_trait::NewSession;
+
+/// Authenticated camera identity, extracted by camera auth middleware.
+#[derive(Debug, Clone)]
+pub struct AuthCamera {
+    pub device_id: DeviceId,
+    pub user_id: Option<UserId>,
+}
+
+/// Camera auth middleware: checks Bearer token against camera_api_keys table.
+pub async fn camera_auth_middleware(
+    State(state): State<Arc<AppState>>,
+    mut request: Request<Body>,
+    next: Next,
+) -> Response {
+    if let Some(auth_header) = request.headers().get("authorization") {
+        if let Ok(val) = auth_header.to_str() {
+            if let Some(token) = val.strip_prefix("Bearer ") {
+                let token_hash = auth::hmac_token(token, &state.hmac_secret);
+                if let Ok(Some(camera)) = state.db.get_camera_by_api_key(&token_hash).await {
+                    request.extensions_mut().insert(AuthCamera {
+                        device_id: camera.device_id,
+                        user_id: camera.user_id,
+                    });
+                    return next.run(request).await;
+                }
+            }
+        }
+    }
+
+    StatusCode::UNAUTHORIZED.into_response()
+}
 
 /// Authenticated user identity, extracted by middleware.
 #[derive(Debug, Clone)]

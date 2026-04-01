@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import VideoPlayer from '$lib/components/VideoPlayer.svelte';
 	import HlsPlayer from '$lib/components/HlsPlayer.svelte';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
@@ -33,16 +32,21 @@
 		return deviceId === focusedLayoutTargetId;
 	});
 
-	// HLS manifest URL — used for both playback scrubbing and live fallback
-	let hlsSrc = $derived(`/hls/${encodeURIComponent(deviceId)}/playlist.m3u8`);
+	// HLS manifest URL — S3-backed, server generates on the fly.
+	// Live mode: default 5-minute window. Playback mode: 10-minute window centered on playhead.
+	let hlsSrc = $derived.by(() => {
+		const base = `/hls/${encodeURIComponent(deviceId)}/playlist.m3u8`;
+		if (!isPlaybackMode) return base;
+		const center = Math.floor(scrubberStore.playheadTime * 1000);
+		const from = Math.max(0, center - 5 * 60 * 1000);
+		const to = center + 5 * 60 * 1000;
+		return `${base}?from=${from}&to=${to}`;
+	});
 	let playbackSeekTime = $derived(isPlaybackMode ? scrubberStore.playheadTime : undefined);
 
 	let isSelected = $derived(cameraStore.selectedId === deviceId);
 	let camera = $derived(cameraStore.cameras.find((c) => c.device_id === deviceId));
 
-	// Use HLS live view when there's no WebRTC stream (e.g. Docker Desktop on Mac,
-	// where UDP port forwarding from host → container is broken).
-	let hasWebRtcStream = $derived(!!camera?.videoStream);
 	let isMuted = $derived(settingsStore.isCameraMuted(deviceId));
 	let videoElement = $state<HTMLVideoElement | undefined>(undefined);
 	let cardEl = $state<HTMLButtonElement | undefined>(undefined);
@@ -108,14 +112,10 @@
 	onclick={() => cameraStore.select(deviceId)}
 	ondblclick={() => settingsStore.openCameraView(deviceId)}
 >
-	<!-- Live video feed: WebRTC if connected, HLS live fallback otherwise -->
+	<!-- Live video feed (HLS) -->
 	{#if !isPlaybackMode && connected}
 		<div class="absolute inset-0">
-			{#if hasWebRtcStream}
-				<VideoPlayer {deviceId} bind:videoElement active={isVisible} muted={isMuted} />
-			{:else}
-				<HlsPlayer src={hlsSrc} muted={isMuted} />
-			{/if}
+			<HlsPlayer src={hlsSrc} muted={isMuted} />
 		</div>
 	{/if}
 

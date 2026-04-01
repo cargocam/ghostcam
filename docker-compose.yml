@@ -19,6 +19,37 @@ services:
     volumes:
       - redis-data:/data
 
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    volumes:
+      - minio-data:/data
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        mc alias set local http://minio:9000 minioadmin minioadmin
+        mc mb --ignore-existing local/ghostcam-segments
+        exit 0
+    restart: "no"
+
   server:
     build:
       context: .
@@ -26,19 +57,22 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
-      - "4433:4433/udp"
-      - "3478:3478/udp"
-    depends_on: [postgres, redis]
+    depends_on: [postgres, redis, minio-init]
     environment:
-      - GHOSTCAM_PUBLIC_IP=${GHOSTCAM_PUBLIC_IP:-}
-      - GHOSTCAM_WEBRTC_PORT=3478
       - GHOSTCAM_DATABASE_URL=postgres://ghostcam:dev-password@postgres:5432/ghostcam
       - GHOSTCAM_REDIS_URL=redis://redis:6379
       - GHOSTCAM_DATA_DIR=/var/ghostcam
       - GHOSTCAM_ADMIN_EMAIL=admin@ghostcam.dev
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
-      - GHOSTCAM_ENROLLMENT_ADDR=${GHOSTCAM_PUBLIC_IP:-server}:4433
       - RUST_LOG=server=info
+      # S3 / MinIO (local dev)
+      # Use host.docker.internal so presigned URLs are routable from both
+      # the browser (via localhost:9000) and the Pi (via LAN IP:9000).
+      - GHOSTCAM_S3_BUCKET=ghostcam-segments
+      - GHOSTCAM_S3_ENDPOINT=http://${GHOSTCAM_PUBLIC_IP:-host.docker.internal}:9000
+      - GHOSTCAM_S3_REGION=us-east-1
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
       # Billing — set Stripe keys in .env (see .env.example)
       - STRIPE_PUBLIC_KEY=${STRIPE_PUBLIC_KEY:-}
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
@@ -47,6 +81,9 @@ services:
     volumes:
       - server-data:/var/ghostcam
 
+  # Test cameras use --test-source for synthetic video/audio.
+  # In the new HLS architecture, cameras provision via QR or pre-provisioned tokens.
+  # For Docker dev, the entrypoint writes a server_url file so the camera can connect.
   camera-1:
     profiles: [test]
     build:
@@ -55,15 +92,12 @@ services:
     restart: unless-stopped
     depends_on: [server]
     environment:
-      - GHOSTCAM_ADMIN_EMAIL=admin@ghostcam.dev
-      - GHOSTCAM_ADMIN_PASSWORD=dev-password
-      - GHOSTCAM_CAMERA_NAME=Front Door
       - GHOSTCAM_DATA_DIR=/var/ghostcam
-      - GHOSTCAM_SERVER_HTTP=http://server:3000
+      - GHOSTCAM_SERVER_ADDR=server:4433
       - RUST_LOG=camera=info
     volumes:
       - camera-1-data:/var/ghostcam
-    command: ["--test-source", "--server-addr", "server:4433", "--no-tofu"]
+    command: ["--test-source"]
 
   camera-2:
     profiles: [test]
@@ -73,15 +107,12 @@ services:
     restart: unless-stopped
     depends_on: [server]
     environment:
-      - GHOSTCAM_ADMIN_EMAIL=admin@ghostcam.dev
-      - GHOSTCAM_ADMIN_PASSWORD=dev-password
-      - GHOSTCAM_CAMERA_NAME=Garage
       - GHOSTCAM_DATA_DIR=/var/ghostcam
-      - GHOSTCAM_SERVER_HTTP=http://server:3000
+      - GHOSTCAM_SERVER_ADDR=server:4433
       - RUST_LOG=camera=info
     volumes:
       - camera-2-data:/var/ghostcam
-    command: ["--test-source", "--server-addr", "server:4433", "--no-tofu"]
+    command: ["--test-source"]
 
   camera-3:
     profiles: [test]
@@ -91,15 +122,12 @@ services:
     restart: unless-stopped
     depends_on: [server]
     environment:
-      - GHOSTCAM_ADMIN_EMAIL=admin@ghostcam.dev
-      - GHOSTCAM_ADMIN_PASSWORD=dev-password
-      - GHOSTCAM_CAMERA_NAME=Backyard
       - GHOSTCAM_DATA_DIR=/var/ghostcam
-      - GHOSTCAM_SERVER_HTTP=http://server:3000
+      - GHOSTCAM_SERVER_ADDR=server:4433
       - RUST_LOG=camera=info
     volumes:
       - camera-3-data:/var/ghostcam
-    command: ["--test-source", "--server-addr", "server:4433", "--no-tofu"]
+    command: ["--test-source"]
 
   ui:
     build:
@@ -136,6 +164,7 @@ services:
 volumes:
   pg-data:
   redis-data:
+  minio-data:
   server-data:
   camera-1-data:
   camera-2-data:

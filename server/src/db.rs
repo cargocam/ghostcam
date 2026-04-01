@@ -1,7 +1,8 @@
 use crate::auth;
 use crate::db_trait::{
     ApiTokenRecord, AuditLogRecord, CameraRecord, CameraUpdate, Database, NewApiToken,
-    NewEnrollmentToken, NewSession, SessionRecord, SubscriptionRecord, UserRecord, UserUpdate,
+    NewEnrollmentToken, NewSession, SegmentRecord, SessionRecord,
+    SubscriptionRecord, UserRecord, UserUpdate,
 };
 use anyhow::{Context, Result};
 use async_trait::async_trait;
@@ -539,6 +540,10 @@ impl Database for PostgresDatabase {
             .execute(&self.pool)
             .await
             .context("failed to run migration 006")?;
+        sqlx::raw_sql(include_str!("../migrations/007_hls_rewrite.sql"))
+            .execute(&self.pool)
+            .await
+            .context("failed to run migration 007")?;
         Ok(())
     }
 
@@ -807,6 +812,216 @@ impl Database for PostgresDatabase {
                 updated_at: r.get::<i64, _>("updated_at") as u64,
             })
             .collect())
+    }
+
+    // --- Segments (HLS/S3) ---
+
+    async fn insert_segments(&self, segments: &[SegmentRecord]) -> Result<()> {
+        for seg in segments {
+            sqlx::query(
+                "INSERT INTO segments (segment_id, device_id, s3_key, start_ts, end_ts, size_bytes, resolution, created_at) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                 ON CONFLICT (segment_id) DO NOTHING",
+            )
+            .bind(&seg.segment_id)
+            .bind(&seg.device_id.0)
+            .bind(&seg.s3_key)
+            .bind(seg.start_ts as i64)
+            .bind(seg.end_ts as i64)
+            .bind(seg.size_bytes as i64)
+            .bind(&seg.resolution)
+            .bind(seg.created_at as i64)
+            .execute(&self.pool)
+            .await?;
+        }
+        Ok(())
+    }
+
+    async fn list_segments(
+        &self,
+        device_id: &DeviceId,
+        from_ts: u64,
+        to_ts: u64,
+    ) -> Result<Vec<SegmentRecord>> {
+        let rows = sqlx::query(
+            "SELECT segment_id, device_id, s3_key, start_ts, end_ts, size_bytes, resolution, created_at \
+             FROM segments WHERE device_id = $1 AND start_ts >= $2 AND start_ts <= $3 \
+             ORDER BY start_ts",
+        )
+        .bind(&device_id.0)
+        .bind(from_ts as i64)
+        .bind(to_ts as i64)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|r| SegmentRecord {
+                segment_id: r.get("segment_id"),
+                device_id: DeviceId(r.get("device_id")),
+                s3_key: r.get("s3_key"),
+                start_ts: r.get::<i64, _>("start_ts") as u64,
+                end_ts: r.get::<i64, _>("end_ts") as u64,
+                size_bytes: r.get::<i64, _>("size_bytes") as u64,
+                resolution: r.get("resolution"),
+                created_at: r.get::<i64, _>("created_at") as u64,
+            })
+            .collect())
+    }
+
+    async fn latest_segment(&self, device_id: &DeviceId) -> Result<Option<SegmentRecord>> {
+        let row = sqlx::query(
+            "SELECT segment_id, device_id, s3_key, start_ts, end_ts, size_bytes, resolution, created_at \
+             FROM segments WHERE device_id = $1 ORDER BY start_ts DESC LIMIT 1",
+        )
+        .bind(&device_id.0)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| SegmentRecord {
+            segment_id: r.get("segment_id"),
+            device_id: DeviceId(r.get("device_id")),
+            s3_key: r.get("s3_key"),
+            start_ts: r.get::<i64, _>("start_ts") as u64,
+            end_ts: r.get::<i64, _>("end_ts") as u64,
+            size_bytes: r.get::<i64, _>("size_bytes") as u64,
+            resolution: r.get("resolution"),
+            created_at: r.get::<i64, _>("created_at") as u64,
+        }))
+    }
+
+    // --- Provisioned camera creation ---
+
+    async fn create_provisioned_camera(
+        &self,
+        device_id: &DeviceId,
+        user_id: &UserId,
+        device_serial: &str,
+    ) -> Result<()> {
+        let now = now_unix() as i64;
+        sqlx::query(
+            "INSERT INTO cameras (device_id, user_id, cert_fingerprint, display_name, enrolled_at, device_serial) \
+             VALUES ($1, $2, '', 'New Camera', $3, $4)",
+        )
+        .bind(&device_id.0)
+        .bind(&user_id.0)
+        .bind(now)
+        .bind(device_serial)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    // --- Camera API keys ---
+
+    async fn get_camera_by_api_key(&self, api_key_hash: &str) -> Result<Option<CameraRecord>> {
+        let row = sqlx::query(
+            "SELECT c.device_id, c.user_id, c.cert_fingerprint, c.display_name, c.enrolled_at, c.last_seen_at, c.notes \
+             FROM cameras c \
+             JOIN camera_api_keys k ON c.device_id = k.device_id \
+             WHERE k.api_key_hash = $1",
+        )
+        .bind(api_key_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| CameraRecord {
+            device_id: DeviceId(r.get("device_id")),
+            user_id: r.get::<Option<String>, _>("user_id").map(UserId),
+            cert_fingerprint: CertFingerprint(r.get::<Option<String>, _>("cert_fingerprint").unwrap_or_default()),
+            display_name: r.get("display_name"),
+            enrolled_at: r.get::<i64, _>("enrolled_at") as u64,
+            last_seen_at: r.get::<Option<i64>, _>("last_seen_at").map(|v| v as u64),
+            notes: r.get("notes"),
+        }))
+    }
+
+    async fn create_camera_api_key(&self, device_id: &DeviceId, api_key_hash: &str) -> Result<()> {
+        let now = now_unix() as i64;
+        sqlx::query(
+            "INSERT INTO camera_api_keys (device_id, api_key_hash, created_at) VALUES ($1, $2, $3)",
+        )
+        .bind(&device_id.0)
+        .bind(api_key_hash)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    // --- Provision tokens ---
+
+    async fn create_provision_token(
+        &self,
+        token_hash: &str,
+        user_id: &UserId,
+        expires_at: u64,
+    ) -> Result<()> {
+        let now = now_unix() as i64;
+        sqlx::query(
+            "INSERT INTO provision_tokens (token_hash, user_id, created_at, expires_at) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(token_hash)
+        .bind(&user_id.0)
+        .bind(now)
+        .bind(expires_at as i64)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn claim_provision_token(
+        &self,
+        token_hash: &str,
+        _device_id: &DeviceId,
+    ) -> Result<Option<UserId>> {
+        let now = now_unix() as i64;
+        let row = sqlx::query(
+            "UPDATE provision_tokens \
+             SET claimed_at = $1 \
+             WHERE token_hash = $2 AND claimed_at IS NULL AND expires_at > $1 \
+             RETURNING user_id",
+        )
+        .bind(now)
+        .bind(token_hash)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| UserId(r.get("user_id"))))
+    }
+
+    // --- Camera commands ---
+
+    async fn enqueue_command(
+        &self,
+        device_id: &DeviceId,
+        command: &serde_json::Value,
+    ) -> Result<()> {
+        let now = now_unix() as i64;
+        sqlx::query(
+            "INSERT INTO camera_commands (device_id, command, created_at) VALUES ($1, $2, $3)",
+        )
+        .bind(&device_id.0)
+        .bind(command)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    async fn claim_commands(&self, device_id: &DeviceId) -> Result<Vec<serde_json::Value>> {
+        let now = now_unix() as i64;
+        let rows = sqlx::query(
+            "UPDATE camera_commands SET claimed_at = $1 \
+             WHERE device_id = $2 AND claimed_at IS NULL \
+             RETURNING command",
+        )
+        .bind(now)
+        .bind(&device_id.0)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows.into_iter().map(|r| r.get("command")).collect())
     }
 
     // --- Stripe idempotency ---

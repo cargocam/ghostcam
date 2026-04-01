@@ -3,7 +3,6 @@ export interface CameraInfo {
 	display_name: string;
 	group_id?: string;
 	capabilities?: string[];
-	online: boolean;
 }
 
 export interface GpsData {

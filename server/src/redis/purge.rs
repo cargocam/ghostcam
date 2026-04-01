@@ -21,8 +21,6 @@ pub async fn purge_device_data(redis: &RedisManager, device_id: &DeviceId) {
 
     let telemetry_key = format!("{TELEMETRY_KEY_PREFIX}{}", device_id.0);
     let _: Result<(), _> = conn.del::<_, ()>(&telemetry_key).await;
-
-    super::manifest::delete_manifest(redis, device_id).await;
 }
 
 /// Trim all `telemetry:*` streams to remove entries older than the retention window.
