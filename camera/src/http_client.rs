@@ -97,7 +97,7 @@ impl CameraHttpClient {
         let resp = self
             .client
             .put(presigned_url)
-            .header("content-type", "video/mp4")
+            .header("content-type", "video/mp2t")
             .body(data)
             .send()
             .await

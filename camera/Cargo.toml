@@ -7,13 +7,11 @@ edition = "2021"
 ghostcam = { workspace = true }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
-bytes = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-rmp-serde = { workspace = true }
 clap = { version = "4", features = ["derive"] }
 toml = { workspace = true }
 reqwest = { workspace = true }
@@ -24,10 +22,6 @@ image = { version = "0.25", default-features = false, features = ["png"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-cpal = "0.15"
-opus = "0.3"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full", "test-util"] }

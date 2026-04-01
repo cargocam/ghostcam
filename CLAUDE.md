@@ -247,20 +247,14 @@ wire/
 ## Camera Structure
 
 ```
-main.rs          CLI, reconnect loop with exponential backoff + network awareness
+main.rs          CLI, capture pipeline (rpicam-vid | ffmpeg), segment watcher, task orchestration
 config.rs        CameraConfig + CameraConfigFile, layered TOML/env/CLI resolution
 firmware.rs      Startup update check (server → cloud fallback), download/verify/swap, health sentinel
-session.rs       Active QUIC session: alerts stream, command gate atomics
-enrollment.rs    Claim token flow (send ClaimToken alert, clear enrollment state)
+upload.rs        Upload queue + S3 presigned URL upload loop for MPEG-TS segments
+http_client.rs   HTTP client for server API (telemetry, presign, provision)
+provisioning.rs  QR scan / token-based provisioning flow
 qr_enrollment.rs QR code scanning: WiFi QR (w field), claim QR (t field), combined. Linux rpicam-still + rqrr.
-tofu.rs          Server fingerprint pinning (first connect)
-quic.rs          QUIC endpoint with mTLS device cert
-commands.rs      CameraCommand handler → updates watch channels
-network.rs       Network monitor (500ms poll /proc/net/route), WiFi/NM helpers, wait_for_route()
-capture/         Test sources: video_test.rs (loop H.264), audio_test/ (synthetic Opus)
-                 Real capture: video.rs (rpicam-vid), audio.rs (cpal+opus, Linux only)
-stream/          Frame senders: video.rs, audio.rs (write to persistent QUIC streams)
-recording/       fMP4 ring buffer: muxer, segment, ring_buffer, manifest, uploads
+network.rs       WiFi/NM helpers, wait_for_route()
 telemetry/       sensors.rs (/proc, /sys, gpsd), buffer.rs (batch upload)
 ```
 

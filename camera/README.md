@@ -1,17 +1,15 @@
 # camera
 
-Ghostcam camera agent. Connects to the server over QUIC with mTLS, performs enrollment on first boot, then continuously streams H.264 video, Opus audio, and system telemetry. Records video locally to an fMP4 ring buffer for HLS playback.
+Ghostcam camera agent. Connects to the server via HTTP API, performs enrollment on first boot, then continuously records H.264 video as MPEG-TS segments using `rpicam-vid | ffmpeg` and uploads them to S3 via presigned URLs. Reports system telemetry to the server.
 
 Two modes:
-- **Test source** (`--test-source`): loops a pre-recorded H.264 file with synthetic audio. No system dependencies beyond Rust. Used for development and Docker.
-- **Real capture** (default): `rpicam-vid`/`libcamera-vid` for video, `cpal` + Opus for audio, `/proc`/`/sys` + gpsd for telemetry. Requires Linux with a camera.
+- **Test source** (`--test-source`): uses `ffmpeg` with `testsrc2` to generate test pattern segments. No Pi hardware required. Used for development and Docker.
+- **Real capture** (default): `rpicam-vid` piped to `ffmpeg` for MPEG-TS segment generation. Requires Linux with a Pi camera and ffmpeg installed.
 
-Auto-reconnects to the server with exponential backoff (1s → 30s). On Linux, a network monitor polls `/proc/net/route` every 500ms to detect WiFi-to-cellular failover — on interface change, the camera drops the QUIC session and reconnects immediately rather than waiting for the QUIC idle timeout. A 5s send timeout catches dead connections that haven't errored yet. On macOS (dev), the monitor is a no-op.
+## System Requirements
 
-## System Requirements (Real Capture)
-
-- `rpicam-vid` or `libcamera-vid` in PATH (Raspberry Pi OS or libcamera-enabled Linux)
-- `libopus-dev` (Linux) or `brew install opus` (macOS, cross-compilation)
+- `ffmpeg` in PATH (both modes)
+- `rpicam-vid` in PATH (real capture mode only, Raspberry Pi OS)
 - Optional: `gpsd` on `localhost:2947` for GPS
 
 ## Configuration
@@ -32,14 +30,13 @@ See `camera.example.toml` in the repo root for all available settings with comme
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--config` | _(none)_ | Path to TOML config file |
-| `--server-addr` | _(from config / enrollment)_ | Server QUIC address `host:port` |
-| `--test-source` | off | Use test H.264 file + synthetic audio |
-| `--test-video` | `test-data/test.h264` | H.264 file for `--test-source` |
-| `--data-dir` | `/var/ghostcam` | Device cert, config, and enrollment state |
-| `--segment-dir` | `/var/ghostcam/segments` | fMP4 ring buffer for HLS recording |
+| `--server-addr` | _(from config / enrollment)_ | Server address |
+| `--test-source` | off | Use ffmpeg testsrc2 test pattern |
+| `--test-video` | `test-data/test.h264` | H.264 file (legacy, unused with new pipeline) |
+| `--data-dir` | `/var/ghostcam` | Device identity and enrollment state |
+| `--segment-dir` | `/var/ghostcam/segments` | MPEG-TS segment output directory |
 | `--no-audio` | off | Disable audio capture |
 | `--no-gps` | off | Disable GPS via gpsd |
-| `--enrollment-jwt` | _(none)_ | JWT for enrollment |
 | `--no-tofu` | off | Disable TOFU server fingerprint verification (dev/testing) |
 
 ### Environment Variables
@@ -48,56 +45,48 @@ See `camera.example.toml` in the repo root for all available settings with comme
 |----------|---------|-------------|
 | `GHOSTCAM_CONFIG_FILE` | _(none)_ | Explicit path to TOML config file |
 | `GHOSTCAM_DATA_DIR` | `/var/ghostcam` | Data directory |
-| `GHOSTCAM_SERVER_ADDR` | _(from enrollment)_ | Server QUIC address |
+| `GHOSTCAM_SERVER_ADDR` | _(from enrollment)_ | Server address |
 | `GHOSTCAM_AUDIO_DEVICE` | _(system default)_ | ALSA audio input device name (Linux only) |
 
 Server address resolution precedence: `--server-addr` CLI flag -> `GHOSTCAM_SERVER_ADDR` env var -> config file -> `server.addr` file (written during enrollment) -> hardcoded default.
 
 ## How It Works
 
-1. **Enrollment** — On first boot (no `user.crt`), camera tries QR code scanning (Linux only: captures frames via `rpicam-still` and decodes with `rqrr`). If QR scanning is unavailable or times out after 5 minutes, falls back to `--enrollment-jwt`. The server signs and returns a device certificate.
-2. **TOFU** — On first connection after enrollment, the server's TLS fingerprint is pinned. Subsequent connections verify against the pin (bypassed with `--no-tofu`).
-3. **Connect** — Opens a QUIC connection using the device cert for mTLS. Opens persistent streams: `Alerts` (bidirectional), `Video`, `Audio`.
-4. **Handshake** — Sends an `Alert::Handshake` with device ID, cert fingerprint, and capabilities.
-5. **Command loop** — Spawns a task reading `CameraCommand` messages from the server on the `Alerts` stream. Commands update `watch` channels that gate frame sending.
-6. **Capture** — Starts capture modules producing frames on an mpsc channel.
-7. **Recording** — Frames are also written to the local fMP4 ring buffer. Completed segments are announced via `Alert::RecordingSegment`; the server may request uploads.
-8. **Send loop** — Reads from capture channel, checks command-controlled gates, sends frames on their persistent QUIC stream.
-9. **Telemetry** — Independently polls system sensors every 2s, sends sparse diffs on a unidirectional upload stream.
+1. **Provisioning** -- On first boot (no stored credentials), camera enters provisioning mode. Scans QR codes via `rpicam-still` + `rqrr` (Linux only), or uses a pre-provisioned token file (Docker). The server returns an API key and device ID.
+2. **Capture pipeline** -- Spawns `rpicam-vid | ffmpeg` (real hardware) or `ffmpeg -f lavfi -i testsrc2` (test mode). ffmpeg writes 6-second MPEG-TS segments to the segment directory (`seg00000.ts`, `seg00001.ts`, ...).
+3. **Segment watcher** -- Polls the segment directory every 2 seconds. When a new `.ts` file appears and is at least 1 second old (to ensure ffmpeg has finished writing), it is queued for upload.
+4. **Upload loop** -- Requests presigned PUT URLs from the server, uploads `.ts` segments to S3, confirms uploads. Failed uploads are re-queued. Oldest segments are evicted when the queue exceeds capacity (500 segments).
+5. **Telemetry** -- Independently polls system sensors every 10 seconds, POSTs to the server. Server responses may include commands (reboot, network config, etc.).
+
+## Architecture
+
+```
+rpicam-vid --codec h264 --inline -t 0 -o - |
+ffmpeg -i pipe:0 -c copy -f segment -segment_time 6 -reset_timestamps 1 seg%05d.ts
+
+                        segment_dir/
+                        seg00000.ts
+                        seg00001.ts   <-- watcher detects new files
+                        seg00002.ts
+                            |
+                     segment watcher (2s poll)
+                            |
+                     upload queue (mpsc)
+                            |
+                     upload loop --> S3 presigned PUT
+```
 
 ## Module Map
 
 | Module | Purpose |
 |--------|---------|
-| `main` | CLI, reconnect loop, top-level task orchestration |
+| `main` | CLI, capture pipeline, segment watcher, task orchestration |
 | `config` | `CameraConfig` + `CameraConfigFile`, layered TOML/env/CLI resolution |
-| `session` | Active QUIC session: alert stream, command stream, video/audio enabled atomics |
-| `enrollment` | JWT parsing, enrollment handshake with server PKI |
-| `qr_enrollment` | QR code scanning enrollment (rpicam-still + rqrr, Linux only) |
-| `tofu` | Server fingerprint pinning on first connect |
-| `certs` | Device certificate load/store |
-| `quic` | QUIC endpoint setup with mTLS |
-| `commands` | `CameraCommand` handler — updates watch channels |
-| `network` | Network monitor (500ms `/proc/net/route` poll, 1s debounce), WiFi/NM helpers, `wait_for_route()` |
-| `firmware` | OTA update handling (stub) |
-| `capture/mod` | `CaptureMessage` enum (VideoNal, AudioFrame) |
-| `capture/video_test` | Test video source: loops H.264 file at real-time pace |
-| `capture/audio_test` | Test audio source: synthetic Opus tone |
-| `capture/audio` | Real audio capture: cpal + opus (Linux only) |
-| `capture/video` | Real video capture: rpicam-vid / libcamera-vid |
-| `stream/mod` | Frame sender coordination |
-| `stream/video` | Writes H.264 NAL units to the persistent Video QUIC stream |
-| `stream/audio` | Writes Opus frames to the persistent Audio QUIC stream |
-| `recording/mod` | Ring buffer coordinator |
-| `recording/muxer` | fMP4 muxer (init segment + media segments) |
-| `recording/ring_buffer` | Segment ring buffer with eviction |
-| `recording/segment` | Segment state machine |
-| `recording/manifest` | HLS playlist generation |
-| `recording/manifest_push` | Pushes manifest to server via QUIC upload stream |
-| `recording/uploads` | Uploads segments to server on demand |
-| `recording/storage` | Segment persistence on disk |
-| `recording/init` | fMP4 init segment generation |
-| `recording/recovery` | Recover ring buffer state after crash |
-| `telemetry/mod` | Telemetry task: poll → diff → encode → send |
+| `upload` | Upload queue + S3 presigned URL upload loop |
+| `http_client` | HTTP client for server API (telemetry, presign, provision) |
+| `provisioning` | QR scan / token-based provisioning flow |
+| `qr_enrollment` | QR code scanning (rpicam-still + rqrr, Linux only) |
+| `network` | WiFi/NM helpers, `wait_for_route()` |
+| `firmware` | Firmware update check on startup |
 | `telemetry/sensors` | Platform readers (`/proc/stat`, `/sys/class/thermal`, gpsd, etc.) |
 | `telemetry/buffer` | Buffered telemetry for upload after reconnect |

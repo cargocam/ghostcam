@@ -1,5 +1,5 @@
 use std::collections::VecDeque;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -8,7 +8,7 @@ use tokio::sync::{mpsc, Mutex};
 use tokio_util::sync::CancellationToken;
 
 use crate::http_client::CameraHttpClient;
-use crate::recording::SegmentEvent;
+use crate::NewSegment;
 
 /// Info about a segment waiting to be uploaded.
 #[derive(Debug, Clone)]
@@ -20,7 +20,7 @@ pub struct PendingSegment {
     pub path: PathBuf,
 }
 
-/// FIFO upload queue. Segments are added by the muxer and consumed by the upload loop.
+/// FIFO upload queue. Segments are added by the watcher and consumed by the upload loop.
 pub struct UploadQueue {
     queue: Mutex<VecDeque<PendingSegment>>,
     /// Maximum number of segments to buffer before evicting oldest.
@@ -59,21 +59,20 @@ impl UploadQueue {
     }
 
     /// Number of segments in the queue.
+    #[allow(dead_code)]
     pub async fn len(&self) -> usize {
         self.queue.lock().await.len()
     }
 }
 
-/// Run the upload loop. Watches for new segments from the muxer, uploads them
-/// to S3 via presigned URLs, confirms uploads to server, deletes local files.
+/// Run the upload loop. Watches for new segments from the directory watcher,
+/// uploads them to S3 via presigned URLs, confirms uploads to server, deletes local files.
 pub async fn run_upload_loop(
     client: Arc<CameraHttpClient>,
     queue: Arc<UploadQueue>,
-    mut event_rx: mpsc::Receiver<SegmentEvent>,
-    init_segment_path: PathBuf,
+    mut segment_rx: mpsc::Receiver<NewSegment>,
     cancel: CancellationToken,
 ) {
-    let mut init_uploaded = false;
     // Presigned URLs we have available
     let mut available_urls: VecDeque<PresignedUrl> = VecDeque::new();
     // Segments we've successfully uploaded (pending confirmation)
@@ -82,40 +81,29 @@ pub async fn run_upload_loop(
     loop {
         tokio::select! {
             _ = cancel.cancelled() => break,
-            event = event_rx.recv() => {
-                match event {
-                    Some(SegmentEvent::InitReady { data }) => {
-                        // Write init segment to disk
-                        if let Err(e) = tokio::fs::write(&init_segment_path, &data).await {
-                            tracing::error!("failed to write init segment: {e}");
-                            continue;
-                        }
-                        // Upload init segment on first occurrence
-                        if !init_uploaded {
-                            if let Err(e) = upload_init_segment(&client, &init_segment_path, &mut available_urls, &mut uploaded_confirmations).await {
-                                tracing::warn!("init segment upload failed: {e}");
-                            } else {
-                                init_uploaded = true;
-                            }
-                        }
-                    }
-                    Some(SegmentEvent::Finalized { segment_id, start_ts, end_ts, size_bytes }) => {
-                        let path = queue.segment_dir.join(format!("{segment_id}.m4s"));
-                        queue.enqueue(PendingSegment {
-                            segment_id,
-                            start_ts,
-                            end_ts,
-                            size_bytes,
-                            path,
-                        }).await;
+            seg = segment_rx.recv() => {
+                match seg {
+                    Some(new_seg) => {
+                        // Convert NewSegment to PendingSegment
+                        let pending = PendingSegment {
+                            segment_id: new_seg.filename.clone(),
+                            start_ts: new_seg.start_ts,
+                            end_ts: new_seg.end_ts,
+                            size_bytes: new_seg.size_bytes,
+                            path: new_seg.path,
+                        };
+
+                        queue.enqueue(pending).await;
 
                         // Process the upload queue
-                        if let Err(e) = drain_upload_queue(&client, &queue, &mut available_urls, &mut uploaded_confirmations).await {
+                        if let Err(e) = drain_upload_queue(
+                            &client,
+                            &queue,
+                            &mut available_urls,
+                            &mut uploaded_confirmations,
+                        ).await {
                             tracing::warn!("upload queue drain failed: {e}");
                         }
-                    }
-                    Some(SegmentEvent::ManifestUpdated { .. }) => {
-                        // No-op: server generates manifests now
                     }
                     None => break,
                 }
@@ -210,34 +198,10 @@ async fn replenish_urls(
         available_urls.push_back(url);
     }
 
-    // Handle init URL if provided
+    // Handle init URL if provided (not needed for MPEG-TS, but keep for compat)
     if let Some(init_url) = resp.init_url {
-        // Store for later use if needed
-        tracing::debug!("received init presigned URL from server");
-        available_urls.push_front(init_url);
-    }
-
-    Ok(())
-}
-
-/// Upload the init segment using a presigned URL from the server.
-async fn upload_init_segment(
-    client: &CameraHttpClient,
-    init_path: &Path,
-    available_urls: &mut VecDeque<PresignedUrl>,
-    uploaded_confirmations: &mut Vec<UploadedSegment>,
-) -> Result<()> {
-    // Request URLs (which may include an init URL)
-    replenish_urls(client, available_urls, uploaded_confirmations).await?;
-
-    // The first URL in the batch should be the init URL if this is the first request
-    // But we need a dedicated init URL. Let's request one explicitly.
-    let resp = client.request_presigned_urls(0, vec![]).await?;
-
-    if let Some(init_url) = resp.init_url {
-        let data = tokio::fs::read(init_path).await?;
-        client.upload_file(&init_url.put_url, data).await?;
-        tracing::info!("init segment uploaded to S3");
+        tracing::debug!("received init presigned URL from server (ignoring for MPEG-TS)");
+        let _ = init_url;
     }
 
     Ok(())

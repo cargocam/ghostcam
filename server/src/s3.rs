@@ -84,7 +84,7 @@ impl S3Client {
 
     /// S3 key for a camera segment.
     pub fn segment_key(device_id: &str, segment_id: &str) -> String {
-        format!("{device_id}/{segment_id}.m4s")
+        format!("{device_id}/{segment_id}.ts")
     }
 
     /// Generate a batch of presigned PUT URLs for upcoming segments.
