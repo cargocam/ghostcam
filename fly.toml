@@ -1,5 +1,5 @@
 app = "ghostcam"
-primary_region = "ord"
+primary_region = "sea"
 
 [build]
   dockerfile = "Dockerfile"
@@ -9,29 +9,12 @@ primary_region = "ord"
   source = "ghostcam_data"
   destination = "/var/ghostcam"
 
-[env]
-  RUST_LOG = "server=info,str0m=warn"
-
 [http_service]
   internal_port = 3000
   force_https = true
   auto_stop_machines = "stop"
   auto_start_machines = true
   min_machines_running = 1
-
-# QUIC (camera → server)
-[[services]]
-  protocol = "udp"
-  internal_port = 4433
-  [[services.ports]]
-    port = 4433
-
-# WebRTC (browser → server)
-[[services]]
-  protocol = "udp"
-  internal_port = 3478
-  [[services.ports]]
-    port = 3478
 
 [checks]
   [checks.health]

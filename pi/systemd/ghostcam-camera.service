@@ -9,7 +9,6 @@ ExecStart=/usr/local/bin/ghostcam-camera
 Restart=always
 RestartSec=5
 EnvironmentFile=/etc/ghostcam/env
-Environment=MALLOC_ARENA_MAX=2
 
 [Install]
 WantedBy=multi-user.target

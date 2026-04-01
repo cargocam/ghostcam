@@ -6,32 +6,17 @@ on:
     branches: [main]
 
 jobs:
-  rust:
+  go:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v5
         with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get install -y libasound2-dev libopus-dev
-      - run: cargo fmt --all -- --check
-      - run: cargo clippy --all-targets -- -D warnings
-      - run: cargo test --all
-      - name: Dependency audit
-        run: |
-          CARGO_AUDIT_VERSION=0.22.1
-          CARGO_AUDIT_SHA256="c32506f338bdcdaef5a17fb9f33abb6ecf9561324cfd34237fd335f9283a1eab"
-          curl -sL "https://github.com/rustsec/rustsec/releases/download/cargo-audit%2Fv${CARGO_AUDIT_VERSION}/cargo-audit-x86_64-unknown-linux-musl-v${CARGO_AUDIT_VERSION}.tgz" \
-            -o /tmp/cargo-audit.tgz
-          echo "${CARGO_AUDIT_SHA256}  /tmp/cargo-audit.tgz" | sha256sum -c -
-          tar xzf /tmp/cargo-audit.tgz -C /usr/local/bin --strip-components=1
-          # Ignore unfixable transitive deps:
-          # RUSTSEC-2023-0071: rsa timing (sqlx-mysql, no fix available, we use PostgreSQL)
-          # RUSTSEC-2025-0057: fxhash unmaintained (str0m -> sctp-proto)
-          cargo audit \
-            --ignore RUSTSEC-2023-0071 \
-            --ignore RUSTSEC-2025-0057
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go build ./cmd/ghostcam-server
+      - run: go build ./cmd/ghostcam-camera
+      - run: go test ./...
 
   ui:
     runs-on: ubuntu-latest
@@ -43,12 +28,12 @@ jobs:
       - run: cd ui && bun run build
 
   docker:
-    needs: [rust, ui]
+    needs: [go, ui]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
-      - name: Build server and camera images in parallel
+      - name: Build server and camera images
         run: |
           docker buildx build --target server -t ghostcam-server \
             --cache-from type=gha,scope=server \
