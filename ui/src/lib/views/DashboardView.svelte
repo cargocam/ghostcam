@@ -30,11 +30,11 @@
 	});
 
 	$effect(() => {
-		const mode = scrubberStore.mode;
+		const isLive = scrubberStore.isLive;
 		const playheadTime = Math.floor(scrubberStore.playheadTime);
 		const deviceIds = cameras.map((c) => c.device_id);
 
-		if (mode !== 'playback' || deviceIds.length === 0) {
+		if (isLive || deviceIds.length === 0) {
 			historicalTelemetryByDevice = {};
 			if (historicalFetchTimer) {
 				clearTimeout(historicalFetchTimer);
@@ -121,7 +121,7 @@
 	}
 
 	function getTelemetryForCamera(deviceId: string, fallback: typeof cameras[number]['telemetry']) {
-		if (scrubberStore.mode !== 'playback') return fallback;
+		if (scrubberStore.isLive) return fallback;
 		const historical = historicalTelemetryByDevice[deviceId];
 		if (!historical) return null;
 		return {
@@ -134,7 +134,7 @@
 </script>
 
 <div class="h-full overflow-y-auto p-4 space-y-4">
-	{#if scrubberStore.mode === 'playback'}
+	{#if !scrubberStore.isLive}
 		<div class="text-xs text-sky-400 font-mono">
 			Playback snapshot at {new Date(scrubberStore.playheadTime * 1000).toLocaleTimeString()}
 		</div>

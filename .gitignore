@@ -1,26 +1,14 @@
-# Rust
-target/
+# Build artifacts
+ghostcam-camera
+ghostcam-server
 
-# Node
-node_modules/
-
-# UI build output
+# UI
+ui/node_modules/
 ui/build/
+ui/.svelte-kit/
 
-# Test data (generated)
-test-data/
-
-# MCP config (local)
-.mcp.json
-
-# Local notes / scratch
-notes.txt
-
-# Redis dump
-dump.rdb
+# Environment
+.env
 
 # OS
 .DS_Store
-ui/test-results/
-.env
-.pi.env

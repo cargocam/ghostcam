@@ -64,70 +64,17 @@ services:
       - GHOSTCAM_DATA_DIR=/var/ghostcam
       - GHOSTCAM_ADMIN_EMAIL=admin@ghostcam.dev
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
-      - RUST_LOG=server=info
       # S3 / MinIO (local dev)
-      # Use host.docker.internal so presigned URLs are routable from both
-      # the browser (via localhost:9000) and the Pi (via LAN IP:9000).
       - GHOSTCAM_S3_BUCKET=ghostcam-segments
-      - GHOSTCAM_S3_ENDPOINT=http://${GHOSTCAM_PUBLIC_IP:-host.docker.internal}:9000
+      # GHOSTCAM_PUBLIC_IP must be set to LAN IP for presigned URLs to work
+      # from both Docker containers and the browser.
+      # macOS: export GHOSTCAM_PUBLIC_IP=$(ipconfig getifaddr en0)
+      - GHOSTCAM_S3_ENDPOINT=http://${GHOSTCAM_PUBLIC_IP:?Set GHOSTCAM_PUBLIC_IP to your LAN IP}:9000
       - GHOSTCAM_S3_REGION=us-east-1
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
-      # Billing — set Stripe keys in .env (see .env.example)
-      - STRIPE_PUBLIC_KEY=${STRIPE_PUBLIC_KEY:-}
-      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
-      - STRIPE_PRICING_TABLE_ID=${STRIPE_PRICING_TABLE_ID:-}
-      - STRIPE_PORTAL_CONFIG_ID=${STRIPE_PORTAL_CONFIG_ID:-}
     volumes:
       - server-data:/var/ghostcam
-
-  # Test cameras use --test-source for synthetic video/audio.
-  # In the new HLS architecture, cameras provision via QR or pre-provisioned tokens.
-  # For Docker dev, the entrypoint writes a server_url file so the camera can connect.
-  camera-1:
-    profiles: [test]
-    build:
-      context: .
-      target: camera
-    restart: unless-stopped
-    depends_on: [server]
-    environment:
-      - GHOSTCAM_DATA_DIR=/var/ghostcam
-      - GHOSTCAM_SERVER_ADDR=server:4433
-      - RUST_LOG=camera=info
-    volumes:
-      - camera-1-data:/var/ghostcam
-    command: ["--test-source"]
-
-  camera-2:
-    profiles: [test]
-    build:
-      context: .
-      target: camera
-    restart: unless-stopped
-    depends_on: [server]
-    environment:
-      - GHOSTCAM_DATA_DIR=/var/ghostcam
-      - GHOSTCAM_SERVER_ADDR=server:4433
-      - RUST_LOG=camera=info
-    volumes:
-      - camera-2-data:/var/ghostcam
-    command: ["--test-source"]
-
-  camera-3:
-    profiles: [test]
-    build:
-      context: .
-      target: camera
-    restart: unless-stopped
-    depends_on: [server]
-    environment:
-      - GHOSTCAM_DATA_DIR=/var/ghostcam
-      - GHOSTCAM_SERVER_ADDR=server:4433
-      - RUST_LOG=camera=info
-    volumes:
-      - camera-3-data:/var/ghostcam
-    command: ["--test-source"]
 
   ui:
     build:
@@ -142,24 +89,37 @@ services:
     volumes:
       - ./ui/src:/app/src
 
-  # Stripe CLI webhook forwarder.
-  # Exits immediately if STRIPE_SECRET_KEY is not set in the host env.
-  # Prints the webhook signing secret (whsec_...) to stdout on startup —
-  # set it as STRIPE_WEBHOOK_SECRET in .env and restart the server.
-  stripe-webhooks:
-    image: stripe/stripe-cli:latest
+  camera-1:
+    profiles: [test]
+    build:
+      context: .
+      target: camera
+    restart: unless-stopped
     depends_on: [server]
     environment:
-      - STRIPE_API_KEY=${STRIPE_SECRET_KEY:-}
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        if [ -z "$$STRIPE_API_KEY" ]; then
-          echo "STRIPE_SECRET_KEY not set, skipping webhook forwarder"
-          exit 0
-        fi
-        exec stripe listen --forward-to http://server:3000/api/v1/webhooks/stripe --log-level warn
-    restart: "no"
+      - GHOSTCAM_DATA_DIR=/var/ghostcam
+      - GHOSTCAM_SERVER_URL=http://server:3000
+      - GHOSTCAM_ADMIN_EMAIL=admin@ghostcam.dev
+      - GHOSTCAM_ADMIN_PASSWORD=dev-password
+    volumes:
+      - camera-1-data:/var/ghostcam
+    command: ["--test-source"]
+
+  camera-2:
+    profiles: [test]
+    build:
+      context: .
+      target: camera
+    restart: unless-stopped
+    depends_on: [server]
+    environment:
+      - GHOSTCAM_DATA_DIR=/var/ghostcam
+      - GHOSTCAM_SERVER_URL=http://server:3000
+      - GHOSTCAM_ADMIN_EMAIL=admin@ghostcam.dev
+      - GHOSTCAM_ADMIN_PASSWORD=dev-password
+    volumes:
+      - camera-2-data:/var/ghostcam
+    command: ["--test-source"]
 
 volumes:
   pg-data:
@@ -168,4 +128,3 @@ volumes:
   server-data:
   camera-1-data:
   camera-2-data:
-  camera-3-data:

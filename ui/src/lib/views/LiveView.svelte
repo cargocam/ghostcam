@@ -33,7 +33,6 @@
 			<CameraCard
 				deviceId={camera.device_id}
 				name={cameraConfigStore.getDisplayName(camera.device_id, camera.device_name)}
-				connected={camera.online}
 				featured={gridLayout === '1+5' && i === 0}
 			/>
 		{/each}

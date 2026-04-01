@@ -1,4 +1,0 @@
-SUBSYSTEM=="usb", ATTR{idVendor}=="1e0e", ATTR{idProduct}=="9011", MODE="0666"
-SUBSYSTEM=="usb", ATTR{idVendor}=="1e0e", ATTR{idProduct}=="9001", MODE="0666"
-KERNEL=="ttyUSB*", MODE="0666", GROUP="dialout"
-KERNEL=="cdc-wdm*", MODE="0666", GROUP="dialout"

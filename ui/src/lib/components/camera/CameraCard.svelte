@@ -1,5 +1,4 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import HlsPlayer from '$lib/components/HlsPlayer.svelte';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
@@ -10,66 +9,33 @@
 	let {
 		deviceId,
 		name,
-		connected,
 		featured = false,
 	}: {
 		deviceId: string;
 		name: string;
-		connected: boolean;
 		featured?: boolean;
 	} = $props();
 
-	let focusedLayoutTargetId = $derived.by(() => {
-		if (settingsStore.currentView !== 'live' || settingsStore.gridLayout !== '1+5') {
-			return null;
-		}
-		return cameraStore.selectedId ?? cameraStore.cameras[0]?.device_id ?? null;
-	});
+	let isOnline = $derived(cameraStore.isOnline(deviceId));
+	let isSelected = $derived(cameraStore.selectedId === deviceId);
+	let camera = $derived(cameraStore.cameras.find((c) => c.device_id === deviceId));
+	let isMuted = $derived(settingsStore.isCameraMuted(deviceId));
 
-	let isPlaybackMode = $derived.by(() => {
-		if (scrubberStore.mode !== 'playback') return false;
-		if (settingsStore.currentView !== 'live' || settingsStore.gridLayout !== '1+5') return true;
-		return deviceId === focusedLayoutTargetId;
-	});
-
-	// HLS manifest URL — S3-backed, server generates on the fly.
-	// Live mode: default 5-minute window. Playback mode: 10-minute window centered on playhead.
+	// HLS manifest URL. When live, use default (server returns latest 30 min).
+	// When seeking, use a 10-min window centered on the committed seek target.
+	// Uses seekTarget (not playheadTime) so dragging doesn't cause reloads.
 	let hlsSrc = $derived.by(() => {
 		const base = `/hls/${encodeURIComponent(deviceId)}/playlist.m3u8`;
-		if (!isPlaybackMode) return base;
-		const center = Math.floor(scrubberStore.playheadTime * 1000);
+		const target = scrubberStore.seekTarget;
+		if (target === null) return base;
+		const center = Math.floor(target * 1000);
 		const from = Math.max(0, center - 5 * 60 * 1000);
 		const to = center + 5 * 60 * 1000;
 		return `${base}?from=${from}&to=${to}`;
 	});
-	let playbackSeekTime = $derived(isPlaybackMode ? scrubberStore.playheadTime : undefined);
 
-	let isSelected = $derived(cameraStore.selectedId === deviceId);
-	let camera = $derived(cameraStore.cameras.find((c) => c.device_id === deviceId));
-
-	let isMuted = $derived(settingsStore.isCameraMuted(deviceId));
 	let videoElement = $state<HTMLVideoElement | undefined>(undefined);
 	let cardEl = $state<HTMLButtonElement | undefined>(undefined);
-	let isVisible = $state(true);
-	let playbackWindow = $state<{ start: number; end: number } | null>(null);
-	let hlsLastError = $state<string | null>(null);
-	let SHOW_PLAYBACK_DEBUG = $derived(settingsStore.debugMode);
-
-	let noFootage = $derived.by(() => {
-		if (!isPlaybackMode) return false;
-		if (!playbackWindow) return false;
-		return scrubberStore.playheadTime < playbackWindow.start || scrubberStore.playheadTime > playbackWindow.end;
-	});
-
-	onMount(() => {
-		if (!cardEl || typeof IntersectionObserver === 'undefined') return;
-		const observer = new IntersectionObserver(
-			([entry]) => { isVisible = entry.isIntersecting; },
-			{ threshold: 0 }
-		);
-		observer.observe(cardEl);
-		return () => observer.disconnect();
-	});
 
 	function captureSnapshot(e: MouseEvent) {
 		e.stopPropagation();
@@ -112,69 +78,13 @@
 	onclick={() => cameraStore.select(deviceId)}
 	ondblclick={() => settingsStore.openCameraView(deviceId)}
 >
-	<!-- Live video feed (HLS) -->
-	{#if !isPlaybackMode && connected}
-		<div class="absolute inset-0">
-			<HlsPlayer src={hlsSrc} muted={isMuted} />
-		</div>
-	{/if}
-
-	<!-- Playback video feed (HLS) — visible only during playback -->
-	{#if isPlaybackMode && hlsSrc && !noFootage}
-		<div class="absolute inset-0">
-			<HlsPlayer
-				src={hlsSrc}
-				seekTime={playbackSeekTime}
-				muted={isMuted}
-				onManifestParsed={(details) => {
-					hlsLastError = null;
-					playbackWindow = { start: details.startTime, end: details.endTime };
-					// Only expand the available window — don't overwrite per-segment coverage
-					// bars which are already populated from the coverage API with gap-aware data.
-					const currentWindow = scrubberStore.availableWindow;
-					scrubberStore.setAvailableWindow(
-						currentWindow
-							? {
-									start: Math.min(currentWindow.start, details.startTime),
-									end: Math.max(currentWindow.end, details.endTime),
-								}
-							: { start: details.startTime, end: details.endTime },
-					);
-				}}
-				onError={(err) => {
-					hlsLastError = err;
-					console.warn(`HLS error for ${deviceId}:`, err);
-				}}
-				onTimeUpdate={(epochTime) => {
-					scrubberStore.reportPlaybackTime(epochTime);
-				}}
-			/>
-		</div>
-	{/if}
-
-	{#if SHOW_PLAYBACK_DEBUG}
-		<div class="absolute left-2 top-14 z-20 rounded bg-black/70 px-2 py-1 text-[10px] font-mono text-white/80 pointer-events-none">
-			<div>{isPlaybackMode ? 'mode=playback' : 'mode=live'} selected={isSelected ? '1' : '0'}</div>
-			<div>playhead={scrubberStore.playheadTime.toFixed(2)} inWindow={noFootage ? '0' : '1'}</div>
-			<div>
-				window={playbackWindow ? `${playbackWindow.start.toFixed(2)}..${playbackWindow.end.toFixed(2)}` : 'none'}
-			</div>
-			{#if hlsLastError}
-				<div class="text-red-300">hlsError={hlsLastError}</div>
-			{/if}
-		</div>
-	{/if}
-
-	{#if noFootage}
-		<div class="absolute inset-0 z-10 grid place-items-center bg-black/70 text-center px-3">
-			<div class="text-xs text-white/85">
-				<div class="font-semibold mb-1">No footage at this time</div>
-				<div class="text-white/60 font-mono">
-					Available: {new Date((playbackWindow?.start ?? 0) * 1000).toLocaleTimeString()} - {new Date((playbackWindow?.end ?? 0) * 1000).toLocaleTimeString()}
-				</div>
-			</div>
-		</div>
-	{/if}
+	<div class="absolute inset-0">
+		<HlsPlayer
+			src={hlsSrc}
+			muted={isMuted}
+			onError={(err) => console.warn(`HLS error for ${deviceId}:`, err)}
+		/>
+	</div>
 
 	<!-- Top gradient overlay -->
 	<div class="absolute inset-x-0 top-0 h-12 bg-gradient-to-b from-black/70 to-transparent pointer-events-none">
@@ -182,17 +92,15 @@
 			<div class="flex items-center gap-2">
 				<span class={cn(
 					"h-2 w-2 rounded-full",
-					connected ? "bg-primary animate-pulse" : "bg-destructive"
+					isOnline ? "bg-primary animate-pulse" : "bg-destructive"
 				)}></span>
 				<span class="text-xs font-medium text-white/90 drop-shadow-sm">{name}</span>
 			</div>
 			<span class={cn(
 				"text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded",
-				isPlaybackMode
-					? "bg-sky-500/20 text-sky-400"
-					: connected ? "bg-primary/20 text-primary" : "bg-destructive/20 text-destructive"
+				isOnline ? "bg-primary/20 text-primary" : "bg-destructive/20 text-destructive"
 			)}>
-				{isPlaybackMode ? 'PLAYBACK' : connected ? 'LIVE' : 'OFF'}
+				{isOnline ? 'LIVE' : 'OFF'}
 			</span>
 		</div>
 	</div>
@@ -200,7 +108,7 @@
 	<!-- Bottom gradient overlay -->
 	<div class="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-black/70 to-transparent pointer-events-none">
 		<div class="flex items-center justify-between px-3 pb-2 absolute bottom-0 inset-x-0">
-			{#if !isPlaybackMode && camera?.telemetry}
+			{#if camera?.telemetry}
 				<div class="flex items-center gap-3 text-[10px] text-white/70 font-mono">
 					<span>CPU {(camera.telemetry.cpu_percent ?? 0).toFixed(0)}%</span>
 					<span>{(camera.telemetry.memory_mb ?? 0).toFixed(0)}MB</span>
