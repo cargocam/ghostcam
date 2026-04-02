@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/cargocam/ghostcam/server/handlers"
@@ -92,6 +93,26 @@ func BuildRouter(app *App) http.Handler {
 		r.Get("/api/v1/audit", h.QueryAudit)
 		r.Post("/api/v1/admin/reload", h.ReloadConfig)
 	})
+
+	// Static file serving (SPA fallback)
+	staticDir := "/app/static"
+	if dir := os.Getenv("GHOSTCAM_STATIC_DIR"); dir != "" {
+		staticDir = dir
+	}
+	if info, err := os.Stat(staticDir); err == nil && info.IsDir() {
+		fs := http.FileServer(http.Dir(staticDir))
+		r.Get("/*", func(w http.ResponseWriter, req *http.Request) {
+			// Try serving the exact file first
+			path := staticDir + req.URL.Path
+			if _, err := os.Stat(path); err == nil {
+				fs.ServeHTTP(w, req)
+				return
+			}
+			// SPA fallback: serve index.html for non-file routes
+			req.URL.Path = "/"
+			fs.ServeHTTP(w, req)
+		})
+	}
 
 	return r
 }
