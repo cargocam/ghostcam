@@ -15,12 +15,14 @@ RUN bun install --frozen-lockfile
 COPY ui/ .
 RUN bun run build
 
-# --- Server target ---
-FROM alpine:3.21 AS server
-RUN apk add --no-cache ca-certificates
-COPY --from=builder /ghostcam-server /usr/local/bin/ghostcam-server
-COPY --from=ui-builder /app/build /app/static
-ENTRYPOINT ["ghostcam-server"]
+# --- UI dev target (Vite HMR, used by docker-compose) ---
+FROM oven/bun:1 AS ui-dev
+WORKDIR /app
+COPY ui/package.json ui/bun.lock ./
+RUN bun install
+COPY ui/ .
+EXPOSE 5173
+CMD ["bun", "run", "dev"]
 
 # --- Camera target ---
 FROM alpine:3.21 AS camera
@@ -29,11 +31,9 @@ COPY --from=builder /ghostcam-camera /usr/local/bin/ghostcam-camera
 COPY camera-entrypoint.sh /usr/local/bin/camera-entrypoint.sh
 ENTRYPOINT ["camera-entrypoint.sh"]
 
-# --- UI dev target (Vite HMR) ---
-FROM oven/bun:1 AS ui-dev
-WORKDIR /app
-COPY ui/package.json ui/bun.lock ./
-RUN bun install
-COPY ui/ .
-EXPOSE 5173
-CMD ["bun", "run", "dev"]
+# --- Server target (default for Fly.io deploy) ---
+FROM alpine:3.21 AS server
+RUN apk add --no-cache ca-certificates
+COPY --from=builder /ghostcam-server /usr/local/bin/ghostcam-server
+COPY --from=ui-builder /app/build /app/static
+ENTRYPOINT ["ghostcam-server"]
