@@ -2,7 +2,6 @@
 	import { untrack } from 'svelte';
 	import { transportStore } from '$lib/stores/transport.svelte.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
-	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 	import LoginPage from '$lib/components/LoginPage.svelte';
 	import Sidebar from '$lib/components/layout/Sidebar.svelte';
@@ -19,27 +18,6 @@
 	let mobileNavOpen = $state(false);
 	let settingsOpen = $state(false);
 	let alertsOpen = $state(false);
-
-	function focusedLayoutTargetId(): string | null {
-		if (settingsStore.currentView !== 'live' || settingsStore.gridLayout !== '1+5') {
-			return null;
-		}
-		return cameraStore.selectedId ?? cameraStore.cameras[0]?.device_id ?? null;
-	}
-
-	function applyClientModeForCurrentContext(mode: 'live' | 'playback') {
-		const targetId = focusedLayoutTargetId();
-		if (!targetId) {
-			transportStore.broadcastClientMode(mode);
-			return;
-		}
-		for (const camera of cameraStore.cameras) {
-			transportStore.sendClientMode(
-				camera.device_id,
-				camera.device_id === targetId ? mode : 'live',
-			);
-		}
-	}
 
 	$effect(() => {
 		settingsStore.applyTheme();
@@ -60,27 +38,10 @@
 		return () => { transportStore.destroy(); };
 	});
 
-	// Initialize scrubber globally and wire mode changes to WebRTC commands
+	// Initialize scrubber globally
 	$effect(() => {
 		scrubberStore.initialize();
-
-		const unsubscribe = scrubberStore.onModeChange((mode) => {
-			applyClientModeForCurrentContext(mode === 'live' ? 'live' : 'playback');
-		});
-
-		return () => {
-			unsubscribe();
-			scrubberStore.destroy();
-		};
-	});
-
-	// Keep focused-layout routing consistent if focus changes while already in playback.
-	$effect(() => {
-		const targetId = focusedLayoutTargetId();
-		const mode = scrubberStore.mode;
-		const cameraCount = cameraStore.cameras.length;
-		if (!targetId || mode !== 'playback' || cameraCount === 0) return;
-		applyClientModeForCurrentContext('playback');
+		return () => { scrubberStore.destroy(); };
 	});
 </script>
 

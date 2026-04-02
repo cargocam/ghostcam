@@ -99,24 +99,8 @@
 	}
 
 	function injectVideo() {
-		if (!marker || markerMode !== 'pip') return;
-		const stream = camera.videoStream;
-		const container = marker.getElement()?.querySelector('.pip-video-slot') as HTMLElement | null;
-		if (!container) return;
-
-		if (!videoEl || !container.contains(videoEl)) {
-			videoEl = document.createElement('video');
-			videoEl.autoplay = true;
-			videoEl.playsInline = true;
-			videoEl.muted = true;
-			videoEl.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block';
-			container.innerHTML = '';
-			container.appendChild(videoEl);
-		}
-
-		if (stream && videoEl.srcObject !== stream) {
-			videoEl.srcObject = stream;
-		}
+		// Video preview on map markers removed in HLS rewrite.
+		// Map markers now show status icon only.
 	}
 
 	// Create/update marker position and icon
@@ -125,7 +109,6 @@
 
 		// Track dependencies for non-pip icon rebuilds
 		void selected;
-		const stream = camera.videoStream;
 
 		if (!marker) {
 			marker = leaflet.marker([gps.latitude, gps.longitude], {
@@ -154,8 +137,8 @@
 			}
 		}
 
-		// Inject video when stream arrives or changes
-		if (markerMode === 'pip' && stream) {
+		// Video preview disabled in HLS-only mode
+		if (markerMode === 'pip') {
 			injectVideo();
 		}
 	});

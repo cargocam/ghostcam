@@ -33,7 +33,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
 PI_DIR="${PROJECT_ROOT}/pi"
-TARGET="aarch64-unknown-linux-gnu"
+# Camera binary is cross-compiled with: GOOS=linux GOARCH=arm64 CGO_ENABLED=0
 
 SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 
@@ -77,10 +77,10 @@ stop_camera() {
 }
 
 build_and_deploy() {
-    local target_bin="${PROJECT_ROOT}/target/${TARGET}/release/camera"
+    local target_bin="${PROJECT_ROOT}/ghostcam-camera"
 
-    echo "Cross-compiling for ${TARGET}..."
-    (cd "${PROJECT_ROOT}" && cargo build --release --target "${TARGET}" -p camera 2>&1 | tail -5)
+    echo "Cross-compiling Go camera for linux/arm64..."
+    (cd "${PROJECT_ROOT}" && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o "${target_bin}" ./cmd/ghostcam-camera)
 
     if [ ! -f "${target_bin}" ]; then
         echo "ERROR: Build failed - binary not found at ${target_bin}"
@@ -90,6 +90,7 @@ build_and_deploy() {
     echo "Deploying binary to /usr/local/bin/ghostcam-camera..."
     pi_scp "${target_bin}" "/tmp/ghostcam-camera"
     pi_ssh "sudo mv /tmp/ghostcam-camera /usr/local/bin/ghostcam-camera && sudo chmod +x /usr/local/bin/ghostcam-camera"
+    rm -f "${target_bin}"
     echo "Deployed."
 }
 
@@ -361,7 +362,7 @@ cmd_ssh() {
 cmd_unenroll() {
     check_connection
     echo "Clearing enrollment state..."
-    pi_ssh "sudo systemctl stop ghostcam-camera 2>/dev/null || true; rm -f /var/ghostcam/user.crt /var/ghostcam/user.key /var/ghostcam/server.addr /var/ghostcam/server_fingerprint; sudo systemctl start ghostcam-camera"
+    pi_ssh "sudo systemctl stop ghostcam-camera 2>/dev/null || true; rm -f /var/ghostcam/api_key /var/ghostcam/device_id /var/ghostcam/server_url /var/ghostcam/provision_token /var/ghostcam/user.crt /var/ghostcam/user.key /var/ghostcam/server.addr /var/ghostcam/server_fingerprint; sudo systemctl start ghostcam-camera"
     echo "Done. Camera will re-enroll on next connection."
 }
 

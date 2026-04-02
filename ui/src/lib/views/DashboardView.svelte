@@ -3,7 +3,6 @@
 	import { cameraConfigStore } from '$lib/stores/cameraConfig.svelte.js';
 	import { transportStore } from '$lib/stores/transport.svelte.js';
 	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
-	import { videoStatsStore } from '$lib/stores/videoStats.svelte.js';
 	import { alertsStore } from '$lib/stores/alerts.svelte.js';
 	import { type TelemetryEntry } from '$lib/signaling.js';
 	import { fetchTelemetryRangeCached, nearestTelemetryEntryWithin } from '$lib/telemetry-history.js';
@@ -23,20 +22,19 @@
 	let cameras = $derived(cameraStore.cameras);
 
 	$effect(() => {
-		// Update bitrate history every 2s
+		// Update online count history every 2s for sparkline
 		const iv = setInterval(() => {
-			const kbps = videoStatsStore.totalBitrateKbps;
-			bitrateHistory = [...bitrateHistory.slice(-(MAX_HISTORY - 1)), kbps];
+			bitrateHistory = [...bitrateHistory.slice(-(MAX_HISTORY - 1)), cameraStore.onlineCount];
 		}, 2000);
 		return () => clearInterval(iv);
 	});
 
 	$effect(() => {
-		const mode = scrubberStore.mode;
+		const isLive = scrubberStore.isLive;
 		const playheadTime = Math.floor(scrubberStore.playheadTime);
 		const deviceIds = cameras.map((c) => c.device_id);
 
-		if (mode !== 'playback' || deviceIds.length === 0) {
+		if (isLive || deviceIds.length === 0) {
 			historicalTelemetryByDevice = {};
 			if (historicalFetchTimer) {
 				clearTimeout(historicalFetchTimer);
@@ -110,10 +108,6 @@
 	});
 
 	let onlineCount = $derived(cameraStore.onlineCount);
-	let totalBitrate = $derived(videoStatsStore.totalBitrateKbps);
-	let totalDecoded = $derived(videoStatsStore.totalFramesDecoded);
-	let totalDropped = $derived(videoStatsStore.totalFramesDropped);
-	let dropRate = $derived(totalDecoded > 0 ? (totalDropped / (totalDecoded + totalDropped)) * 100 : 0);
 
 	function formatBitrate(kbps: number): string {
 		if (kbps >= 1000) return `${(kbps / 1000).toFixed(1)} Mbps`;
@@ -127,7 +121,7 @@
 	}
 
 	function getTelemetryForCamera(deviceId: string, fallback: typeof cameras[number]['telemetry']) {
-		if (scrubberStore.mode !== 'playback') return fallback;
+		if (scrubberStore.isLive) return fallback;
 		const historical = historicalTelemetryByDevice[deviceId];
 		if (!historical) return null;
 		return {
@@ -140,7 +134,7 @@
 </script>
 
 <div class="h-full overflow-y-auto p-4 space-y-4">
-	{#if scrubberStore.mode === 'playback'}
+	{#if !scrubberStore.isLive}
 		<div class="text-xs text-sky-400 font-mono">
 			Playback snapshot at {new Date(scrubberStore.playheadTime * 1000).toLocaleTimeString()}
 		</div>
@@ -154,17 +148,17 @@
 		</div>
 
 		<div class="rounded-lg border bg-card p-4">
-			<div class="text-xs text-muted-foreground uppercase tracking-wider">Total Bandwidth</div>
-			<div class="text-2xl font-bold mt-1">{formatBitrate(totalBitrate)}</div>
+			<div class="text-xs text-muted-foreground uppercase tracking-wider">Total Cameras</div>
+			<div class="text-2xl font-bold mt-1">{cameras.length}</div>
 			<div class="h-6 mt-1">
 				<Sparkline data={bitrateHistory} height={24} class="w-full text-primary" />
 			</div>
 		</div>
 
 		<div class="rounded-lg border bg-card p-4">
-			<div class="text-xs text-muted-foreground uppercase tracking-wider">Frames Decoded</div>
-			<div class="text-2xl font-bold mt-1">{totalDecoded.toLocaleString()}</div>
-			<div class="text-xs text-muted-foreground">{totalDropped} dropped</div>
+			<div class="text-xs text-muted-foreground uppercase tracking-wider">Stream Type</div>
+			<div class="text-2xl font-bold mt-1">HLS</div>
+			<div class="text-xs text-muted-foreground">S3-backed segments</div>
 		</div>
 
 		<div class="rounded-lg border bg-card p-4">
@@ -190,16 +184,12 @@
 		</div>
 
 		<div class="rounded-lg border bg-card p-4">
-			<div class="text-xs text-muted-foreground uppercase tracking-wider mb-2">Stream Health</div>
+			<div class="text-xs text-muted-foreground uppercase tracking-wider mb-2">Delivery</div>
 			<div class="flex items-center gap-2">
-				<span class={cn("h-2.5 w-2.5 rounded-full",
-					dropRate < 1 ? 'bg-green-500' : dropRate < 5 ? 'bg-yellow-500' : 'bg-red-500'
-				)}></span>
-				<span class="text-sm font-medium">
-					{dropRate < 1 ? 'Excellent' : dropRate < 5 ? 'Good' : 'Degraded'}
-				</span>
+				<span class={cn("h-2.5 w-2.5 rounded-full", 'bg-green-500')}></span>
+				<span class="text-sm font-medium">S3 / Tigris</span>
 			</div>
-			<p class="text-xs text-muted-foreground mt-1">{dropRate.toFixed(2)}% frame drop rate</p>
+			<p class="text-xs text-muted-foreground mt-1">Segments served from edge</p>
 		</div>
 
 		<div class="rounded-lg border bg-card p-4">
@@ -227,10 +217,6 @@
 						<tr class="border-b bg-muted/50">
 							<th class="text-left px-4 py-2 font-medium text-muted-foreground">Camera</th>
 							<th class="text-left px-4 py-2 font-medium text-muted-foreground">Status</th>
-							<th class="text-left px-4 py-2 font-medium text-muted-foreground">Resolution</th>
-							<th class="text-left px-4 py-2 font-medium text-muted-foreground">Codec</th>
-							<th class="text-right px-4 py-2 font-medium text-muted-foreground">Bitrate</th>
-							<th class="text-right px-4 py-2 font-medium text-muted-foreground">Dropped</th>
 							<th class="text-right px-4 py-2 font-medium text-muted-foreground">CPU</th>
 							<th class="text-right px-4 py-2 font-medium text-muted-foreground">Memory</th>
 							<th class="text-right px-4 py-2 font-medium text-muted-foreground">Temp</th>
@@ -238,7 +224,6 @@
 					</thead>
 					<tbody>
 						{#each cameras as camera (camera.device_id)}
-							{@const stats = videoStatsStore.get(camera.device_id)}
 							{@const t = getTelemetryForCamera(camera.device_id, camera.telemetry)}
 							<tr class="border-b last:border-0 hover:bg-muted/30 transition-colors">
 								<td class="px-4 py-2.5 font-medium">
@@ -253,22 +238,6 @@
 										)}></span>
 										{camera.online ? 'Online' : 'Offline'}
 									</span>
-								</td>
-								<td class="px-4 py-2.5 font-mono text-muted-foreground">
-									{#if stats && stats.width > 0}
-										{stats.width}x{stats.height}
-									{:else}
-										--
-									{/if}
-								</td>
-								<td class="px-4 py-2.5 font-mono text-muted-foreground uppercase">
-									{stats?.codec || '--'}
-								</td>
-								<td class="px-4 py-2.5 font-mono text-right">
-									{stats ? formatBitrate(stats.bitrateKbps) : '--'}
-								</td>
-								<td class="px-4 py-2.5 font-mono text-right text-muted-foreground">
-									{stats?.framesDropped ?? '--'}
 								</td>
 								<td class="px-4 py-2.5 font-mono text-right">
 									{#if t && t.cpu_percent != null}

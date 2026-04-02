@@ -1,31 +1,25 @@
 import { checkSession, login as authLogin, register as authRegister, logout as authLogout } from '$lib/auth.js';
-import { listCameras, fetchCoverage, fetchCacheStatus } from '$lib/signaling.js';
-import { connectSse, type SseEvent } from '$lib/sse.js';
-import { ConnectionManager } from '$lib/connection-manager.js';
+import { listCameras, fetchCoverage } from '$lib/signaling.js';
 import { cameraStore } from '$lib/stores/cameras.svelte.js';
 import { groupStore } from '$lib/stores/groups.svelte.js';
-import { alertsStore } from '$lib/stores/alerts.svelte.js';
-import { cameraConfigStore } from '$lib/stores/cameraConfig.svelte.js';
 import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
+import { alertsStore } from '$lib/stores/alerts.svelte.js';
 
 class TransportStore {
 	authenticated = $state(false);
 	connected = $state(false);
 	connectedAt = $state<number | null>(null);
 	error = $state<string | null>(null);
-	reconnecting = $state(false);
-	reconnectAttempt = $state(0);
 
 	get connectionState(): string {
 		if (this.connected) return 'connected';
-		if (this.reconnecting) return 'reconnecting';
 		if (this.authenticated) return 'disconnected';
 		return 'unauthenticated';
 	}
 
 	private sse: EventSource | null = null;
-	private connManager: ConnectionManager | null = null;
-	private cacheStatusInterval: ReturnType<typeof setInterval> | null = null;
+	/** Periodically recompute online flags (cameras go offline when telemetry stops). */
+	private onlineRefreshInterval: ReturnType<typeof setInterval> | null = null;
 
 	async initialize() {
 		this.authenticated = await checkSession();
@@ -36,39 +30,93 @@ class TransportStore {
 			const cameras = await listCameras();
 			cameraStore.setInitialList(cameras);
 
-			// Start SSE
-			this.sse = connectSse(
-				(event) => this.handleSseEvent(event),
-				() => {
-					this.connected = true;
-					this.connectedAt = Date.now();
-				},
-				() => {},
-			);
+			// Fetch coverage for all cameras
+			await Promise.all(cameras.map((c) => this.refreshCoverage(c.device_id)));
 
-			// Create connection manager
-			this.connManager = new ConnectionManager();
+			// Connect SSE for realtime telemetry
+			this.connectSse();
 
-			// Connect to all online cameras and fetch coverage for all cameras in parallel
-			await Promise.all([
-				...cameras.filter((c) => c.online).map((c) => this.connManager!.connectCamera(c.device_id)),
-				...cameras.map((c) => this.refreshCoverage(c.device_id)),
-				...cameras.filter((c) => c.online).map((c) => this.refreshCacheStatus(c.device_id)),
-			]);
+			// Refresh online flags every 5s (detects cameras that stopped sending telemetry)
+			this.onlineRefreshInterval = setInterval(() => {
+				cameraStore.refreshOnlineStatus();
+			}, 5_000);
 
-			// Poll cache status every 5s for online cameras
-			this.cacheStatusInterval = setInterval(() => {
-				for (const cam of cameraStore.cameras) {
-					if (cam.online) {
-						this.refreshCacheStatus(cam.device_id);
-					}
-				}
-			}, 5000);
-
+			this.connected = true;
+			this.connectedAt = Date.now();
 			this.error = null;
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : 'Initialization failed';
 		}
+	}
+
+	/** Connect to /events SSE endpoint for realtime telemetry. */
+	private connectSse() {
+		this.sse?.close();
+
+		const es = new EventSource('/events', { withCredentials: true });
+
+		es.addEventListener('telemetry', (e: MessageEvent) => {
+			try {
+				const data = JSON.parse(e.data) as {
+					device_id: string;
+					telemetry: {
+						ts: number;
+						server_ts: number;
+						sig?: number;
+						temp?: number;
+						fps?: number;
+						kbps?: number;
+						cpu?: number;
+						mem?: number;
+						uptime?: number;
+						lat?: number;
+						lon?: number;
+						alt?: number;
+						gps_fix?: number;
+					};
+				};
+				const t = data.telemetry;
+				cameraStore.setTelemetry(data.device_id, {
+					cpu_percent: t.cpu,
+					temp_celsius: t.temp,
+					memory_mb: t.mem,
+					uptime_secs: t.uptime,
+					gps: t.lat != null && t.lon != null
+						? { latitude: t.lat, longitude: t.lon, alt: t.alt }
+						: undefined,
+				});
+			} catch {
+				// Ignore malformed events
+			}
+		});
+
+		es.addEventListener('motion_detected', (e: MessageEvent) => {
+			try {
+				const data = JSON.parse(e.data) as { device_id: string; segment_id: string; start_ts: number; end_ts: number };
+				const cam = cameraStore.getCamera(data.device_id);
+				const name = cam?.device_name ?? data.device_id;
+				alertsStore.addAlert('motion', data.device_id, name, 'Motion detected');
+			} catch { /* ignore */ }
+		});
+
+		es.addEventListener('storage_capped', (e: MessageEvent) => {
+			try {
+				const data = JSON.parse(e.data) as { device_id?: string; storage_bytes?: number; limit_gb?: number };
+				alertsStore.addAlert('storage_capped', data.device_id ?? '', 'Storage', 'Storage limit reached. Uploads paused.');
+			} catch { /* ignore */ }
+		});
+
+		es.onopen = () => {
+			this.connected = true;
+			this.connectedAt = Date.now();
+		};
+
+		es.onerror = () => {
+			this.connected = false;
+			// EventSource auto-reconnects
+		};
+
+		this.sse = es;
 	}
 
 	/** Fetch coverage for one camera and update the scrubber. */
@@ -78,21 +126,12 @@ class TransportStore {
 			const segments = coverage.segments.map((s) => ({
 				start: s.start_ms / 1000,
 				end: s.end_ms / 1000,
+				hasMotion: s.has_motion ?? false,
 			}));
 			scrubberStore.setCameraCoverage(deviceId, segments);
 			this.updateAvailableWindow();
 		} catch {
 			// Coverage unavailable for this camera — not fatal
-		}
-	}
-
-	/** Fetch cache status for one camera and update the scrubber. */
-	async refreshCacheStatus(deviceId: string): Promise<void> {
-		try {
-			const status = await fetchCacheStatus(deviceId);
-			scrubberStore.setCameraSegmentStates(deviceId, status.segments);
-		} catch {
-			// Cache status unavailable — not fatal
 		}
 	}
 
@@ -106,39 +145,6 @@ class TransportStore {
 		}
 		if (minStart < Infinity) {
 			scrubberStore.setAvailableWindow({ start: minStart, end: Date.now() / 1000 });
-		}
-	}
-
-	private handleSseEvent(event: SseEvent) {
-		switch (event.type) {
-			case 'camera_online': {
-				cameraStore.setOnline(event.device_id, true);
-				this.connManager?.connectCamera(event.device_id);
-				this.refreshCoverage(event.device_id);
-				const cam = cameraStore.getCamera(event.device_id);
-				alertsStore.addAlert(
-					'reconnect',
-					event.device_id,
-					cameraConfigStore.getDisplayName(event.device_id, cam?.device_name),
-					'Camera came online',
-				);
-				break;
-			}
-
-			case 'camera_offline': {
-				const offCam = cameraStore.getCamera(event.device_id);
-				cameraStore.setOnline(event.device_id, false);
-				this.connManager?.disconnectCamera(event.device_id);
-				// Refresh coverage after offline — camera may have pushed a final manifest
-				setTimeout(() => this.refreshCoverage(event.device_id), 1000);
-				alertsStore.addAlert(
-					'disconnect',
-					event.device_id,
-					cameraConfigStore.getDisplayName(event.device_id, offCam?.device_name),
-					'Camera went offline',
-				);
-				break;
-			}
 		}
 	}
 
@@ -163,41 +169,28 @@ class TransportStore {
 	async logout() {
 		await authLogout();
 		this.authenticated = false;
+		this.connected = false;
 		this.sse?.close();
 		this.sse = null;
-		if (this.cacheStatusInterval) {
-			clearInterval(this.cacheStatusInterval);
-			this.cacheStatusInterval = null;
+		if (this.onlineRefreshInterval) {
+			clearInterval(this.onlineRefreshInterval);
+			this.onlineRefreshInterval = null;
 		}
-		await this.connManager?.disconnectAll();
-		this.connManager = null;
 		cameraStore.clear();
 		groupStore.clear();
 	}
 
 	async switchGroup(groupId: string) {
 		groupStore.setActiveGroup(groupId);
-		// In per-camera model, group switching filters the view
-		// but doesn't tear down connections
-	}
-
-	/** Broadcast client_mode to all connected cameras. */
-	broadcastClientMode(mode: import('$lib/webrtc.js').ClientMode) {
-		this.connManager?.broadcastClientMode(mode);
-	}
-
-	/** Send client_mode to one camera. */
-	sendClientMode(deviceId: string, mode: import('$lib/webrtc.js').ClientMode) {
-		this.connManager?.sendClientMode(deviceId, mode);
 	}
 
 	destroy() {
 		this.sse?.close();
-		if (this.cacheStatusInterval) {
-			clearInterval(this.cacheStatusInterval);
-			this.cacheStatusInterval = null;
+		this.sse = null;
+		if (this.onlineRefreshInterval) {
+			clearInterval(this.onlineRefreshInterval);
+			this.onlineRefreshInterval = null;
 		}
-		this.connManager?.disconnectAll();
 	}
 }
 

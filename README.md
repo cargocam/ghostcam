@@ -1,225 +1,144 @@
 # Ghostcam
 
-Real-time camera surveillance system. Cameras stream H.264 video and Opus audio over QUIC to a server, which stores recordings locally, relays live feeds via WebRTC, and exposes a REST + SSE API consumed by a Svelte 5 browser viewer.
-
-## Repository Layout
-
-```
-ghostcam/
-├── ghostcam/     Shared library — wire protocol, types, telemetry, PKI primitives
-├── camera/       Camera agent — QUIC/mTLS, capture, recording, enrollment, telemetry
-├── server/       Server binary — QUIC ingest, WebRTC egress, HTTP API, Redis telemetry, PostgreSQL
-└── ui/           Svelte 5 SPA — live WebRTC view, HLS playback, timeline scrubber, GPS map
-```
-
-Each component has its own README:
-- [`ghostcam/README.md`](ghostcam/README.md)
-- [`camera/README.md`](camera/README.md)
-- [`server/README.md`](server/README.md)
-- [`ui/README.md`](ui/README.md)
+Camera surveillance system. Cameras capture video via `rpicam-vid | ffmpeg`, upload MPEG-TS segments to S3 (Tigris), and the server generates HLS manifests on the fly. Segment requests are served via 302 redirect to S3 (re-presigned per request).
 
 ## Architecture
 
-The server is a protocol translator, not an SFU. It does not transcode or mix media. Its job is to forward encoded frames from a camera's ingest slot to any number of subscribed viewer egress handles.
-
 ```
-┌─────────────┐
-│  Camera     │  QUIC/mTLS    ┌──────────────────────────────────────────────┐
-│  (Pi, etc.) │──────────────>│  IngestSlot                                  │
-└─────────────┘  H.264+Opus   │  ┌────────────────────────────────────────┐  │
-                 + telemetry  │  │ QUIC read loops (video, audio, upload) │  │
-┌─────────────┐               │  │ broadcast::Sender<VideoFrame>          │  │
-│  Camera     │──────────────>│  │ broadcast::Sender<AudioFrame>          │  │
-└─────────────┘               │  │ HLS ring buffer                        │  │
-                              │  └───────────────┬────────────────────────┘  │
-                              │                  │ fan-out                   │
-                              │       ┌──────────┼──────────┐                │
-                              │       ▼          ▼          ▼                │
-                              │   EgressHandle  Handle    Handle             │
-                              │   (str0m Rtc)                                │
-                              └───────┼──────────┼──────────┼────────────────┘
-                                      │ RTP/UDP  │          │
-                                      ▼          ▼          ▼
-                                  Viewer A   Viewer B   Viewer C
-                                  WebRTC     WebRTC     WebRTC
+Camera (rpicam-vid | ffmpeg) → MPEG-TS segments → S3 (Tigris)
+                                                      ↓
+Server (Go) ← 302 redirect → Browser (hls.js)
+     ↓
+  Postgres (segments, users, cameras, billing)
+  Redis (telemetry streams, SSE pub/sub)
 ```
 
-### Ingest
-
-Each connected camera has one `IngestSlot`. The slot runs a QUIC read loop independently of viewer count — when no viewers are watching, broadcast sends are no-ops and frames are dropped cheaply. The slot maintains an HLS ring buffer of fMP4 segments for playback.
-
-Cameras send three stream types: persistent `Video` and `Audio` streams (length-prefixed frames), and one-shot upload streams for fMP4 segments, manifests, and telemetry buffers. A persistent `Alerts` stream carries camera→server messages and server→camera commands.
-
-### Egress
-
-Each viewer×camera pair is one `EgressHandle` with its own UDP socket and str0m `Rtc` instance. The handle subscribes to the ingest slot's broadcast channels and drives a WebRTC send loop. When a camera disconnects, its slot closes and all egress handles for that camera receive the closed signal. Other cameras' sessions for the same viewer are unaffected.
-
-The server is ICE-lite — it only responds to STUN binding requests, never initiates. One host candidate is advertised per session using the configured `GHOSTCAM_PUBLIC_IP`.
-
-### Fan-out
-
-- **Ingest is O(cameras):** One QUIC read loop per camera regardless of viewer count.
-- **Egress is O(cameras × viewers)** at the send layer only: each handle receives a `Bytes` clone and writes it to its WebRTC track.
-- **Zero cost for unwatched cameras:** broadcast sends return immediately with no receivers.
-
-### State and Recovery
-
-The server holds no durable session state. If it restarts, cameras reconnect and re-register their slots; viewers re-request their feeds via SSE + WebRTC. Persistent state (camera enrollment, API tokens, operator accounts) lives in PostgreSQL. Telemetry history lives in Redis.
-
-| State | Storage | On restart |
-|-------|---------|------------|
-| Camera enrollment, tokens | PostgreSQL | Persists |
-| Telemetry history | Redis Streams | Persists |
-| Active QUIC connections | Memory | Cameras reconnect |
-| WebRTC sessions | Memory | Viewers re-request |
-| HLS ring buffer (in-flight) | Memory | Lost; cameras resume recording |
+- **No persistent connections** -- cameras POST telemetry every 10s, upload segments via presigned PUT URLs
+- **Stateless server** -- JWT auth, horizontally scalable
+- **S3-native HLS** -- manifests generated on the fly, segments served via 302 redirect to S3 (re-presigned per request)
+- **Billing always on** -- users default to free tier (5 GB / 1 camera), dev admin gets pro tier
 
 ## Quick Start
 
-### Prerequisites
-
-- Rust toolchain ([rustup](https://rustup.rs/))
-- [Bun](https://bun.sh/))
-- PostgreSQL 16+
-- Redis (optional — for telemetry history)
-- FFmpeg (for test video generation)
-
-### Build
-
 ```bash
-cargo build --release
-cd ui && bun install && cd ..
+# Set your LAN IP
+echo "GHOSTCAM_PUBLIC_IP=$(ipconfig getifaddr en0)" > .env
+
+# Start everything (server + test cameras + UI)
+docker compose --profile test up -d
+
+# Open http://localhost:5173
+# Login: admin@ghostcam.dev / dev-password
 ```
 
-### Generate test video
+## Project Structure
 
-```bash
-mkdir -p test-data
-ffmpeg -f lavfi -i testsrc2=duration=10:size=640x480:rate=30 \
-  -c:v libx264 -profile:v baseline -x264-params keyint=60:min-keyint=60 \
-  -f h264 test-data/test.h264
+```
+cmd/ghostcam-server/     Server entrypoint
+cmd/ghostcam-camera/     Camera entrypoint
+api/                     Shared Go types (camera <-> server contract)
+camera/                  Camera: capture pipeline, S3 upload, telemetry, provisioning, gpsd
+server/                  Server: HTTP handlers, DB, Redis, S3, auth, billing
+  auth/                  Argon2id passwords, JWT, HMAC
+  billing/               Tier definitions (free/starter/pro/enterprise)
+  db/                    PostgreSQL (pgx), migrations
+  handlers/              HTTP handlers (chi)
+  redis/                 Telemetry streams (XADD/XREAD), pub/sub
+  s3/                    Presigned URL generation (GET + PUT)
+ui/                      Svelte 5 SPA (hls.js, Leaflet, Tailwind)
+pi/                      Pi system files (systemd, GPS, NetworkManager)
+scripts/                 Developer tools (pi.sh)
 ```
 
-### Start the server
+## Camera
+
+The camera binary spawns `rpicam-vid | ffmpeg` to produce 6-second MPEG-TS segments, watches the output directory, and uploads new segments to S3 via presigned PUT URLs.
+
+Key features:
+- **Capture pipeline auto-restart** with exponential backoff (1s to 30s cap)
+- **Upload retry queue**: 3 retries with exponential backoff (2s, 4s, 8s)
+- **Graceful shutdown**: WaitGroup drain with 15s timeout
+- **Segment watcher**: backpressure with 5s blocking send instead of instant drop
+- **ffmpeg cleanup**: SIGTERM to process group, then SIGKILL after 5s
+- **GPS**: real gpsd integration on Linux (localhost:2947 for SIM7600G-H modem), synthetic fallback in Docker/dev
+- **Motion detection**: segment-size heuristic (1.5x rolling 10-segment average)
+- **Telemetry poll backoff** on failure: 10s -> 30s -> 60s
+- **Credentials** written as 0600 permissions
+- **Segment numbering**: `-segment_start_number` avoids filename collisions on restart
 
 ```bash
-# Find your LAN IP:  ipconfig getifaddr en0  (macOS)  |  hostname -I | awk '{print $1}'  (Linux)
+# Cross-compile for Pi (3 seconds, no sysroot needed)
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./cmd/ghostcam-camera
 
-GHOSTCAM_DATA_DIR=/tmp/ghostcam-server \
-GHOSTCAM_DATABASE_URL=postgres://ghostcam:dev-password@localhost:5432/ghostcam \
-GHOSTCAM_REDIS_URL=redis://127.0.0.1:6379 \
-GHOSTCAM_PUBLIC_IP=<your-lan-ip> \
-./target/release/server
+# Deploy to Pi
+scp ghostcam-camera pi@10.0.0.229:/usr/local/bin/
 ```
 
-> **`GHOSTCAM_PUBLIC_IP` must be a LAN IP, not `127.0.0.1`.** Firefox obfuscates its ICE candidates as mDNS hostnames and cannot route UDP from its LAN-bound socket to loopback. Chrome is unaffected (it also generates a `127.0.0.1` candidate and uses it).
+Cameras are provisioned via QR code or pre-provisioned token file. On first boot, the camera scans a QR containing the server URL + one-time token, provisions itself, and starts streaming.
 
-On first start the server runs migrations, generates a CA keypair, and prints an initial password for the `admin` account.
+## Server
 
-### Start test cameras
+HTTP API serving HLS manifests, presigned S3 URLs, SSE telemetry, and the static UI.
+
+Key features:
+- **Rate limiting**: login 10/min, register 5/min, provision 10/min per IP
+- **Secure cookies**: conditional on `GHOSTCAM_PUBLIC_URL` being HTTPS
+- **QR codes** use configured `GHOSTCAM_PUBLIC_URL` instead of `r.Host`
+- **Storage limits**: Redis `INCRBY` atomic reservation prevents TOCTOU race
+- **Storage capped events** deduplicated (5 min cooldown per device via Redis `SETNX`)
+- **Admin auth** required for `/api/v1/audit` and `/api/v1/admin/reload`
+- **HTTP timeouts**: Read 30s, Write 60s, Idle 120s
+- **SSE**: write deadline disabled for long-lived connections
+- **ListSegments**: LIMIT 2000, max 24hr range validation
+- **CORS** middleware for `GHOSTCAM_PUBLIC_URL` + `localhost:5173`
+- **Failed login logging** with email + IP
+- **HLS manifest**: `#EXT-X-INDEPENDENT-SEGMENTS` tag; segments via 302 redirect to S3
+- **Auto-create** "free" subscription on user registration
 
 ```bash
-for i in 1 2 3; do
-  mkdir -p /tmp/ghostcam-cam0$i/segments
-  ./target/release/camera \
-    --test-source \
-    --server-addr 127.0.0.1:4433 \
-    --data-dir /tmp/ghostcam-cam0$i \
-    --segment-dir /tmp/ghostcam-cam0$i/segments \
-    --no-tofu &
-done
+go build -o ghostcam-server ./cmd/ghostcam-server
 ```
 
-### Start the viewer
+### Key Endpoints
+
+| Endpoint | Auth | Description |
+|----------|------|-------------|
+| `POST /api/v1/cameras/provision` | Public (rate limited) | Camera provisioning |
+| `POST /api/v1/cameras/:id/telemetry` | Camera | Telemetry POST, returns pending commands |
+| `POST /api/v1/cameras/:id/presign` | Camera | Presigned S3 URLs + confirm uploads |
+| `GET /hls/:id/playlist.m3u8` | Viewer | Dynamic HLS manifest (max 24h, LIMIT 2000) |
+| `GET /hls/:id/:segmentID.ts` | Viewer | 302 redirect to S3 (re-presigned per request) |
+| `GET /hls/:id/coverage` | Viewer | Segment coverage with motion flags |
+| `GET /events` | Viewer | SSE stream (telemetry, motion, storage_capped) |
+| `GET /api/v1/billing/subscription` | Viewer | Always returns `billing_enabled: true` |
+| `POST /api/v1/cameras` | Viewer | Returns 402 when tier camera limit reached |
+
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `GHOSTCAM_DATABASE_URL` | PostgreSQL connection string (required) |
+| `GHOSTCAM_REDIS_URL` | Redis URL for telemetry + SSE |
+| `GHOSTCAM_PUBLIC_URL` | Public URL for QR codes and CORS (e.g. `https://cam.example.com`) |
+| `GHOSTCAM_S3_BUCKET` | S3/Tigris bucket name |
+| `GHOSTCAM_S3_ENDPOINT` | S3 endpoint URL (Tigris, MinIO) |
+| `GHOSTCAM_ADMIN_EMAIL` | Admin user email |
+| `GHOSTCAM_ADMIN_PASSWORD` | Preset admin password |
+
+## Infrastructure
+
+- **Fly.io** -- server hosting (ord)
+- **Tigris** -- S3-compatible object storage (edge-cached)
+- **Neon** -- Postgres (us-west-2)
+- **Upstash** -- Redis (sjc)
+
+## Pi Deployment
 
 ```bash
-cd ui && bun run dev
-# Open http://localhost:5173 — log in with admin / <printed password>
+./scripts/pi.sh setup    # First-time Pi provisioning
+./scripts/pi.sh deploy   # Build + deploy camera binary
+./scripts/pi.sh logs     # Stream camera logs
+./scripts/pi.sh status   # Health check
 ```
 
-## Ports
-
-| Port | Protocol | Purpose |
-|------|----------|---------|
-| 4433 | UDP | QUIC — camera ingest |
-| 3000 | TCP | HTTP API + static assets |
-| 5173 | TCP | Vite dev server (proxies `/api`, `/hls`, `/events` → :3000) |
-| _random_ | UDP | WebRTC media — one port per viewer session |
-
-## Configuration
-
-Server is configured via environment variables — see [`server/README.md`](server/README.md).
-
-Camera CLI flags — see [`camera/README.md`](camera/README.md).
-
-## Docker
-
-```bash
-docker compose build
-docker compose up        # postgres + redis + server + 2 test cameras
-```
-
-```bash
-# Cross-compile for ARM64 (Raspberry Pi)
-docker buildx build --platform linux/arm64 --target camera -t ghostcam-camera .
-```
-
-## CI
-
-`.github/workflows/ci.yml` — triggers on push/PR to `main`:
-
-| Job | Checks |
-|-----|--------|
-| `rust` | `cargo fmt`, `cargo clippy -D warnings`, `cargo test --workspace` |
-| `ui` | `bun run check`, `bun run build` |
-| `docker` | Builds server and camera images |
-
-## Wire Protocol Summary
-
-### Camera → Server (QUIC)
-
-Persistent streams (stay open for connection lifetime):
-- `Alerts` (tag `0x10`) — framed JSON `Alert` messages (handshake, recording events, acks)
-- `Video` (tag `0x11`) — length-prefixed H.264 NAL units
-- `Audio` (tag `0x12`) — length-prefixed Opus frames
-
-Upload streams (one-shot, camera opens → sends → closes):
-- `Segment` (tag `0x00`) — fMP4 media segment
-- `Init` (tag `0x01`) — fMP4 init segment
-- `Manifest` (tag `0x02`) — HLS playlist
-- `TelemetryBuffer` (tag `0x03`) — buffered telemetry array
-
-Server → Camera commands are sent as framed JSON `CameraCommand` messages on the Alerts stream.
-
-See [`ghostcam/src/wire/README.md`](ghostcam/src/wire/README.md) for full protocol details.
-
-### Server → Browser (WebRTC + REST + SSE)
-
-- **Live video**: H.264 RTP, 90 kHz clock, FU-A fragmentation for NALs > 1188 bytes
-- **Live audio**: Opus RTP, 48 kHz clock, one packet per frame
-- **Camera events**: Server-Sent Events (`/events`) — `camera_online`, `camera_offline`, `telemetry`
-- **HLS playback**: fMP4 segments served at `/hls/:device_id/`
-- **Telemetry history**: REST at `/api/v1/telemetry/:device_id`
-
-## Key Dependencies
-
-| Dependency | Purpose |
-|------------|---------|
-| `quinn` 0.11 | QUIC transport |
-| `str0m` 0.6 | Sans-I/O WebRTC (ICE-lite) |
-| `axum` 0.7 | HTTP framework |
-| `rustls` 0.23 | TLS |
-| `rcgen` 0.13 | Certificate generation |
-| `sqlx` 0.8 | PostgreSQL async |
-| `redis` 0.27 | Redis Streams for telemetry |
-| `argon2` 0.5 | Password hashing |
-| `rmp-serde` 1 | MessagePack for telemetry wire format |
-| `tokio` 1 | Async runtime |
-| `svelte` 5 | Frontend (runes reactivity) |
-| `tailwindcss` 4 | CSS (OKLCH color system) |
-| `hls.js` 1 | HLS playback in browser |
-| `leaflet` 1.9 | Map integration |
-
-## License
-
-Private / All rights reserved.
+Requires `ffmpeg` on the Pi (`apt install ffmpeg`).

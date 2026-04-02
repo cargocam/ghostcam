@@ -11,6 +11,10 @@
 				return '\u{1F534}';
 			case 'reconnect':
 				return '\u{1F7E2}';
+			case 'motion':
+				return '\u{1F3C3}';
+			case 'storage_capped':
+				return '\u{1F4E6}';
 			default:
 				return '\u{2139}\u{FE0F}';
 		}

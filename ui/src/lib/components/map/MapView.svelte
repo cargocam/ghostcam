@@ -33,7 +33,7 @@
 
 	// Marker source list: in playback, include cameras with historical playback points too.
 	let markerCameras = $derived.by(() => {
-		if (scrubberStore.mode !== 'playback') return gpsCameras;
+		if (scrubberStore.isLive) return gpsCameras;
 		return cameraStore.cameras.filter((c) => !!playbackPointByDevice[c.device_id] || !!c.telemetry?.gps);
 	});
 
@@ -43,7 +43,7 @@
 		return cameraStore.cameras.map((camera) => {
 			const playbackPoint = playbackPointByDevice[camera.device_id];
 			const hasLive = !!camera.telemetry?.gps;
-			const source = scrubberStore.mode === 'playback'
+			const source = !scrubberStore.isLive
 				? (playbackPoint ? 'playback' : (hasLive ? 'live-fallback' : 'none'))
 				: (hasLive ? 'live' : 'none');
 			return {
@@ -86,11 +86,11 @@
 	});
 
 	$effect(() => {
-		const mode = scrubberStore.mode;
+		const isLive = scrubberStore.isLive;
 		const playheadTime = Math.floor(scrubberStore.playheadTime);
 		const cameraIds = cameraStore.cameras.map((c) => c.device_id);
 
-		if (mode !== 'playback' || cameraIds.length === 0) {
+		if (isLive || cameraIds.length === 0) {
 			playbackTrailsByDevice = {};
 			playbackPointByDevice = {};
 			if (playbackFetchTimer) {
@@ -284,7 +284,7 @@
 				{map}
 				leaflet={L}
 				{camera}
-				gpsOverride={scrubberStore.mode === 'playback' && playbackPoint
+				gpsOverride={!scrubberStore.isLive && playbackPoint
 					? { latitude: playbackPoint[0], longitude: playbackPoint[1] }
 					: undefined}
 				selected={tracking === 'single' && trackedDeviceId === camera.device_id}
@@ -293,7 +293,7 @@
 		{/each}
 	{/if}
 
-	{#if ready && map && L && scrubberStore.mode === 'playback'}
+	{#if ready && map && L && !scrubberStore.isLive}
 		{#each markerCameras as camera (camera.device_id)}
 			{@const points = playbackTrailsByDevice[camera.device_id] ?? []}
 			{@const historicPoint = playbackPointByDevice[camera.device_id] ?? null}
@@ -337,7 +337,7 @@
 
 	{#if SHOW_PLAYBACK_DEBUG}
 		<div class="absolute left-3 bottom-3 z-[1000] rounded-md bg-black/70 px-2 py-1 text-[10px] font-mono text-white/85 pointer-events-none">
-			<div>map-mode={scrubberStore.mode}</div>
+			<div>map-mode={scrubberStore.isLive ? 'live' : 'seeking'}</div>
 			{#each mapSourceDebug as item (item.deviceId)}
 				<div>
 					{item.deviceId.slice(0, 8)} src={item.source} live={item.hasLive ? '1' : '0'} pb={item.hasPlaybackPoint ? '1' : '0'}

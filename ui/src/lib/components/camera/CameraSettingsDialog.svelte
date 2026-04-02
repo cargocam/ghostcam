@@ -1,0 +1,117 @@
+<script lang="ts">
+	import {
+		Dialog,
+		DialogContent,
+		DialogHeader,
+		DialogTitle,
+		DialogDescription,
+	} from '$lib/components/ui/dialog/index.js';
+	import { Button } from '$lib/components/ui/button/index.js';
+	import { updateCameraSettings } from '$lib/signaling.js';
+	import { cameraStore } from '$lib/stores/cameras.svelte.js';
+
+	let {
+		open = $bindable(false),
+		deviceId,
+	}: {
+		open?: boolean;
+		deviceId: string;
+	} = $props();
+
+	let camera = $derived(cameraStore.getCamera(deviceId));
+	let resolution = $state('720p');
+	let recordingMode = $state('constant');
+	let saving = $state(false);
+	let error = $state('');
+	let success = $state(false);
+
+	// Sync local state when dialog opens
+	$effect(() => {
+		if (open && camera) {
+			resolution = camera.resolution || '720p';
+			recordingMode = camera.recording_mode || 'constant';
+			error = '';
+			success = false;
+		}
+	});
+
+	let hasChanges = $derived(
+		camera != null && (resolution !== camera.resolution || recordingMode !== camera.recording_mode)
+	);
+
+	async function save() {
+		if (!camera || !hasChanges) return;
+		saving = true;
+		error = '';
+		success = false;
+		try {
+			const update: Record<string, string> = {};
+			if (resolution !== camera.resolution) update.resolution = resolution;
+			if (recordingMode !== camera.recording_mode) update.recording_mode = recordingMode;
+			await updateCameraSettings(deviceId, update);
+			// Update local state
+			camera.resolution = resolution;
+			camera.recording_mode = recordingMode;
+			success = true;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to update settings';
+		} finally {
+			saving = false;
+		}
+	}
+</script>
+
+<Dialog bind:open>
+	<DialogContent>
+		<DialogHeader>
+			<DialogTitle>Camera Settings</DialogTitle>
+			<DialogDescription>
+				{camera?.device_name ?? 'Camera'} &mdash; changes take effect after camera restarts.
+			</DialogDescription>
+		</DialogHeader>
+
+		<div class="mt-4 space-y-4">
+			<div>
+				<label for="resolution" class="text-sm font-medium">Resolution</label>
+				<select
+					id="resolution"
+					bind:value={resolution}
+					class="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+				>
+					<option value="480p">480p (854x480, 750 Kbps)</option>
+					<option value="720p">720p (1280x720, 2 Mbps)</option>
+					<option value="1080p">1080p (1920x1080, 4 Mbps)</option>
+				</select>
+			</div>
+
+			<div>
+				<label for="recording-mode" class="text-sm font-medium">Recording Mode</label>
+				<select
+					id="recording-mode"
+					bind:value={recordingMode}
+					class="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+				>
+					<option value="constant">Continuous</option>
+					<option value="motion">On Motion</option>
+				</select>
+				<p class="mt-1 text-xs text-muted-foreground">
+					{recordingMode === 'motion'
+						? 'Only uploads segments with detected motion. Saves storage.'
+						: 'Records and uploads all footage continuously.'}
+				</p>
+			</div>
+
+			{#if error}
+				<p class="text-sm text-destructive">{error}</p>
+			{/if}
+
+			{#if success}
+				<p class="text-sm text-primary">Settings saved. Camera will restart shortly.</p>
+			{/if}
+
+			<Button onclick={save} disabled={saving || !hasChanges} class="w-full">
+				{saving ? 'Saving...' : 'Save Settings'}
+			</Button>
+		</div>
+	</DialogContent>
+</Dialog>
