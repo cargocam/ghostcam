@@ -55,6 +55,7 @@ type UploadedSegment struct {
 	StartTS   uint64 `json:"start_ts"`
 	EndTS     uint64 `json:"end_ts"`
 	SizeBytes uint64 `json:"size_bytes"`
+	HasMotion bool   `json:"has_motion,omitempty"`
 }
 
 // PresignedUrl is a presigned URL for uploading a segment to S3/Tigris.
@@ -67,8 +68,9 @@ type PresignedUrl struct {
 
 // PresignResponse contains presigned URLs for segment uploads.
 type PresignResponse struct {
-	URLs    []PresignedUrl `json:"urls"`
-	InitURL *PresignedUrl  `json:"init_url,omitempty"`
+	URLs          []PresignedUrl `json:"urls"`
+	InitURL       *PresignedUrl  `json:"init_url,omitempty"`
+	StorageCapped bool           `json:"storage_capped,omitempty"`
 }
 
 // QrPayload is the JSON payload encoded in provisioning QR codes.

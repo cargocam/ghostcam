@@ -362,7 +362,7 @@ cmd_ssh() {
 cmd_unenroll() {
     check_connection
     echo "Clearing enrollment state..."
-    pi_ssh "sudo systemctl stop ghostcam-camera 2>/dev/null || true; rm -f /var/ghostcam/user.crt /var/ghostcam/user.key /var/ghostcam/server.addr /var/ghostcam/server_fingerprint; sudo systemctl start ghostcam-camera"
+    pi_ssh "sudo systemctl stop ghostcam-camera 2>/dev/null || true; rm -f /var/ghostcam/api_key /var/ghostcam/device_id /var/ghostcam/server_url /var/ghostcam/provision_token /var/ghostcam/user.crt /var/ghostcam/user.key /var/ghostcam/server.addr /var/ghostcam/server_fingerprint; sudo systemctl start ghostcam-camera"
     echo "Done. Camera will re-enroll on next connection."
 }
 

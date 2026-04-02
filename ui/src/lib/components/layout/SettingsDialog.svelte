@@ -134,6 +134,34 @@
 						{/if}
 					</div>
 
+					<!-- Storage usage bar -->
+					{#if billingStore.usage}
+						<div class="mb-3">
+							<div class="flex justify-between text-xs text-muted-foreground mb-1">
+								<span>Storage</span>
+								<span>
+									{billingStore.storageUsedGB.toFixed(2)} GB
+									{#if billingStore.storageLimitGB != null}
+										/ {billingStore.storageLimitGB} GB
+									{:else}
+										(unlimited)
+									{/if}
+								</span>
+							</div>
+							{#if billingStore.storageLimitGB != null}
+								<div class="h-2 rounded-full bg-muted overflow-hidden">
+									<div
+										class="h-full rounded-full transition-all {billingStore.isStorageCapped ? 'bg-destructive' : billingStore.storagePercent > 80 ? 'bg-amber-500' : 'bg-primary'}"
+										style="width: {billingStore.storagePercent}%"
+									></div>
+								</div>
+								{#if billingStore.isStorageCapped}
+									<p class="text-xs text-destructive mt-1">Storage full. Camera uploads paused.</p>
+								{/if}
+							{/if}
+						</div>
+					{/if}
+
 					<!-- Actions -->
 					{#if isFree}
 						<Button class="w-full" onclick={() => upgradeOpen = true}>
@@ -144,6 +172,36 @@
 							Manage Subscription
 							<ExternalLink class="h-3.5 w-3.5 ml-1.5" />
 						</Button>
+					{/if}
+				</div>
+
+				<Separator />
+			{/if}
+
+			<!-- Storage (always visible) -->
+			{#if billingStore.usage}
+				<div>
+					<h3 class="text-sm font-medium mb-2">Storage</h3>
+					<div class="flex justify-between text-xs text-muted-foreground mb-1">
+						<span>{billingStore.storageUsedGB.toFixed(2)} GB used</span>
+						<span>
+							{#if billingStore.storageLimitGB != null}
+								{billingStore.storageLimitGB} GB limit
+							{:else}
+								Unlimited
+							{/if}
+						</span>
+					</div>
+					{#if billingStore.storageLimitGB != null}
+						<div class="h-2 rounded-full bg-muted overflow-hidden">
+							<div
+								class="h-full rounded-full transition-all {billingStore.isStorageCapped ? 'bg-destructive' : billingStore.storagePercent > 80 ? 'bg-amber-500' : 'bg-primary'}"
+								style="width: {billingStore.storagePercent}%"
+							></div>
+						</div>
+						{#if billingStore.isStorageCapped}
+							<p class="text-xs text-destructive mt-1">Storage full. Camera uploads paused.</p>
+						{/if}
 					{/if}
 				</div>
 

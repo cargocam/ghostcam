@@ -26,6 +26,8 @@ type ServerConfig struct {
 	S3PresignTTLSecs uint64
 	// HMAC key for audit (env only)
 	HMACKey string
+	// Public URL for QR codes (e.g. "https://cam.example.com")
+	PublicURL string
 }
 
 // serverConfigFile is the TOML-deserialized config file. All fields optional.
@@ -62,6 +64,7 @@ func LoadConfig() (*ServerConfig, error) {
 
 	cfg.RedisURL = envOrFileOrDefault("GHOSTCAM_REDIS_URL", file.RedisURL, "")
 	cfg.AdminPassword = os.Getenv("GHOSTCAM_ADMIN_PASSWORD")
+	cfg.PublicURL = os.Getenv("GHOSTCAM_PUBLIC_URL")
 
 	return cfg, nil
 }

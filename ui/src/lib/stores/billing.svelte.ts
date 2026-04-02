@@ -18,6 +18,17 @@ class BillingStore {
 	stripePublicKey = $derived(this.subscription?.stripe_public_key ?? null);
 	stripePricingTableId = $derived(this.subscription?.stripe_pricing_table_id ?? null);
 
+	storageUsedGB = $derived((this.usage?.storage_bytes ?? 0) / (1024 * 1024 * 1024));
+	storageLimitGB = $derived(this.usage?.storage_limit_gb ?? null);
+	storagePercent = $derived(
+		this.storageLimitGB != null && this.storageLimitGB > 0
+			? Math.min(100, (this.storageUsedGB / this.storageLimitGB) * 100)
+			: 0
+	);
+	isStorageCapped = $derived(
+		this.storageLimitGB != null && this.storageLimitGB > 0 && this.storageUsedGB >= this.storageLimitGB
+	);
+
 	async load() {
 		this.loading = true;
 		this.error = null;

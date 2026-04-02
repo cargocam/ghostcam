@@ -3,6 +3,7 @@ import { listCameras, fetchCoverage } from '$lib/signaling.js';
 import { cameraStore } from '$lib/stores/cameras.svelte.js';
 import { groupStore } from '$lib/stores/groups.svelte.js';
 import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
+import { alertsStore } from '$lib/stores/alerts.svelte.js';
 
 class TransportStore {
 	authenticated = $state(false);
@@ -89,6 +90,22 @@ class TransportStore {
 			}
 		});
 
+		es.addEventListener('motion_detected', (e: MessageEvent) => {
+			try {
+				const data = JSON.parse(e.data) as { device_id: string; segment_id: string; start_ts: number; end_ts: number };
+				const cam = cameraStore.getCamera(data.device_id);
+				const name = cam?.device_name ?? data.device_id;
+				alertsStore.addAlert('motion', data.device_id, name, 'Motion detected');
+			} catch { /* ignore */ }
+		});
+
+		es.addEventListener('storage_capped', (e: MessageEvent) => {
+			try {
+				const data = JSON.parse(e.data) as { device_id?: string; storage_bytes?: number; limit_gb?: number };
+				alertsStore.addAlert('storage_capped', data.device_id ?? '', 'Storage', 'Storage limit reached. Uploads paused.');
+			} catch { /* ignore */ }
+		});
+
 		es.onopen = () => {
 			this.connected = true;
 			this.connectedAt = Date.now();
@@ -109,6 +126,7 @@ class TransportStore {
 			const segments = coverage.segments.map((s) => ({
 				start: s.start_ms / 1000,
 				end: s.end_ms / 1000,
+				hasMotion: s.has_motion ?? false,
 			}));
 			scrubberStore.setCameraCoverage(deviceId, segments);
 			this.updateAvailableWindow();

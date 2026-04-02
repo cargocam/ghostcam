@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/cargocam/ghostcam/api"
+	"github.com/cargocam/ghostcam/server/billing"
 	"github.com/cargocam/ghostcam/server/ctxutil"
 	"github.com/cargocam/ghostcam/server/db"
 	"github.com/cargocam/ghostcam/server/s3"
@@ -46,6 +47,7 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 				SizeBytes:  u.SizeBytes,
 				Resolution: "",
 				CreatedAt:  now,
+				HasMotion:  u.HasMotion,
 			})
 		}
 		if err := h.DB.InsertSegments(ctx, records); err != nil {
@@ -53,9 +55,104 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "", http.StatusInternalServerError)
 			return
 		}
+
+		// Publish motion events via Redis for SSE
+		if h.Redis != nil {
+			for _, u := range body.Uploaded {
+				if u.HasMotion {
+					motionPayload, _ := json.Marshal(map[string]any{
+						"device_id":  deviceID,
+						"segment_id": u.SegmentID,
+						"start_ts":   u.StartTS,
+						"end_ts":     u.EndTS,
+					})
+					if err := h.Redis.RDB().Publish(ctx, "motion_detected", motionPayload).Err(); err != nil {
+						slog.Debug("failed to publish motion event", "error", err)
+					}
+				}
+			}
+		}
 	}
 
-	// 2. Generate presigned PUT URLs
+	// 2. Check storage limits
+	camera, err := h.DB.GetCamera(ctx, deviceID)
+	if err != nil || camera == nil || camera.UserID == nil {
+		writeError(w, http.StatusNotFound, "camera not found")
+		return
+	}
+
+	// Determine user's tier
+	tierID := defaultTierID
+	sub, _ := h.DB.GetSubscription(ctx, *camera.UserID)
+	if sub != nil {
+		tierID = sub.Tier
+	}
+	tier := billing.GetTier(tierID)
+
+	storageLimitBytes := tier.StorageLimitBytes()
+	if storageLimitBytes > 0 {
+		// Use Redis atomic increment to avoid TOCTOU race when checking storage limits.
+		// Reserve estimated storage for the batch, then roll back if over limit.
+		estimatedBatchBytes := int64(body.Count) * 2 * 1024 * 1024 // ~2MB per segment estimate
+		var overLimit bool
+
+		if h.Redis != nil {
+			reserveKey := "storage_reserved:" + *camera.UserID
+			newTotal, err := h.Redis.RDB().IncrBy(ctx, reserveKey, estimatedBatchBytes).Result()
+			if err != nil {
+				slog.Warn("presign: redis INCRBY failed, falling back to DB check", "error", err)
+				// Fall back to non-atomic DB check
+				currentUsage, err := h.DB.GetUserStorageBytes(ctx, *camera.UserID)
+				if err == nil && currentUsage >= storageLimitBytes {
+					overLimit = true
+				}
+			} else {
+				// Set TTL on the reservation key so it auto-expires (re-syncs from DB)
+				h.Redis.RDB().Expire(ctx, reserveKey, 5*time.Minute)
+
+				// Get actual DB usage + reservation to check limit
+				currentUsage, dbErr := h.DB.GetUserStorageBytes(ctx, *camera.UserID)
+				if dbErr != nil {
+					slog.Warn("presign: failed to get user storage", "error", dbErr)
+				} else if currentUsage+uint64(newTotal) >= storageLimitBytes {
+					// Over limit — roll back reservation
+					h.Redis.RDB().DecrBy(ctx, reserveKey, estimatedBatchBytes)
+					overLimit = true
+				}
+			}
+		} else {
+			currentUsage, err := h.DB.GetUserStorageBytes(ctx, *camera.UserID)
+			if err != nil {
+				slog.Warn("presign: failed to get user storage", "error", err)
+			} else if currentUsage >= storageLimitBytes {
+				overLimit = true
+			}
+		}
+
+		if overLimit {
+			slog.Info("storage capped", "device_id", deviceID, "user_id", *camera.UserID, "limit", storageLimitBytes)
+
+			// Publish storage_capped event (deduplicated per device, 5 min cooldown)
+			if h.Redis != nil {
+				dedupeKey := "storage_capped_notified:" + deviceID
+				set, _ := h.Redis.RDB().SetNX(ctx, dedupeKey, "1", 5*time.Minute).Result()
+				if set {
+					capPayload, _ := json.Marshal(map[string]any{
+						"user_id":       *camera.UserID,
+						"device_id":     deviceID,
+						"storage_bytes": storageLimitBytes,
+						"limit_gb":      *tier.StorageLimitGB,
+					})
+					h.Redis.RDB().Publish(ctx, "storage_capped", capPayload)
+				}
+			}
+
+			writeJSON(w, http.StatusOK, api.PresignResponse{URLs: nil, StorageCapped: true})
+			return
+		}
+	}
+
+	// 3. Generate presigned PUT URLs
 	count := body.Count
 	if count > presignBatchMax {
 		count = presignBatchMax

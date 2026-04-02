@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"syscall"
+	"time"
 )
 
 const segmentDurationSecs = 6
@@ -15,17 +17,33 @@ const segmentDurationSecs = 6
 // the context is cancelled. For test-source mode it uses ffmpeg testsrc2; for
 // real hardware it pipes rpicam-vid into ffmpeg.
 func StartCapturePipeline(ctx context.Context, cfg *CameraConfig) error {
+	startNum := nextSegmentNumber(cfg.SegmentDir)
 	pattern := filepath.Join(cfg.SegmentDir, "seg%05d.ts")
 	kfInterval := fmt.Sprintf("keyint=%d:min-keyint=%d", cfg.VideoKeyframeInterval, cfg.VideoKeyframeInterval)
 
 	if cfg.TestSource {
-		return runTestPipeline(ctx, cfg, pattern, kfInterval)
+		return runTestPipeline(ctx, cfg, pattern, kfInterval, startNum)
 	}
-	return runRealPipeline(ctx, cfg, pattern)
+	return runRealPipeline(ctx, cfg, pattern, startNum)
 }
 
-func runTestPipeline(ctx context.Context, cfg *CameraConfig, pattern, kfInterval string) error {
-	slog.Info("starting test capture pipeline (ffmpeg testsrc2 + sine audio)")
+// nextSegmentNumber counts existing .ts files to avoid filename collisions on restart.
+func nextSegmentNumber(dir string) int {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0
+	}
+	count := 0
+	for _, e := range entries {
+		if filepath.Ext(e.Name()) == ".ts" {
+			count++
+		}
+	}
+	return count
+}
+
+func runTestPipeline(ctx context.Context, cfg *CameraConfig, pattern, kfInterval string, startNum int) error {
+	slog.Info("starting test capture pipeline (ffmpeg testsrc2 + sine audio)", "segment_start", startNum)
 
 	size := fmt.Sprintf("%dx%d", cfg.VideoWidth, cfg.VideoHeight)
 	videoInput := fmt.Sprintf("testsrc2=size=%s:rate=%d", size, cfg.VideoFPS)
@@ -42,6 +60,7 @@ func runTestPipeline(ctx context.Context, cfg *CameraConfig, pattern, kfInterval
 		"-f", "segment",
 		"-segment_time", fmt.Sprintf("%d", segmentDurationSecs),
 		"-segment_format", "mpegts",
+		"-segment_start_number", fmt.Sprintf("%d", startNum),
 		"-reset_timestamps", "1",
 		pattern,
 	)
@@ -62,8 +81,8 @@ func runTestPipeline(ctx context.Context, cfg *CameraConfig, pattern, kfInterval
 	return nil
 }
 
-func runRealPipeline(ctx context.Context, cfg *CameraConfig, pattern string) error {
-	slog.Info("starting real capture pipeline (rpicam-vid + ALSA audio | ffmpeg)")
+func runRealPipeline(ctx context.Context, cfg *CameraConfig, pattern string, startNum int) error {
+	slog.Info("starting real capture pipeline (rpicam-vid + ALSA audio | ffmpeg)", "segment_start", startNum)
 
 	// Determine audio device (default to "default" ALSA device)
 	audioDevice := "default"
@@ -78,10 +97,11 @@ func runRealPipeline(ctx context.Context, cfg *CameraConfig, pattern string) err
 		pipeline = fmt.Sprintf(
 			"rpicam-vid --codec h264 --inline --width %d --height %d --framerate %d --bitrate %d -t 0 -o - 2>/dev/null | "+
 				"ffmpeg -nostdin -loglevel warning -probesize 5M -analyzeduration 5M -f h264 -framerate %d -i pipe:0 "+
-				"-c:v copy -f segment -segment_time %d -segment_format mpegts -reset_timestamps 1 '%s'",
+				"-c:v copy -f segment -segment_time %d -segment_format mpegts -segment_start_number %d -reset_timestamps 1 '%s'",
 			cfg.VideoWidth, cfg.VideoHeight, cfg.VideoFPS, cfg.VideoBitrate,
 			cfg.VideoFPS,
 			segmentDurationSecs,
+			startNum,
 			pattern,
 		)
 	} else {
@@ -91,11 +111,12 @@ func runRealPipeline(ctx context.Context, cfg *CameraConfig, pattern string) err
 				"-f h264 -framerate %d -i pipe:0 "+
 				"-f alsa -i %s "+
 				"-c:v copy -c:a aac -b:a 64k "+
-				"-f segment -segment_time %d -segment_format mpegts -reset_timestamps 1 '%s'",
+				"-f segment -segment_time %d -segment_format mpegts -segment_start_number %d -reset_timestamps 1 '%s'",
 			cfg.VideoWidth, cfg.VideoHeight, cfg.VideoFPS, cfg.VideoBitrate,
 			cfg.VideoFPS,
 			audioDevice,
 			segmentDurationSecs,
+			startNum,
 			pattern,
 		)
 	}
@@ -103,7 +124,18 @@ func runRealPipeline(ctx context.Context, cfg *CameraConfig, pattern string) err
 	cmd := exec.CommandContext(ctx, "sh", "-c", pipeline)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Cancel = func() error {
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		pgid := -cmd.Process.Pid
+		// Send SIGTERM first
+		if err := syscall.Kill(pgid, syscall.SIGTERM); err != nil {
+			return err
+		}
+		// Spawn a goroutine that sends SIGKILL after 5s if process hasn't exited
+		go func() {
+			time.Sleep(5 * time.Second)
+			// Ignore error — process may have already exited
+			_ = syscall.Kill(pgid, syscall.SIGKILL)
+		}()
+		return nil
 	}
 
 	if err := cmd.Start(); err != nil {

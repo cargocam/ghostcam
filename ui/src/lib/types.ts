@@ -3,6 +3,8 @@ export interface CameraInfo {
 	display_name: string;
 	group_id?: string;
 	capabilities?: string[];
+	resolution: string;
+	recording_mode: string;
 }
 
 export interface GpsData {

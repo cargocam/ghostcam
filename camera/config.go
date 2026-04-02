@@ -13,18 +13,20 @@ import (
 
 // CameraConfig is the fully resolved camera configuration.
 type CameraConfig struct {
-	ServerURL            string
-	TestSource           bool
-	SegmentDir           string
-	DataDir              string
-	NoGPS                bool
-	NoAudio              bool
-	AudioDevice          string
-	VideoWidth           uint32
-	VideoHeight          uint32
-	VideoFPS             uint32
-	VideoBitrate         uint32
+	ServerURL             string
+	TestSource            bool
+	SegmentDir            string
+	DataDir               string
+	NoGPS                 bool
+	NoAudio               bool
+	AudioDevice           string
+	VideoWidth            uint32
+	VideoHeight           uint32
+	VideoFPS              uint32
+	VideoBitrate          uint32
 	VideoKeyframeInterval uint32
+	RecordingMode         string // "constant" or "motion"
+	LocalStorageCapBytes  uint64 // max local segment storage before eviction
 }
 
 // cameraConfigFile is the TOML-deserialized config file. All fields optional.
@@ -123,6 +125,28 @@ func LoadConfig() (*CameraConfig, error) {
 	resolvedNoAudio := *noAudio
 	resolvedAudioDevice := coalesceStr(*audioDevice, envOpt("GHOSTCAM_AUDIO_DEVICE"), "")
 
+	// Runtime overrides: resolution and recording_mode persisted by command handlers
+	if stored := readStoredFile(resolvedDataDir, "resolution"); stored != "" {
+		if sw, sh, sbr, skf := resolveVideoProfile(stored); sw > 0 {
+			slog.Info("applying stored resolution override", "resolution", stored)
+			videoWidth, videoHeight, videoBitrate, videoKeyframeInterval = sw, sh, sbr, skf
+		}
+	}
+
+	recordingMode := "constant"
+	if stored := readStoredFile(resolvedDataDir, "recording_mode"); stored != "" {
+		recordingMode = stored
+		slog.Info("applying stored recording mode override", "mode", stored)
+	}
+
+	// Local storage cap: env -> default 4GB
+	localStorageCap := uint64(4 * 1024 * 1024 * 1024) // 4 GB
+	if v := envOpt("GHOSTCAM_LOCAL_STORAGE_CAP_MB"); v != "" {
+		if mb, err := strconv.ParseUint(v, 10, 64); err == nil && mb > 0 {
+			localStorageCap = mb * 1024 * 1024
+		}
+	}
+
 	cfg := &CameraConfig{
 		ServerURL:             resolvedServerURL,
 		TestSource:            resolvedTestSource,
@@ -136,6 +160,8 @@ func LoadConfig() (*CameraConfig, error) {
 		VideoFPS:              videoFPS,
 		VideoBitrate:          videoBitrate,
 		VideoKeyframeInterval: videoKeyframeInterval,
+		RecordingMode:         recordingMode,
+		LocalStorageCapBytes:  localStorageCap,
 	}
 
 	if cfg.DataDir == "" {
@@ -174,11 +200,20 @@ func findAndLoadConfig(cliPath string) cameraConfigFile {
 }
 
 func readStoredServerURL(dataDir string) string {
-	data, err := os.ReadFile(filepath.Join(dataDir, "server_url"))
+	return readStoredFile(dataDir, "server_url")
+}
+
+func readStoredFile(dataDir, name string) string {
+	data, err := os.ReadFile(filepath.Join(dataDir, name))
 	if err != nil {
 		return ""
 	}
 	return trimString(string(data))
+}
+
+// WriteStoredFile persists a runtime config override to dataDir.
+func WriteStoredFile(dataDir, name, value string) error {
+	return os.WriteFile(filepath.Join(dataDir, name), []byte(value), 0644)
 }
 
 func resolveVideoProfile(profile string) (w, h, br, kf uint32) {

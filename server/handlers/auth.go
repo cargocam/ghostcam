@@ -27,7 +27,11 @@ type loginResponse struct {
 
 func (h *Handlers) setAuthCookie(w http.ResponseWriter, userID string) {
 	token := auth.SignJWT(userID, h.HMACSecret, jwtTTL)
-	cookie := fmt.Sprintf("ghostcam-token=%s; Path=/; HttpOnly; SameSite=Strict; Max-Age=%d", token, cookieMaxAge)
+	secure := ""
+	if h.SecureCookies {
+		secure = "; Secure"
+	}
+	cookie := fmt.Sprintf("ghostcam-token=%s; Path=/; HttpOnly; SameSite=Strict%s; Max-Age=%d", token, secure, cookieMaxAge)
 	w.Header().Set("Set-Cookie", cookie)
 }
 
@@ -51,17 +55,20 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if user == nil {
+		slog.Warn("login failed: unknown email", "email", body.Email, "ip", loginIP(r))
 		http.Error(w, "", http.StatusUnauthorized)
 		return
 	}
 
 	if user.DisabledAt != nil {
+		slog.Warn("login failed: account disabled", "email", body.Email, "ip", loginIP(r))
 		http.Error(w, "", http.StatusUnauthorized)
 		return
 	}
 
 	ok, err := h.DB.VerifyPassword(r.Context(), user.UserID, body.Password)
 	if err != nil || !ok {
+		slog.Warn("login failed: invalid password", "email", body.Email, "ip", loginIP(r))
 		http.Error(w, "", http.StatusUnauthorized)
 		return
 	}
@@ -134,13 +141,22 @@ func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Auto-create free tier subscription for new users
+	if err := h.DB.CreateSubscription(r.Context(), userID, "free", "active"); err != nil {
+		slog.Warn("register: failed to create default subscription", "user_id", userID, "error", err)
+	}
+
 	h.setAuthCookie(w, userID)
 	writeJSON(w, http.StatusCreated, registerResponse{UserID: userID})
 }
 
 // Logout handles POST /api/v1/auth/logout.
 func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Set-Cookie", "ghostcam-token=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
+	secure := ""
+	if h.SecureCookies {
+		secure = "; Secure"
+	}
+	w.Header().Set("Set-Cookie", fmt.Sprintf("ghostcam-token=; Path=/; HttpOnly; SameSite=Strict%s; Max-Age=0", secure))
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -193,4 +209,19 @@ func (h *Handlers) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	// Issue new JWT after password change
 	h.setAuthCookie(w, userID)
 	w.WriteHeader(http.StatusOK)
+}
+
+// loginIP extracts the client IP for login logging, preferring X-Forwarded-For
+// (set by Fly.io proxy) over RemoteAddr.
+func loginIP(r *http.Request) string {
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		// Take first IP (client IP)
+		for i := 0; i < len(xff); i++ {
+			if xff[i] == ',' {
+				return xff[:i]
+			}
+		}
+		return xff
+	}
+	return r.RemoteAddr
 }

@@ -1,4 +1,4 @@
-export type AlertType = 'disconnect' | 'reconnect';
+export type AlertType = 'disconnect' | 'reconnect' | 'motion' | 'storage_capped';
 
 export interface Alert {
 	id: number;

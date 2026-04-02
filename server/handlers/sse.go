@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/cargocam/ghostcam/server/ctxutil"
@@ -27,6 +28,10 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "streaming not supported", http.StatusInternalServerError)
 		return
 	}
+
+	// Disable write deadline for SSE — this is a long-lived connection
+	rc := http.NewResponseController(w)
+	_ = rc.SetWriteDeadline(time.Time{})
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -64,6 +69,35 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+
+	// Build device ID set for filtering motion events
+	deviceIDs := make(map[string]bool, len(cameras))
+	for _, c := range cameras {
+		deviceIDs[c.DeviceID] = true
+	}
+
+	// Subscribe to motion_detected pub/sub
+	motionCh := make(chan string, 32)
+	pubsub := rdb.Subscribe(ctx, "motion_detected", "storage_capped")
+	go func() {
+		defer pubsub.Close()
+		ch := pubsub.Channel()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg, ok := <-ch:
+				if !ok {
+					return
+				}
+				select {
+				case motionCh <- msg.Channel + "|" + msg.Payload:
+				default:
+				}
+			}
+		}
+	}()
+
 	keepAliveTicker := time.NewTicker(15 * time.Second)
 	defer keepAliveTicker.Stop()
 
@@ -74,6 +108,29 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 		case <-keepAliveTicker.C:
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flusher.Flush()
+		case raw := <-motionCh:
+			parts := splitOnce(raw, "|")
+			channel, payload := parts[0], parts[1]
+			switch channel {
+			case "motion_detected":
+				// Filter to only this user's cameras
+				var motionData struct {
+					DeviceID string `json:"device_id"`
+				}
+				if json.Unmarshal([]byte(payload), &motionData) == nil && deviceIDs[motionData.DeviceID] {
+					fmt.Fprintf(w, "event: motion_detected\ndata: %s\n\n", payload)
+					flusher.Flush()
+				}
+			case "storage_capped":
+				// Storage capped events carry user_id — match current user
+				var capData struct {
+					UserID string `json:"user_id"`
+				}
+				if json.Unmarshal([]byte(payload), &capData) == nil && capData.UserID == userID {
+					fmt.Fprintf(w, "event: storage_capped\ndata: %s\n\n", payload)
+					flusher.Flush()
+				}
+			}
 		default:
 		}
 
@@ -131,6 +188,14 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+func splitOnce(s, sep string) [2]string {
+	i := strings.Index(s, sep)
+	if i < 0 {
+		return [2]string{s, ""}
+	}
+	return [2]string{s[:i], s[i+len(sep):]}
 }
 
 func (h *Handlers) sseKeepAlive(ctx context.Context, w http.ResponseWriter, flusher http.Flusher) {

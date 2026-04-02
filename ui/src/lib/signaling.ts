@@ -4,6 +4,7 @@ interface CoverageSegment {
 	id: string;
 	start_ms: number;
 	end_ms: number;
+	has_motion?: boolean;
 }
 
 interface CoverageResponse {
@@ -87,6 +88,21 @@ export async function createPortal(returnUrl: string): Promise<{ url: string }> 
 	});
 	if (!res.ok) throw new Error(`createPortal failed: ${res.status}`);
 	return res.json();
+}
+
+// --- Camera Settings ---
+
+export async function updateCameraSettings(
+	deviceId: string,
+	update: { display_name?: string; notes?: string; resolution?: string; recording_mode?: string },
+): Promise<void> {
+	const res = await fetch(`${API_BASE}/cameras/${encodeURIComponent(deviceId)}`, {
+		method: 'PATCH',
+		headers: headers(),
+		body: JSON.stringify(update),
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`updateCameraSettings failed: ${res.status}`);
 }
 
 // --- Enrollment QR ---

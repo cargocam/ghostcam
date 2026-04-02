@@ -1,0 +1,8 @@
+//go:build !linux
+
+package camera
+
+// gpsdQuery is a no-op on non-Linux platforms.
+func gpsdQuery() (*float64, *float64, *float32, *uint8) {
+	return nil, nil, nil, nil
+}

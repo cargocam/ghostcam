@@ -11,6 +11,8 @@ export interface CameraState {
 	telemetry: TelemetryData | null;
 	/** Epoch ms when we last received telemetry for this camera. */
 	lastTelemetryAt: number | null;
+	resolution: string;
+	recording_mode: string;
 }
 
 class CameraStore {
@@ -41,6 +43,8 @@ class CameraStore {
 			online: false,
 			telemetry: null,
 			lastTelemetryAt: null,
+			resolution: c.resolution ?? '720p',
+			recording_mode: c.recording_mode ?? 'constant',
 		}));
 	}
 

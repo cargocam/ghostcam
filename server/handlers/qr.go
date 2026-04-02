@@ -48,9 +48,13 @@ func (h *Handlers) EnrollmentQR(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build QR payload
+	// Build QR payload — use configured public URL, fall back to request Host
+	serverURL := h.PublicURL
+	if serverURL == "" {
+		serverURL = fmt.Sprintf("https://%s", r.Host)
+	}
 	payload := map[string]string{
-		"s": fmt.Sprintf("https://%s", r.Host),
+		"s": serverURL,
 		"t": rawToken,
 	}
 	if body.WifiSSID != "" {

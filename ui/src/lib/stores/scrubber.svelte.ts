@@ -3,7 +3,7 @@ class ScrubberStore {
 	isLive = $state<boolean>(true);
 	/** Committed seek time (epoch seconds). Null = live. */
 	seekTarget = $state<number | null>(null);
-	cameraCoverage = $state<Map<string, { start: number; end: number }[]>>(new Map());
+	cameraCoverage = $state<Map<string, { start: number; end: number; hasMotion?: boolean }[]>>(new Map());
 	availableWindow = $state<{ start: number; end: number } | null>(null);
 
 	private animationFrame: number | null = null;
@@ -30,13 +30,14 @@ class ScrubberStore {
 		this.availableWindow = window;
 	}
 
-	setCameraCoverage(deviceId: string, segments: { start: number; end: number }[]) {
+	setCameraCoverage(deviceId: string, segments: { start: number; end: number; hasMotion?: boolean }[]) {
 		const GAP_THRESHOLD_SEC = 30;
 		const sorted = [...segments].sort((a, b) => a.start - b.start);
-		const merged: { start: number; end: number }[] = [];
+		const merged: { start: number; end: number; hasMotion?: boolean }[] = [];
 		for (const seg of sorted) {
 			const last = merged[merged.length - 1];
-			if (last && seg.start - last.end <= GAP_THRESHOLD_SEC) {
+			// Only merge if same motion state and within gap threshold
+			if (last && seg.start - last.end <= GAP_THRESHOLD_SEC && (last.hasMotion ?? false) === (seg.hasMotion ?? false)) {
 				last.end = Math.max(last.end, seg.end);
 			} else {
 				merged.push({ ...seg });

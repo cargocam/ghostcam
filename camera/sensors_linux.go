@@ -3,11 +3,9 @@
 package camera
 
 import (
-	"math"
 	"os"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/cargocam/ghostcam/api"
 )
@@ -162,17 +160,9 @@ func readUptime() *uint32 {
 	return &v
 }
 
-// readGPS returns GPS coordinates. In Docker/dev without gpsd, returns synthetic
-// values that slowly drift around Seattle.
+// readGPS queries gpsd for a GPS fix. Returns nils if gpsd is unavailable.
 func readGPS() (*float64, *float64, *float32, *uint8) {
-	// TODO: read from gpsd when available
-	// For now, return synthetic GPS for dev/testing
-	t := float64(time.Now().UnixMilli()) / 1000.0
-	lat := 47.6062 + 0.001*math.Sin(t/60.0)
-	lon := -122.3321 + 0.001*math.Cos(t/45.0)
-	alt := float32(50.0)
-	fix := uint8(3)
-	return &lat, &lon, &alt, &fix
+	return gpsdQuery()
 }
 
 func readWifiSignal() *int8 {

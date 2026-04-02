@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/cargocam/ghostcam/server/handlers"
 	"github.com/go-chi/chi/v5"
@@ -15,15 +16,22 @@ func BuildRouter(app *App) http.Handler {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.RequestSize(1 << 20)) // 1MB body limit
+	r.Use(corsMiddleware(app.Config.PublicURL))
 
-	h := handlers.New(app.DB, app.Redis, app.S3, app.HMACSecret, app.Config.S3PresignTTLSecs)
+	secureCookies := strings.HasPrefix(app.Config.PublicURL, "https://")
+	h := handlers.New(app.DB, app.Redis, app.S3, app.HMACSecret, app.Config.S3PresignTTLSecs, app.Config.AdminEmail, app.Config.PublicURL, secureCookies)
+
+	// Rate limiters for public auth endpoints
+	loginRL := NewRateLimiter(10)     // 10 req/min per IP
+	registerRL := NewRateLimiter(5)   // 5 req/min per IP
+	provisionRL := NewRateLimiter(10) // 10 req/min per IP
 
 	// Public routes (no auth)
 	r.Get("/healthz", h.Healthz)
 	r.Get("/readyz", h.Readyz)
-	r.Post("/api/v1/auth/login", h.Login)
-	r.Post("/api/v1/auth/register", h.Register)
-	r.Post("/api/v1/cameras/provision", h.Provision)
+	r.With(loginRL.Middleware).Post("/api/v1/auth/login", h.Login)
+	r.With(registerRL.Middleware).Post("/api/v1/auth/register", h.Register)
+	r.With(provisionRL.Middleware).Post("/api/v1/cameras/provision", h.Provision)
 	r.Get("/api/v1/billing/tiers", h.ListTiers)
 	r.Get("/api/v1/firmware/latest", h.FirmwareLatest)
 	r.Post("/api/v1/webhooks/stripe", h.StripeWebhook)
@@ -68,6 +76,7 @@ func BuildRouter(app *App) http.Handler {
 		// HLS
 		r.Get("/hls/{deviceID}/playlist.m3u8", h.GetManifest)
 		r.Get("/hls/{deviceID}/init.mp4", h.GetInit)
+		r.Get("/hls/{deviceID}/{segmentID}.ts", h.GetSegment)
 		r.Get("/hls/{deviceID}/coverage", h.GetCoverage)
 
 		// Billing
@@ -75,12 +84,44 @@ func BuildRouter(app *App) http.Handler {
 		r.Post("/api/v1/billing/portal", h.CreatePortal)
 		r.Get("/api/v1/billing/usage", h.GetUsage)
 
-		// Audit
-		r.Get("/api/v1/audit", h.QueryAudit)
+	})
 
-		// Admin
+	// Admin-only routes (viewer auth + admin email check)
+	r.Group(func(r chi.Router) {
+		r.Use(AdminAuth(app))
+		r.Get("/api/v1/audit", h.QueryAudit)
 		r.Post("/api/v1/admin/reload", h.ReloadConfig)
 	})
 
 	return r
+}
+
+// corsMiddleware adds CORS headers allowing the configured PublicURL origin
+// and localhost:5173 for dev.
+func corsMiddleware(publicURL string) func(http.Handler) http.Handler {
+	allowed := make(map[string]bool)
+	allowed["http://localhost:5173"] = true
+	if publicURL != "" {
+		allowed[strings.TrimRight(publicURL, "/")] = true
+	}
+
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			origin := r.Header.Get("Origin")
+			if origin != "" && allowed[origin] {
+				w.Header().Set("Access-Control-Allow-Origin", origin)
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
+				w.Header().Set("Access-Control-Allow-Credentials", "true")
+				w.Header().Set("Access-Control-Max-Age", "3600")
+			}
+
+			if r.Method == http.MethodOptions {
+				w.WriteHeader(http.StatusNoContent)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		})
+	}
 }

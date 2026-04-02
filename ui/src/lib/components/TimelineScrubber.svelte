@@ -63,24 +63,24 @@
 		window.addEventListener('pointerup', onUp);
 	}
 
-	// Union all camera coverage into a single merged bar
+	// Union all camera coverage into bars, preserving motion state
 	let coverageBars = $derived.by(() => {
 		const range = windowEnd - windowStart;
 		if (range <= 0) return [];
 
 		// Collect all segments from all cameras
-		const all: { start: number; end: number }[] = [];
+		const all: { start: number; end: number; hasMotion: boolean }[] = [];
 		for (const [, coverage] of scrubberStore.cameraCoverage) {
-			for (const s of coverage) all.push(s);
+			for (const s of coverage) all.push({ start: s.start, end: s.end, hasMotion: s.hasMotion ?? false });
 		}
 		if (all.length === 0) return [];
 
-		// Sort and merge overlapping/adjacent segments
+		// Sort and merge overlapping/adjacent segments (only if same motion state)
 		all.sort((a, b) => a.start - b.start);
-		const merged: { start: number; end: number }[] = [{ ...all[0] }];
+		const merged: { start: number; end: number; hasMotion: boolean }[] = [{ ...all[0] }];
 		for (let i = 1; i < all.length; i++) {
 			const last = merged[merged.length - 1];
-			if (all[i].start <= last.end + 30) {
+			if (all[i].start <= last.end + 30 && all[i].hasMotion === last.hasMotion) {
 				last.end = Math.max(last.end, all[i].end);
 			} else {
 				merged.push({ ...all[i] });
@@ -92,7 +92,7 @@
 			.map((s) => {
 				const left = Math.max(0, ((s.start - windowStart) / range) * 100);
 				const right = Math.min(100, ((s.end - windowStart) / range) * 100);
-				return { left, width: right - left };
+				return { left, width: right - left, hasMotion: s.hasMotion };
 			})
 			.filter((s) => s.width > 0);
 	});
@@ -115,8 +115,9 @@
 
 		{#each coverageBars as bar}
 			<div
-				class="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-green-500/60"
+				class="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full {bar.hasMotion ? 'bg-amber-500/60' : 'bg-green-500/60'}"
 				style="left: {bar.left}%; width: {bar.width}%"
+				title={bar.hasMotion ? 'Motion detected' : 'Recording'}
 			></div>
 		{/each}
 

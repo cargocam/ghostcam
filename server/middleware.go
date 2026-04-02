@@ -47,6 +47,30 @@ func ViewerAuth(app *App) func(http.Handler) http.Handler {
 	}
 }
 
+// AdminAuth is middleware that wraps ViewerAuth and additionally checks that
+// the authenticated user is an admin (identified by matching the admin email from config).
+func AdminAuth(app *App) func(http.Handler) http.Handler {
+	viewerAuth := ViewerAuth(app)
+	return func(next http.Handler) http.Handler {
+		return viewerAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			userID := r.Context().Value(ctxutil.KeyUserID)
+			if userID == nil || userID == "" {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+
+			// Look up user email and compare to admin email
+			user, err := app.DB.GetUserByEmail(r.Context(), app.Config.AdminEmail)
+			if err != nil || user == nil || user.UserID != userID.(string) {
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
+
+			next.ServeHTTP(w, r)
+		}))
+	}
+}
+
 // CameraAuth is middleware that authenticates cameras via Bearer API key.
 func CameraAuth(app *App) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {

@@ -4,7 +4,8 @@
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 	import { cn } from '$lib/utils.js';
-	import { Camera, PictureInPicture2, Volume2, VolumeOff } from 'lucide-svelte';
+	import { Camera, PictureInPicture2, Volume2, VolumeOff, Settings } from 'lucide-svelte';
+	import CameraSettingsDialog from '$lib/components/camera/CameraSettingsDialog.svelte';
 
 	let {
 		deviceId,
@@ -65,6 +66,13 @@
 	function toggleMute(e: MouseEvent) {
 		e.stopPropagation();
 		settingsStore.toggleCameraMute(deviceId);
+	}
+
+	let settingsOpen = $state(false);
+
+	function openSettings(e: MouseEvent) {
+		e.stopPropagation();
+		settingsOpen = true;
 	}
 </script>
 
@@ -139,5 +147,12 @@
 				<Volume2 class="h-3 w-3 text-white/70" />
 			{/if}
 		</div>
+		<!-- svelte-ignore a11y_click_events_have_key_events -->
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<div class="cursor-pointer rounded bg-black/50 p-1" onclick={openSettings} title="Camera settings">
+			<Settings class="h-3 w-3 text-white/70" />
+		</div>
 	</div>
 </button>
+
+<CameraSettingsDialog bind:open={settingsOpen} {deviceId} />

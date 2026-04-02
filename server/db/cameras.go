@@ -9,11 +9,11 @@ import (
 
 func (db *PostgresDB) GetCamera(ctx context.Context, deviceID string) (*CameraRecord, error) {
 	row := db.pool.QueryRow(ctx,
-		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes
+		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes, resolution, recording_mode
 		 FROM cameras WHERE device_id = $1`, deviceID)
 
 	var c CameraRecord
-	err := row.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes)
+	err := row.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes, &c.Resolution, &c.RecordingMode)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -25,7 +25,7 @@ func (db *PostgresDB) GetCamera(ctx context.Context, deviceID string) (*CameraRe
 
 func (db *PostgresDB) ListCameras(ctx context.Context, userID string) ([]CameraRecord, error) {
 	rows, err := db.pool.Query(ctx,
-		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes
+		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes, resolution, recording_mode
 		 FROM cameras WHERE user_id = $1 ORDER BY enrolled_at`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list cameras: %w", err)
@@ -35,7 +35,7 @@ func (db *PostgresDB) ListCameras(ctx context.Context, userID string) ([]CameraR
 	var cameras []CameraRecord
 	for rows.Next() {
 		var c CameraRecord
-		if err := rows.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes); err != nil {
+		if err := rows.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes, &c.Resolution, &c.RecordingMode); err != nil {
 			return nil, fmt.Errorf("scanning camera: %w", err)
 		}
 		cameras = append(cameras, c)
@@ -44,15 +44,17 @@ func (db *PostgresDB) ListCameras(ctx context.Context, userID string) ([]CameraR
 }
 
 func (db *PostgresDB) UpdateCamera(ctx context.Context, deviceID string, update *CameraUpdate) error {
-	if update.DisplayName == nil && update.Notes == nil {
+	if update.DisplayName == nil && update.Notes == nil && update.Resolution == nil && update.RecordingMode == nil {
 		return nil
 	}
 	_, err := db.pool.Exec(ctx,
 		`UPDATE cameras SET
 		 display_name = COALESCE($1, display_name),
-		 notes = COALESCE($2, notes)
-		 WHERE device_id = $3`,
-		update.DisplayName, update.Notes, deviceID)
+		 notes = COALESCE($2, notes),
+		 resolution = COALESCE($3, resolution),
+		 recording_mode = COALESCE($4, recording_mode)
+		 WHERE device_id = $5`,
+		update.DisplayName, update.Notes, update.Resolution, update.RecordingMode, deviceID)
 	if err != nil {
 		return fmt.Errorf("update camera: %w", err)
 	}
@@ -81,12 +83,12 @@ func (db *PostgresDB) CreateProvisionedCamera(ctx context.Context, deviceID, use
 
 func (db *PostgresDB) GetCameraByAPIKey(ctx context.Context, apiKeyHash string) (*CameraRecord, error) {
 	row := db.pool.QueryRow(ctx,
-		`SELECT c.device_id, c.user_id, c.display_name, c.enrolled_at, c.last_seen_at, c.notes
+		`SELECT c.device_id, c.user_id, c.display_name, c.enrolled_at, c.last_seen_at, c.notes, c.resolution, c.recording_mode
 		 FROM camera_api_keys k JOIN cameras c ON k.device_id = c.device_id
 		 WHERE k.api_key_hash = $1`, apiKeyHash)
 
 	var c CameraRecord
-	err := row.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes)
+	err := row.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes, &c.Resolution, &c.RecordingMode)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -98,11 +100,11 @@ func (db *PostgresDB) GetCameraByAPIKey(ctx context.Context, apiKeyHash string) 
 
 func (db *PostgresDB) GetCameraBySerial(ctx context.Context, deviceSerial string) (*CameraRecord, error) {
 	row := db.pool.QueryRow(ctx,
-		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes
+		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes, resolution, recording_mode
 		 FROM cameras WHERE device_serial = $1`, deviceSerial)
 
 	var c CameraRecord
-	err := row.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes)
+	err := row.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes, &c.Resolution, &c.RecordingMode)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

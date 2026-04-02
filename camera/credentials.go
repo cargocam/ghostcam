@@ -37,10 +37,10 @@ func SaveCredentials(dataDir string, creds *Credentials) error {
 	if err := os.WriteFile(filepath.Join(dataDir, "api_key"), []byte(creds.APIKey), 0600); err != nil {
 		return fmt.Errorf("writing api_key: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dataDir, "device_id"), []byte(creds.DeviceID), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dataDir, "device_id"), []byte(creds.DeviceID), 0600); err != nil {
 		return fmt.Errorf("writing device_id: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dataDir, "server_url"), []byte(creds.ServerURL), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(dataDir, "server_url"), []byte(creds.ServerURL), 0600); err != nil {
 		return fmt.Errorf("writing server_url: %w", err)
 	}
 	return nil

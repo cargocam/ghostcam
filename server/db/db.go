@@ -60,9 +60,11 @@ type Database interface {
 	EnqueueCommand(ctx context.Context, deviceID string, command json.RawMessage) error
 	ClaimCommands(ctx context.Context, deviceID string) ([]json.RawMessage, error)
 
-	// Billing (stub)
+	// Billing
 	GetSubscription(ctx context.Context, userID string) (*SubscriptionRecord, error)
+	CreateSubscription(ctx context.Context, userID, tier, status string) error
 	GetCameraCount(ctx context.Context, userID string) (int64, error)
+	GetUserStorageBytes(ctx context.Context, userID string) (uint64, error)
 
 	// Audit
 	InsertAuditEntry(ctx context.Context, timestamp, eventType string, eventData json.RawMessage, hmac string) error
@@ -141,6 +143,15 @@ func (db *PostgresDB) Initialize(ctx context.Context, presetPassword, adminEmail
 		if err != nil {
 			return "", fmt.Errorf("creating admin user: %w", err)
 		}
+		// Auto-create subscription for admin.
+		// If password was preset (dev mode), use "pro" tier for easier testing.
+		adminTier := "free"
+		if presetPassword != "" {
+			adminTier = "pro"
+		}
+		if err := db.CreateSubscription(ctx, userID, adminTier, "active"); err != nil {
+			slog.Warn("failed to create admin subscription", "error", err)
+		}
 		initialPassword = password
 	}
 
@@ -176,18 +187,22 @@ func nowMs() uint64 {
 
 // CameraRecord is a camera from the database.
 type CameraRecord struct {
-	DeviceID    string
-	UserID      *string
-	DisplayName string
-	EnrolledAt  int64
-	LastSeenAt  *int64
-	Notes       *string
+	DeviceID      string
+	UserID        *string
+	DisplayName   string
+	EnrolledAt    int64
+	LastSeenAt    *int64
+	Notes         *string
+	Resolution    string
+	RecordingMode string
 }
 
 // CameraUpdate holds optional fields for updating a camera.
 type CameraUpdate struct {
-	DisplayName *string
-	Notes       *string
+	DisplayName   *string
+	Notes         *string
+	Resolution    *string
+	RecordingMode *string
 }
 
 // NewSession holds fields for creating a session.
@@ -246,6 +261,7 @@ type SegmentRecord struct {
 	SizeBytes  uint64
 	Resolution string
 	CreatedAt  uint64
+	HasMotion  bool
 }
 
 // SubscriptionRecord is a subscription from the database.

@@ -10,6 +10,10 @@ import (
 	"github.com/cargocam/ghostcam/server/s3"
 )
 
+// defaultTierID is the tier assigned to users without a subscription record.
+// Billing is always on; users without a subscription are on the free tier.
+const defaultTierID = "free"
+
 // Handlers holds all HTTP handler methods and their shared dependencies.
 type Handlers struct {
 	DB             db.Database
@@ -17,16 +21,22 @@ type Handlers struct {
 	S3             *s3.Client
 	HMACSecret     []byte
 	PresignTTLSecs uint64
+	AdminEmail     string
+	PublicURL      string // configured public URL for QR codes etc.
+	SecureCookies  bool   // set Secure flag on auth cookies (true behind TLS)
 }
 
 // New creates a new Handlers instance.
-func New(database db.Database, redisClient *redis.Client, s3Client *s3.Client, hmacSecret []byte, presignTTLSecs uint64) *Handlers {
+func New(database db.Database, redisClient *redis.Client, s3Client *s3.Client, hmacSecret []byte, presignTTLSecs uint64, adminEmail, publicURL string, secureCookies bool) *Handlers {
 	return &Handlers{
 		DB:             database,
 		Redis:          redisClient,
 		S3:             s3Client,
 		HMACSecret:     hmacSecret,
 		PresignTTLSecs: presignTTLSecs,
+		AdminEmail:     adminEmail,
+		PublicURL:      publicURL,
+		SecureCookies:  secureCookies,
 	}
 }
 
