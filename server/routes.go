@@ -92,6 +92,7 @@ func BuildRouter(app *App) http.Handler {
 		r.Use(AdminAuth(app))
 		r.Get("/api/v1/audit", h.QueryAudit)
 		r.Post("/api/v1/admin/reload", h.ReloadConfig)
+		r.Post("/api/v1/admin/firmware", h.FirmwareUpload)
 	})
 
 	// Static file serving (SPA fallback)

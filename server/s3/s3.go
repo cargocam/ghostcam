@@ -2,6 +2,7 @@
 package s3
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"time"
@@ -67,6 +68,25 @@ func (c *Client) PresignGet(ctx context.Context, key string) (string, error) {
 		return "", fmt.Errorf("presigning GET: %w", err)
 	}
 	return req.URL, nil
+}
+
+// Upload puts an object directly into S3.
+func (c *Client) Upload(ctx context.Context, key string, data []byte, contentType string) error {
+	_, err := c.client.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(c.bucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String(contentType),
+	})
+	if err != nil {
+		return fmt.Errorf("uploading to S3: %w", err)
+	}
+	return nil
+}
+
+// FirmwareKey returns the S3 key for a firmware binary.
+func FirmwareKey(version string) string {
+	return fmt.Sprintf("firmware/%s/ghostcam-camera", version)
 }
 
 // PresignTTLSecs returns the presign TTL in seconds.
