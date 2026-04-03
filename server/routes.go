@@ -16,7 +16,7 @@ func BuildRouter(app *App) http.Handler {
 
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.RequestSize(1 << 20)) // 1MB body limit
+	r.Use(middleware.RequestSize(50 << 20)) // 50MB body limit (firmware uploads)
 	r.Use(corsMiddleware(app.Config.PublicURL))
 
 	secureCookies := strings.HasPrefix(app.Config.PublicURL, "https://")
