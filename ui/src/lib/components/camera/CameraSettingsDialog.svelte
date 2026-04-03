@@ -19,6 +19,7 @@
 	} = $props();
 
 	let camera = $derived(cameraStore.getCamera(deviceId));
+	let displayName = $state('');
 	let resolution = $state('720p');
 	let recordingMode = $state('constant');
 	let saving = $state(false);
@@ -28,6 +29,7 @@
 	// Sync local state when dialog opens
 	$effect(() => {
 		if (open && camera) {
+			displayName = camera.device_name || '';
 			resolution = camera.resolution || '720p';
 			recordingMode = camera.recording_mode || 'constant';
 			error = '';
@@ -36,7 +38,10 @@
 	});
 
 	let hasChanges = $derived(
-		camera != null && (resolution !== camera.resolution || recordingMode !== camera.recording_mode)
+		camera != null &&
+			(displayName !== camera.device_name ||
+				resolution !== camera.resolution ||
+				recordingMode !== camera.recording_mode)
 	);
 
 	async function save() {
@@ -46,10 +51,12 @@
 		success = false;
 		try {
 			const update: Record<string, string> = {};
+			if (displayName !== camera.device_name) update.display_name = displayName;
 			if (resolution !== camera.resolution) update.resolution = resolution;
 			if (recordingMode !== camera.recording_mode) update.recording_mode = recordingMode;
 			await updateCameraSettings(deviceId, update);
 			// Update local state
+			if (update.display_name) camera.device_name = displayName;
 			camera.resolution = resolution;
 			camera.recording_mode = recordingMode;
 			success = true;
@@ -66,11 +73,22 @@
 		<DialogHeader>
 			<DialogTitle>Camera Settings</DialogTitle>
 			<DialogDescription>
-				{camera?.device_name ?? 'Camera'} &mdash; changes take effect after camera restarts.
+				Resolution and recording mode changes take effect after camera restarts.
 			</DialogDescription>
 		</DialogHeader>
 
 		<div class="mt-4 space-y-4">
+			<div>
+				<label for="display-name" class="text-sm font-medium">Name</label>
+				<input
+					id="display-name"
+					type="text"
+					bind:value={displayName}
+					placeholder="Camera name"
+					class="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+				/>
+			</div>
+
 			<div>
 				<label for="resolution" class="text-sm font-medium">Resolution</label>
 				<select

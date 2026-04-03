@@ -156,7 +156,7 @@ type coverageSegment struct {
 	ID        string `json:"id"`
 	StartMs   uint64 `json:"start_ms"`
 	EndMs     uint64 `json:"end_ms"`
-	HasMotion bool   `json:"has_motion,omitempty"`
+	HasMotion bool   `json:"has_motion"`
 }
 
 type coverageResponse struct {
