@@ -119,11 +119,11 @@ jobs:
       - name: Build image for ${{ matrix.device }}
         run: |
           cd /tmp/rpi-image-gen
-          cp -r "$GITHUB_WORKSPACE/pi/image/layer/ghostcam.yaml" layers/ghostcam.yaml
-          cp -r "$GITHUB_WORKSPACE/pi/image/files" layers/ghostcam-files
-          cp -r "$GITHUB_WORKSPACE/pi/image/pkgs" layers/ghostcam-pkgs
-          sed -i 's|files/|layers/ghostcam-files/|g' layers/ghostcam.yaml
-          sed -i 's|pkgs/|layers/ghostcam-pkgs/|g' layers/ghostcam.yaml
+          cp -r "$GITHUB_WORKSPACE/pi/image/layer/ghostcam.yaml" layer/ghostcam.yaml
+          cp -r "$GITHUB_WORKSPACE/pi/image/files" layer/ghostcam-files
+          cp -r "$GITHUB_WORKSPACE/pi/image/pkgs" layer/ghostcam-pkgs
+          sed -i 's|files/|layer/ghostcam-files/|g' layer/ghostcam.yaml
+          sed -i 's|pkgs/|layer/ghostcam-pkgs/|g' layer/ghostcam.yaml
           sudo ./build.sh "$GITHUB_WORKSPACE/pi/image/config/ghostcam-${{ matrix.device }}.yaml"
       - name: Compress image
         run: |
