@@ -1,6 +1,6 @@
 # Build artifacts
-ghostcam-camera
-ghostcam-server
+/ghostcam-camera
+/ghostcam-server
 
 # UI
 ui/node_modules/
@@ -12,4 +12,4 @@ ui/.svelte-kit/
 
 # OS
 .DS_Store
-ghostcam-camera-*
+/ghostcam-camera-*
