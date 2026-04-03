@@ -139,13 +139,111 @@ go build -o ghostcam-server ./cmd/ghostcam-server
 - **Neon** -- Postgres (us-west-2)
 - **Upstash** -- Redis (sjc)
 
-## Pi Deployment
+## Releases
+
+Releases are triggered by pushing a Git tag (`v*`). The [release workflow](.github/workflows/release.yml) produces:
+
+| Artifact | Description |
+|----------|-------------|
+| `ghostcam-camera-aarch64` | Standalone Linux/arm64 binary |
+| `ghostcam-camera-x86_64` | Standalone Linux/amd64 binary |
+| `ghostcam-camera_<version>_arm64.deb` | Debian package (arm64) |
+| `ghostcam-<device>-<version>.img.xz` | Flashable Pi OS image (zero2w, pi4, pi5) |
+| `checksums.txt` | SHA-256 checksums for all artifacts |
 
 ```bash
-./scripts/pi.sh setup    # First-time Pi provisioning
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+## Camera Setup
+
+Three ways to set up a camera, from easiest to most flexible.
+
+### Option 1: Flash a Pi Image (recommended for new hardware)
+
+Download the `.img.xz` for your Pi model from the [latest release](../../releases/latest) and flash it to an SD card:
+
+```bash
+# macOS
+xzcat ghostcam-zero2w-v0.1.0.img.xz | sudo dd of=/dev/diskN bs=4M
+
+# Linux
+xzcat ghostcam-zero2w-v0.1.0.img.xz | sudo dd of=/dev/sdX bs=4M status=progress
+```
+
+The image comes pre-configured with all dependencies (ffmpeg, gpsd, modemmanager, ALSA, NetworkManager) and the camera service enabled. On first boot:
+
+1. SSH in (user: `ghostcam`, password: `ghostcam`)
+2. Set the server URL: `echo "GHOSTCAM_SERVER_URL=https://your-server.example.com" >> /etc/ghostcam/env`
+3. Provision the camera from the web UI (generates a one-time token), then write it: `echo "<token>" > /var/ghostcam/provision_token`
+4. Restart: `sudo systemctl restart ghostcam-camera`
+
+The camera provisions itself on the next start and begins streaming. Subsequent boots are automatic.
+
+### Option 2: Install the .deb Package (existing Pi with Raspberry Pi OS)
+
+For Pis already running Raspberry Pi OS (Bookworm, arm64):
+
+```bash
+# Download and install
+curl -LO https://github.com/<owner>/ghostcam/releases/latest/download/ghostcam-camera_<version>_arm64.deb
+sudo dpkg -i ghostcam-camera_<version>_arm64.deb
+
+# Install remaining dependencies
+sudo apt install -y rpicam-apps gpsd gpsd-clients modemmanager alsa-utils
+
+# Create data directory
+sudo mkdir -p /var/ghostcam /etc/ghostcam
+sudo chown $USER:$USER /var/ghostcam
+
+# Configure environment
+sudo tee /etc/ghostcam/env << EOF
+GHOSTCAM_DATA_DIR=/var/ghostcam
+GHOSTCAM_SERVER_URL=https://your-server.example.com
+GHOSTCAM_VIDEO_PROFILE=pi4
+EOF
+
+# Install and enable the systemd service
+sudo cp pi/systemd/ghostcam-camera.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ghostcam-camera
+```
+
+Set `GHOSTCAM_VIDEO_PROFILE` to match your hardware: `zero2w` (480p), `pi4` (720p), or `pi5` (1080p).
+
+Provision the camera the same way as Option 1 (write a provision token, or use `pi.sh setup` for full automated provisioning).
+
+### Option 3: Deploy the Raw Binary (any Linux/arm64 or amd64)
+
+Download the standalone binary from the [latest release](../../releases/latest). This is useful for non-Pi Linux systems or custom setups:
+
+```bash
+curl -LO https://github.com/<owner>/ghostcam/releases/latest/download/ghostcam-camera-aarch64
+chmod +x ghostcam-camera-aarch64
+sudo mv ghostcam-camera-aarch64 /usr/local/bin/ghostcam-camera
+
+# Requires ffmpeg on PATH
+sudo apt install -y ffmpeg
+
+# Create data directory
+sudo mkdir -p /var/ghostcam
+sudo chown $USER:$USER /var/ghostcam
+
+# Run with environment variables
+GHOSTCAM_SERVER_URL=https://your-server.example.com \
+GHOSTCAM_DATA_DIR=/var/ghostcam \
+GHOSTCAM_VIDEO_PROFILE=pi4 \
+  ghostcam-camera
+```
+
+For production use, set up a systemd service (see `pi/systemd/ghostcam-camera.service` as a template).
+
+## Pi Development
+
+```bash
+./scripts/pi.sh setup    # First-time Pi provisioning (installs deps, deploys config + binary)
 ./scripts/pi.sh deploy   # Build + deploy camera binary
 ./scripts/pi.sh logs     # Stream camera logs
 ./scripts/pi.sh status   # Health check
 ```
-
-Requires `ffmpeg` on the Pi (`apt install ffmpeg`).

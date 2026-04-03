@@ -101,9 +101,11 @@ The Pi camera connects to the Docker server via the host's LAN IP (`GHOSTCAM_PUB
 - **docker**: builds both server and camera targets with BuildKit cache
 
 `.github/workflows/release.yml` — triggers on tags (`v*`):
-- **build-camera-deb**: cross-compiles camera binary for aarch64, packages as `.deb`
-- **build-pi-image**: builds flashable `.img` for zero2w, pi4, pi5 using `rpi-image-gen`
-- **release**: attaches `.img.xz` files to the GitHub Release
+- **build-camera**: cross-compiles camera binary for aarch64 and x86_64
+- **build-camera-deb**: packages aarch64 binary as `.deb` (depends: ffmpeg, ca-certificates)
+- **build-pi-image**: builds flashable `.img` for zero2w, pi4, pi5 using `rpi-image-gen`, sets device-specific video profile
+- **build-docker**: builds and pushes server Docker image to GHCR
+- **release**: attaches binaries, `.deb`, `.img.xz`, and checksums to the GitHub Release
 
 ## Key Ports
 

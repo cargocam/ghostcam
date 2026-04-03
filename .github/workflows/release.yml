@@ -111,6 +111,11 @@ jobs:
         with:
           name: ghostcam-camera-deb
           path: pi/image/pkgs
+      - name: Set device-specific video profile
+        run: |
+          PROFILE="${{ matrix.device }}"
+          [ "$PROFILE" = "zero2w" ] && PROFILE="zero2w"
+          echo "GHOSTCAM_VIDEO_PROFILE=$PROFILE" >> pi/image/files/ghostcam.env
       - name: Build image for ${{ matrix.device }}
         run: |
           cd /tmp/rpi-image-gen
@@ -131,7 +136,7 @@ jobs:
           path: ghostcam-${{ matrix.device }}-*.img.xz
 
   release:
-    needs: [build-camera, build-camera-deb, build-docker]
+    needs: [build-camera, build-camera-deb, build-docker, build-pi-image]
     if: always() && needs.build-camera.result == 'success' && needs.build-camera-deb.result == 'success'
     runs-on: ubuntu-latest
     steps:
