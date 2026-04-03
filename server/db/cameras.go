@@ -122,6 +122,27 @@ func (db *PostgresDB) DeleteCameraAPIKey(ctx context.Context, deviceID string) e
 	return nil
 }
 
+// DeleteStaleUnclaimedCameras deletes cameras with no owner that were enrolled before olderThanUnix.
+func (db *PostgresDB) DeleteStaleUnclaimedCameras(ctx context.Context, olderThanUnix int64) (int64, error) {
+	tag, err := db.pool.Exec(ctx,
+		"DELETE FROM cameras WHERE user_id IS NULL AND enrolled_at < $1", olderThanUnix)
+	if err != nil {
+		return 0, fmt.Errorf("delete stale unclaimed cameras: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// DeleteExpiredProvisionTokens deletes provision tokens that have expired and were never claimed.
+func (db *PostgresDB) DeleteExpiredProvisionTokens(ctx context.Context) (int64, error) {
+	now := nowUnix()
+	tag, err := db.pool.Exec(ctx,
+		"DELETE FROM provision_tokens WHERE expires_at < $1 AND claimed_at IS NULL", now)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired provision tokens: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
 func (db *PostgresDB) CreateCameraAPIKey(ctx context.Context, deviceID, apiKeyHash string) error {
 	now := nowUnix()
 	_, err := db.pool.Exec(ctx,

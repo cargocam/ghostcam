@@ -84,6 +84,18 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, contentTyp
 	return nil
 }
 
+// Delete removes an object from S3 by key.
+func (c *Client) Delete(ctx context.Context, key string) error {
+	_, err := c.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return fmt.Errorf("deleting S3 object %s: %w", key, err)
+	}
+	return nil
+}
+
 // FirmwareKey returns the S3 key for a firmware binary.
 func FirmwareKey(version string) string {
 	return fmt.Sprintf("firmware/%s/ghostcam-camera", version)

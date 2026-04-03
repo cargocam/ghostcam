@@ -61,6 +61,37 @@ func (db *PostgresDB) ListSegments(ctx context.Context, deviceID string, fromTS,
 	return segments, rows.Err()
 }
 
+// DeleteOldSegments deletes segments older than olderThanMs and returns the deleted records
+// (so their S3 keys can be cleaned up). Deletes at most batchSize rows.
+func (db *PostgresDB) DeleteOldSegments(ctx context.Context, olderThanMs uint64, batchSize int) ([]SegmentRecord, error) {
+	rows, err := db.pool.Query(ctx,
+		`DELETE FROM segments
+		 WHERE segment_id IN (
+		   SELECT segment_id FROM segments WHERE created_at < $1 LIMIT $2
+		 )
+		 RETURNING segment_id, device_id, s3_key, start_ts, end_ts, size_bytes, resolution, created_at, has_motion`,
+		int64(olderThanMs), batchSize)
+	if err != nil {
+		return nil, fmt.Errorf("delete old segments: %w", err)
+	}
+	defer rows.Close()
+
+	var deleted []SegmentRecord
+	for rows.Next() {
+		var s SegmentRecord
+		var startTS, endTS, sizeBytes, createdAt int64
+		if err := rows.Scan(&s.SegmentID, &s.DeviceID, &s.S3Key, &startTS, &endTS, &sizeBytes, &s.Resolution, &createdAt, &s.HasMotion); err != nil {
+			return nil, fmt.Errorf("scanning deleted segment: %w", err)
+		}
+		s.StartTS = uint64(startTS)
+		s.EndTS = uint64(endTS)
+		s.SizeBytes = uint64(sizeBytes)
+		s.CreatedAt = uint64(createdAt)
+		deleted = append(deleted, s)
+	}
+	return deleted, rows.Err()
+}
+
 func (db *PostgresDB) LatestSegment(ctx context.Context, deviceID string) (*SegmentRecord, error) {
 	row := db.pool.QueryRow(ctx,
 		`SELECT segment_id, device_id, s3_key, start_ts, end_ts, size_bytes, resolution, created_at, has_motion

@@ -62,9 +62,20 @@ type Database interface {
 
 	// Billing
 	GetSubscription(ctx context.Context, userID string) (*SubscriptionRecord, error)
+	GetSubscriptionByStripeCustomer(ctx context.Context, stripeCustomerID string) (*SubscriptionRecord, error)
 	CreateSubscription(ctx context.Context, userID, tier, status string) error
+	UpdateSubscription(ctx context.Context, userID string, update *SubscriptionUpdate) error
 	GetCameraCount(ctx context.Context, userID string) (int64, error)
 	GetUserStorageBytes(ctx context.Context, userID string) (uint64, error)
+
+	// Cleanup
+	DeleteOldSegments(ctx context.Context, olderThanMs uint64, batchSize int) ([]SegmentRecord, error)
+	DeleteStaleUnclaimedCameras(ctx context.Context, olderThanUnix int64) (int64, error)
+	DeleteExpiredProvisionTokens(ctx context.Context) (int64, error)
+
+	// Stripe idempotency
+	CheckStripeEvent(ctx context.Context, eventID string) (bool, error)
+	RecordStripeEvent(ctx context.Context, eventID string) error
 
 	// Audit
 	InsertAuditEntry(ctx context.Context, timestamp, eventType string, eventData json.RawMessage, hmac string) error
@@ -266,9 +277,19 @@ type SegmentRecord struct {
 
 // SubscriptionRecord is a subscription from the database.
 type SubscriptionRecord struct {
-	UserID string
-	Tier   string
-	Status string
+	UserID             string
+	Tier               string
+	Status             string
+	StripeCustomerID   *string
+	StripeSubscriptionID *string
+}
+
+// SubscriptionUpdate holds optional fields for updating a subscription.
+type SubscriptionUpdate struct {
+	Tier                 *string
+	Status               *string
+	StripeCustomerID     *string
+	StripeSubscriptionID *string
 }
 
 // AuditLogRecord is an audit log entry from the database.

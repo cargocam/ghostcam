@@ -65,6 +65,13 @@ class CameraStore {
 		}
 	}
 
+	removeCamera(deviceId: string) {
+		this.cameras = this.cameras.filter((c) => c.device_id !== deviceId);
+		if (this.selectedId === deviceId) {
+			this.selectedId = null;
+		}
+	}
+
 	select(id: string | null) {
 		this.selectedId = this.selectedId === id ? null : id;
 	}

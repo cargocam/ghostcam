@@ -4,26 +4,17 @@
 
 	let email = $state('');
 	let password = $state('');
-	let displayName = $state('');
 	let error = $state('');
 	let loading = $state(false);
-	let isRegistering = $state(false);
 
 	async function handleSubmit(e: SubmitEvent) {
 		e.preventDefault();
 		error = '';
 		loading = true;
 		try {
-			if (isRegistering) {
-				const result = await transportStore.register(email, password, displayName || undefined);
-				if (!result.ok) {
-					error = result.error ?? 'Registration failed';
-				}
-			} else {
-				const ok = await transportStore.login(email, password);
-				if (!ok) {
-					error = 'Invalid email or password';
-				}
+			const ok = await transportStore.login(email, password);
+			if (!ok) {
+				error = 'Invalid email or password';
 			}
 		} catch {
 			error = 'Connection failed';
@@ -37,9 +28,7 @@
 	<div class="w-full max-w-sm space-y-6 px-4">
 		<div class="text-center space-y-2">
 			<h1 class="text-2xl font-bold tracking-tight">Ghostcam</h1>
-			<p class="text-sm text-muted-foreground">
-				{isRegistering ? 'Create a new account' : 'Sign in to continue'}
-			</p>
+			<p class="text-sm text-muted-foreground">Sign in to continue</p>
 		</div>
 
 		<form onsubmit={handleSubmit} class="space-y-4">
@@ -60,7 +49,7 @@
 				<input
 					type="password"
 					name="password"
-					autocomplete={isRegistering ? 'new-password' : 'current-password'}
+					autocomplete="current-password"
 					bind:value={password}
 					placeholder="Password"
 					required
@@ -68,48 +57,17 @@
 				/>
 			</div>
 
-			{#if isRegistering}
-				<div>
-					<input
-						type="text"
-						name="display_name"
-						autocomplete="name"
-						bind:value={displayName}
-						placeholder="Display name (optional)"
-						class="w-full rounded-md border bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-					/>
-				</div>
-			{/if}
-
 			{#if error}
 				<p class="text-sm text-destructive">{error}</p>
 			{/if}
 
 			<Button type="submit" class="w-full" disabled={loading || !email || !password}>
 				{#if loading}
-					{isRegistering ? 'Creating account...' : 'Signing in...'}
+					Signing in...
 				{:else}
-					{isRegistering ? 'Create account' : 'Sign in'}
+					Sign in
 				{/if}
 			</Button>
 		</form>
-
-		<p class="text-center text-sm text-muted-foreground">
-			{#if isRegistering}
-				Already have an account?
-				<button
-					type="button"
-					class="text-foreground underline underline-offset-4 hover:text-foreground/80"
-					onclick={() => { isRegistering = false; error = ''; }}
-				>Sign in</button>
-			{:else}
-				Don't have an account?
-				<button
-					type="button"
-					class="text-foreground underline underline-offset-4 hover:text-foreground/80"
-					onclick={() => { isRegistering = true; error = ''; }}
-				>Register</button>
-			{/if}
-		</p>
 	</div>
 </div>

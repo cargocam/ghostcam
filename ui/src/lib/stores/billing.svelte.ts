@@ -3,6 +3,7 @@ import {
 	getSubscription,
 	getUsage,
 	createPortal,
+	createCheckout,
 } from '$lib/signaling.js';
 
 class BillingStore {
@@ -43,6 +44,19 @@ class BillingStore {
 			this.error = e instanceof Error ? e.message : 'Failed to load billing';
 		} finally {
 			this.loading = false;
+		}
+	}
+
+	async checkout(tier: string) {
+		try {
+			const { url } = await createCheckout(
+				tier,
+				window.location.origin + '/?checkout=success',
+				window.location.origin + '/?checkout=cancel',
+			);
+			window.location.href = url;
+		} catch (e) {
+			this.error = e instanceof Error ? e.message : 'Checkout failed';
 		}
 	}
 

@@ -14,6 +14,16 @@ import (
 // Billing is always on; users without a subscription are on the free tier.
 const defaultTierID = "free"
 
+// StripeConfig holds Stripe-specific configuration. All fields are empty when
+// billing is disabled (STRIPE_SECRET_KEY not set).
+type StripeConfig struct {
+	SecretKey          string
+	WebhookSecret      string
+	PriceIDStarter     string
+	PriceIDPro         string
+	PriceIDEnterprise  string
+}
+
 // Handlers holds all HTTP handler methods and their shared dependencies.
 type Handlers struct {
 	DB             db.Database
@@ -24,10 +34,11 @@ type Handlers struct {
 	AdminEmail     string
 	PublicURL      string // configured public URL for QR codes etc.
 	SecureCookies  bool   // set Secure flag on auth cookies (true behind TLS)
+	Stripe         StripeConfig
 }
 
 // New creates a new Handlers instance.
-func New(database db.Database, redisClient *redis.Client, s3Client *s3.Client, hmacSecret []byte, presignTTLSecs uint64, adminEmail, publicURL string, secureCookies bool) *Handlers {
+func New(database db.Database, redisClient *redis.Client, s3Client *s3.Client, hmacSecret []byte, presignTTLSecs uint64, adminEmail, publicURL string, secureCookies bool, stripe StripeConfig) *Handlers {
 	return &Handlers{
 		DB:             database,
 		Redis:          redisClient,
@@ -37,6 +48,7 @@ func New(database db.Database, redisClient *redis.Client, s3Client *s3.Client, h
 		AdminEmail:     adminEmail,
 		PublicURL:      publicURL,
 		SecureCookies:  secureCookies,
+		Stripe:         stripe,
 	}
 }
 

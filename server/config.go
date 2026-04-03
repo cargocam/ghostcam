@@ -28,6 +28,14 @@ type ServerConfig struct {
 	HMACKey string
 	// Public URL for QR codes (e.g. "https://cam.example.com")
 	PublicURL string
+	// Stripe (optional — billing disabled if StripeSecretKey is empty)
+	StripeSecretKey      string
+	StripeWebhookSecret  string
+	StripePriceIDStarter string
+	StripePriceIDPro     string
+	StripePriceIDEnterprise string
+	// Segment retention in days (default 30)
+	SegmentRetentionDays int
 }
 
 // serverConfigFile is the TOML-deserialized config file. All fields optional.
@@ -65,6 +73,16 @@ func LoadConfig() (*ServerConfig, error) {
 	cfg.RedisURL = envOrFileOrDefault("GHOSTCAM_REDIS_URL", file.RedisURL, "")
 	cfg.AdminPassword = os.Getenv("GHOSTCAM_ADMIN_PASSWORD")
 	cfg.PublicURL = os.Getenv("GHOSTCAM_PUBLIC_URL")
+
+	// Stripe (env only — sensitive)
+	cfg.StripeSecretKey = os.Getenv("STRIPE_SECRET_KEY")
+	cfg.StripeWebhookSecret = os.Getenv("STRIPE_WEBHOOK_SECRET")
+	cfg.StripePriceIDStarter = os.Getenv("STRIPE_PRICE_ID_STARTER")
+	cfg.StripePriceIDPro = os.Getenv("STRIPE_PRICE_ID_PRO")
+	cfg.StripePriceIDEnterprise = os.Getenv("STRIPE_PRICE_ID_ENTERPRISE")
+
+	// Segment retention
+	cfg.SegmentRetentionDays = int(envOrDefaultUint64("GHOSTCAM_SEGMENT_RETENTION_DAYS", 30))
 
 	return cfg, nil
 }

@@ -105,6 +105,29 @@ export async function updateCameraSettings(
 	if (!res.ok) throw new Error(`updateCameraSettings failed: ${res.status}`);
 }
 
+// --- Camera Delete ---
+
+export async function deleteCamera(deviceId: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/cameras/${encodeURIComponent(deviceId)}`, {
+		method: 'DELETE',
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`deleteCamera failed: ${res.status}`);
+}
+
+// --- Billing Checkout ---
+
+export async function createCheckout(tier: string, successUrl: string, cancelUrl: string): Promise<{ url: string }> {
+	const res = await fetch(`${API_BASE}/billing/checkout`, {
+		method: 'POST',
+		headers: headers(),
+		body: JSON.stringify({ tier, success_url: successUrl, cancel_url: cancelUrl }),
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`createCheckout failed: ${res.status}`);
+	return res.json();
+}
+
 // --- Enrollment QR ---
 
 export interface EnrollQrRequest {

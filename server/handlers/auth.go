@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/cargocam/ghostcam/server/auth"
@@ -79,75 +78,13 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, loginResponse{UserID: user.UserID})
 }
 
-type registerRequest struct {
-	Email       string `json:"email"`
-	Password    string `json:"password"`
-	DisplayName string `json:"display_name,omitempty"`
-}
-
-type registerResponse struct {
-	UserID string `json:"user_id"`
-}
-
 // Register handles POST /api/v1/auth/register.
-func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
-	var body registerRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
-		return
-	}
-
-	if !strings.Contains(body.Email, "@") || len(body.Email) > 254 {
-		writeError(w, http.StatusBadRequest, "invalid email address")
-		return
-	}
-
-	if len(body.Password) < 8 || len(body.Password) > 128 {
-		writeError(w, http.StatusBadRequest, "password must be 8-128 characters")
-		return
-	}
-
-	existing, err := h.DB.GetUserByEmail(r.Context(), body.Email)
-	if err != nil {
-		slog.Error("register: check email failed", "error", err)
-		http.Error(w, "", http.StatusInternalServerError)
-		return
-	}
-	if existing != nil {
-		writeError(w, http.StatusConflict, "email already registered")
-		return
-	}
-
-	hash, err := auth.HashPassword(body.Password)
-	if err != nil {
-		slog.Error("register: hash password failed", "error", err)
-		http.Error(w, "", http.StatusInternalServerError)
-		return
-	}
-
-	displayName := body.DisplayName
-	if displayName == "" {
-		displayName = "User"
-	}
-
-	userID, err := h.DB.CreateUser(r.Context(), body.Email, hash, displayName)
-	if err != nil {
-		if strings.Contains(err.Error(), "23505") {
-			writeError(w, http.StatusConflict, "email already registered")
-			return
-		}
-		slog.Error("register: create user failed", "error", err)
-		http.Error(w, "", http.StatusInternalServerError)
-		return
-	}
-
-	// Auto-create free tier subscription for new users
-	if err := h.DB.CreateSubscription(r.Context(), userID, "free", "active"); err != nil {
-		slog.Warn("register: failed to create default subscription", "user_id", userID, "error", err)
-	}
-
-	h.setAuthCookie(w, userID)
-	writeJSON(w, http.StatusCreated, registerResponse{UserID: userID})
+// Public registration is disabled — returns 403. Admin users are seeded on
+// first run via GHOSTCAM_ADMIN_EMAIL / GHOSTCAM_ADMIN_PASSWORD env vars.
+// To re-enable registration, replace the body below with the original logic
+// (see git history for the registerRequest flow).
+func (h *Handlers) Register(w http.ResponseWriter, _ *http.Request) {
+	writeError(w, http.StatusForbidden, "registration_disabled")
 }
 
 // Logout handles POST /api/v1/auth/logout.

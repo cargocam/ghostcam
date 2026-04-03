@@ -167,8 +167,19 @@ Both server and camera support TOML config files with layered resolution. Enviro
 | `STRIPE_PRICE_ID_PRO` | server | _(none)_ | Stripe Price ID for pro tier |
 | `STRIPE_PRICE_ID_ENTERPRISE` | server | _(none)_ | Stripe Price ID for enterprise tier |
 | `STRIPE_PORTAL_CONFIG_ID` | server | _(none)_ | Portal config with plan switching |
+| `GHOSTCAM_SEGMENT_RETENTION_DAYS` | server | `30` | Segment retention in days; segments older than this are deleted hourly |
 | `GHOSTCAM_RELEASE_REPO` | server | _(none)_ | GitHub `owner/repo` for firmware releases |
 | `GITHUB_WEBHOOK_SECRET` | server | _(none)_ | GitHub webhook HMAC secret |
+
+## Background Jobs
+
+The server runs several background goroutines:
+
+| Job | Interval | Description |
+|-----|----------|-------------|
+| Session cleanup | 1 hour | Deletes expired sessions |
+| Segment retention | 1 hour | Deletes segments older than `GHOSTCAM_SEGMENT_RETENTION_DAYS` (default 30) from S3 and Postgres, 100 at a time |
+| Stale camera cleanup | 6 hours | Deletes unclaimed cameras older than 24h and expired provision tokens |
 
 ## Architecture
 
@@ -222,7 +233,7 @@ Billing is always enabled. Every user defaults to the **free** tier (5 GB storag
 - **Camera limit**: `POST /api/v1/cameras` returns HTTP 402 `camera_limit_reached` when the user's tier camera limit is reached.
 - **Storage limit**: The presign handler uses Redis `INCRBY` for atomic reservation to prevent TOCTOU race conditions when checking storage limits. If over limit, returns `storage_capped: true`.
 - **Storage capped events**: Deduplicated per device with a 5-minute cooldown via Redis `SETNX`.
-- **Auto-create subscription**: `POST /api/v1/auth/register` automatically creates a "free" subscription for new users.
+- **Registration disabled**: `POST /api/v1/auth/register` returns 403. Admin users are seeded on first run via env vars.
 
 Tiers: Free (5 GB / 1 camera), Starter (50 GB / 4 cameras), Pro (500 GB / 16 cameras), Enterprise (unlimited).
 
@@ -392,7 +403,7 @@ JSON-encoded with optional fields. Sent every 10s. Fields: `ts` (unix ms), `cpu`
 Auth: `Authorization: Bearer <token>` or `ghostcam-token=<jwt>` cookie. Cookies use `Secure` flag when `GHOSTCAM_PUBLIC_URL` starts with `https://`.
 
 ```
-POST   /api/v1/auth/register               { email, password, display_name? } → 201 + JWT cookie (auto-creates free subscription)
+POST   /api/v1/auth/register               DISABLED (returns 403 registration_disabled)
 POST   /api/v1/auth/login                  { email, password } → JWT cookie (rate limited: 10/min per IP)
 POST   /api/v1/auth/logout                 Clears JWT cookie
 PATCH  /api/v1/auth/password               { current_password, new_password }
@@ -423,11 +434,12 @@ GET    /api/v1/tokens                      List API tokens
 POST   /api/v1/tokens                      Create token
 DELETE /api/v1/tokens/:id                  Revoke token
 
-GET    /api/v1/billing/subscription         Always returns { billing_enabled: true, tier: "<tier>" }
+GET    /api/v1/billing/subscription         Returns { billing_enabled, tier }
 GET    /api/v1/billing/tiers               Available tiers with limits (public)
+POST   /api/v1/billing/checkout            { tier, success_url, cancel_url } → { url } (Stripe Checkout)
 POST   /api/v1/billing/portal              Stripe portal stub
 GET    /api/v1/billing/usage               Storage + camera usage for current user
-POST   /api/v1/webhooks/stripe             Stripe webhook (public, signature-verified)
+POST   /api/v1/webhooks/stripe             Stripe webhook: checkout.session.completed, subscription.updated, subscription.deleted
 
 GET    /api/v1/firmware/latest             Latest firmware release (public, no auth)
 POST   /api/v1/webhooks/github            GitHub release webhook (public, HMAC-verified)

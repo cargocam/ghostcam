@@ -20,7 +20,14 @@ func BuildRouter(app *App) http.Handler {
 	r.Use(corsMiddleware(app.Config.PublicURL))
 
 	secureCookies := strings.HasPrefix(app.Config.PublicURL, "https://")
-	h := handlers.New(app.DB, app.Redis, app.S3, app.HMACSecret, app.Config.S3PresignTTLSecs, app.Config.AdminEmail, app.Config.PublicURL, secureCookies)
+	stripeConfig := handlers.StripeConfig{
+		SecretKey:         app.Config.StripeSecretKey,
+		WebhookSecret:     app.Config.StripeWebhookSecret,
+		PriceIDStarter:    app.Config.StripePriceIDStarter,
+		PriceIDPro:        app.Config.StripePriceIDPro,
+		PriceIDEnterprise: app.Config.StripePriceIDEnterprise,
+	}
+	h := handlers.New(app.DB, app.Redis, app.S3, app.HMACSecret, app.Config.S3PresignTTLSecs, app.Config.AdminEmail, app.Config.PublicURL, secureCookies, stripeConfig)
 
 	// Rate limiters for public auth endpoints
 	loginRL := NewRateLimiter(10)     // 10 req/min per IP
@@ -82,6 +89,7 @@ func BuildRouter(app *App) http.Handler {
 
 		// Billing
 		r.Get("/api/v1/billing/subscription", h.GetSubscription)
+		r.Post("/api/v1/billing/checkout", h.CreateCheckout)
 		r.Post("/api/v1/billing/portal", h.CreatePortal)
 		r.Get("/api/v1/billing/usage", h.GetUsage)
 
