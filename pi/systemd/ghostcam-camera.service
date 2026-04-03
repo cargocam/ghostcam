@@ -1,14 +1,20 @@
 [Unit]
-Description=Ghostcam Camera Agent
+Description=Ghostcam Camera
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
+User=yurei
+Group=yurei
+SupplementaryGroups=video dialout audio
+EnvironmentFile=-/etc/ghostcam/env
+Environment=MALLOC_ARENA_MAX=2
+# Install staged firmware update before starting (+ prefix runs as root)
+ExecStartPre=+/bin/sh -c 'test -f /var/ghostcam/staged-update && mv /var/ghostcam/staged-update /usr/local/bin/ghostcam-camera && chmod +x /usr/local/bin/ghostcam-camera || true'
 ExecStart=/usr/local/bin/ghostcam-camera
 Restart=always
 RestartSec=5
-EnvironmentFile=/etc/ghostcam/env
 
 [Install]
 WantedBy=multi-user.target

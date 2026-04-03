@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"runtime"
+	"path/filepath"
 	"time"
 )
 
@@ -22,9 +22,10 @@ type firmwareResponse struct {
 }
 
 // CheckFirmwareUpdate checks the server for a newer firmware version.
-// If found, downloads the binary, replaces the current executable, and returns true.
-// The caller should exit so systemd restarts with the new binary.
-func CheckFirmwareUpdate(ctx context.Context, client *Client) bool {
+// If found, downloads the binary to {dataDir}/staged-update, and returns true.
+// The caller should exit so systemd restarts. The systemd ExecStartPre script
+// moves the staged binary into place before the next start.
+func CheckFirmwareUpdate(ctx context.Context, client *Client, dataDir string) bool {
 	if Version == "dev" {
 		slog.Debug("firmware check skipped (dev build)")
 		return false
@@ -50,12 +51,13 @@ func CheckFirmwareUpdate(ctx context.Context, client *Client) bool {
 
 	slog.Info("new firmware available", "current", Version, "new", resp.Release.Version)
 
-	if err := downloadAndReplace(ctx, resp.Release.DownloadURL); err != nil {
-		slog.Error("firmware update failed", "error", err)
+	stagedPath := filepath.Join(dataDir, "staged-update")
+	if err := downloadToFile(ctx, resp.Release.DownloadURL, stagedPath); err != nil {
+		slog.Error("firmware download failed", "error", err)
 		return false
 	}
 
-	slog.Info("firmware updated, restarting", "new_version", resp.Release.Version)
+	slog.Info("firmware staged, restarting for install", "new_version", resp.Release.Version, "staged", stagedPath)
 	return true
 }
 
@@ -86,7 +88,7 @@ func (c *Client) getFirmwareLatest(ctx context.Context) (*firmwareResponse, erro
 	return &result, nil
 }
 
-func downloadAndReplace(ctx context.Context, url string) error {
+func downloadToFile(ctx context.Context, url, destPath string) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
@@ -105,13 +107,7 @@ func downloadAndReplace(ctx context.Context, url string) error {
 		return fmt.Errorf("download returned %d", resp.StatusCode)
 	}
 
-	// Write to temp file next to the current binary
-	execPath, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("resolving executable path: %w", err)
-	}
-
-	tmpPath := execPath + ".new"
+	tmpPath := destPath + ".tmp"
 	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
 	if err != nil {
 		return fmt.Errorf("creating temp file: %w", err)
@@ -124,13 +120,11 @@ func downloadAndReplace(ctx context.Context, url string) error {
 		return fmt.Errorf("writing firmware: %w", err)
 	}
 
-	slog.Info("firmware downloaded", "size_bytes", n, "arch", runtime.GOARCH)
-
-	// Atomic replace
-	if err := os.Rename(tmpPath, execPath); err != nil {
+	if err := os.Rename(tmpPath, destPath); err != nil {
 		os.Remove(tmpPath)
-		return fmt.Errorf("replacing binary: %w", err)
+		return fmt.Errorf("staging firmware: %w", err)
 	}
 
+	slog.Info("firmware downloaded", "size_bytes", n, "path", destPath)
 	return nil
 }

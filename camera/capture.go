@@ -43,6 +43,12 @@ func nextSegmentNumber(dir string) int {
 }
 
 func runTestPipeline(ctx context.Context, cfg *CameraConfig, pattern, kfInterval string, startNum int) error {
+	// Prefer pre-encoded test file (no CPU-intensive encoding)
+	testFile := filepath.Join(cfg.DataDir, "test-loop.mp4")
+	if _, err := os.Stat(testFile); err == nil {
+		return runTestFileLoop(ctx, testFile, pattern, startNum)
+	}
+
 	slog.Info("starting test capture pipeline (ffmpeg testsrc2 + sine audio)", "segment_start", startNum)
 
 	size := fmt.Sprintf("%dx%d", cfg.VideoWidth, cfg.VideoHeight)
@@ -69,6 +75,39 @@ func runTestPipeline(ctx context.Context, cfg *CameraConfig, pattern, kfInterval
 		return fmt.Errorf("starting ffmpeg: %w", err)
 	}
 	slog.Info("ffmpeg test pipeline started", "pid", cmd.Process.Pid)
+
+	err := cmd.Wait()
+	if ctx.Err() != nil {
+		slog.Info("capture pipeline cancelled")
+		return ctx.Err()
+	}
+	if err != nil {
+		return fmt.Errorf("ffmpeg exited: %w", err)
+	}
+	return nil
+}
+
+// runTestFileLoop loops a pre-encoded MP4 file with -c copy (no encoding, minimal CPU).
+func runTestFileLoop(ctx context.Context, testFile, pattern string, startNum int) error {
+	slog.Info("starting test capture pipeline (pre-encoded loop, -c copy)", "file", testFile, "segment_start", startNum)
+
+	cmd := exec.CommandContext(ctx, "ffmpeg",
+		"-re",
+		"-stream_loop", "-1",
+		"-i", testFile,
+		"-c", "copy",
+		"-f", "segment",
+		"-segment_time", fmt.Sprintf("%d", segmentDurationSecs),
+		"-segment_format", "mpegts",
+		"-segment_start_number", fmt.Sprintf("%d", startNum),
+		"-reset_timestamps", "1",
+		pattern,
+	)
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("starting ffmpeg: %w", err)
+	}
+	slog.Info("ffmpeg test file loop started", "pid", cmd.Process.Pid)
 
 	err := cmd.Wait()
 	if ctx.Err() != nil {
