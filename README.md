@@ -61,6 +61,7 @@ Key features:
 - **Segment watcher**: backpressure with 5s blocking send instead of instant drop
 - **ffmpeg cleanup**: SIGTERM to process group, then SIGKILL after 5s
 - **GPS**: real gpsd integration on Linux (localhost:2947 for SIM7600G-H modem), synthetic fallback in Docker/dev
+- **Pre-encoded test loop**: place `test-loop.mp4` in data dir for low-CPU test mode (~5% vs 49%)
 - **Motion detection**: segment-size heuristic (1.5x rolling 10-segment average)
 - **Telemetry poll backoff** on failure: 10s -> 30s -> 60s
 - **Credentials** written as 0600 permissions
@@ -74,14 +75,16 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./cmd/ghostcam
 scp ghostcam-camera pi@10.0.0.229:/usr/local/bin/
 ```
 
-Cameras are provisioned via QR code or pre-provisioned token file. On first boot, the camera scans a QR containing the server URL + one-time token, provisions itself, and starts streaming.
+Cameras are provisioned via pre-provisioned token file. On first boot, the camera reads the token file containing the server URL + one-time token, provisions itself, and starts streaming. (Camera-side QR scanning is not implemented in Go.)
 
 ## Server
 
 HTTP API serving HLS manifests, presigned S3 URLs, SSE telemetry, and the static UI.
 
 Key features:
-- **Rate limiting**: login 10/min, register 5/min, provision 10/min per IP
+- **Registration disabled**: `POST /api/v1/auth/register` returns 403; admin creates users via DB
+- **Firmware OTA**: admin uploads via `POST /api/v1/admin/firmware` (Tigris), cameras auto-update on startup
+- **Rate limiting**: login 10/min, provision 10/min per IP
 - **Secure cookies**: conditional on `GHOSTCAM_PUBLIC_URL` being HTTPS
 - **QR codes** use configured `GHOSTCAM_PUBLIC_URL` instead of `r.Host`
 - **Storage limits**: Redis `INCRBY` atomic reservation prevents TOCTOU race
@@ -93,7 +96,8 @@ Key features:
 - **CORS** middleware for `GHOSTCAM_PUBLIC_URL` + `localhost:5173`
 - **Failed login logging** with email + IP
 - **HLS manifest**: `#EXT-X-INDEPENDENT-SEGMENTS` tag; segments via 302 redirect to S3
-- **Auto-create** "free" subscription on user registration
+- **Auto-create** "free" subscription on user creation
+- **Background jobs**: hourly segment retention (30 days default), 6-hourly stale camera cleanup
 
 ```bash
 go build -o ghostcam-server ./cmd/ghostcam-server
@@ -112,6 +116,8 @@ go build -o ghostcam-server ./cmd/ghostcam-server
 | `GET /events` | Viewer | SSE stream (telemetry, motion, storage_capped) |
 | `GET /api/v1/billing/subscription` | Viewer | Always returns `billing_enabled: true` |
 | `POST /api/v1/cameras` | Viewer | Returns 402 when tier camera limit reached |
+| `POST /api/v1/admin/firmware` | Admin | Upload firmware binary to Tigris |
+| `GET /api/v1/firmware/latest` | Public | Latest firmware version + presigned download URL |
 
 ### Environment Variables
 
@@ -124,6 +130,7 @@ go build -o ghostcam-server ./cmd/ghostcam-server
 | `GHOSTCAM_S3_ENDPOINT` | S3 endpoint URL (Tigris, MinIO) |
 | `GHOSTCAM_ADMIN_EMAIL` | Admin user email |
 | `GHOSTCAM_ADMIN_PASSWORD` | Preset admin password |
+| `GHOSTCAM_SEGMENT_RETENTION_DAYS` | Segment retention (default 30); hourly cleanup |
 
 ## Infrastructure
 

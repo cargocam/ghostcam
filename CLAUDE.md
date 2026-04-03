@@ -204,7 +204,7 @@ Cameras provision themselves via a one-time token, optionally delivered via QR c
 
 1. User generates a provision token from the web UI (`POST /api/v1/cameras` or `GET /api/v1/cameras/enroll/qr`).
 2. QR payload is `{"s": "https://server-url", "t": "<token>", "w": "ssid", "p": "password"}` with WiFi fields optional.
-3. Camera scans QR (or reads token from pre-provisioned file), POSTs to `POST /api/v1/cameras/provision` with the token + device serial.
+3. Camera reads token from pre-provisioned file, POSTs to `POST /api/v1/cameras/provision` with the token + device serial. (Camera-side QR scanning is not implemented in Go; provision via token files only.)
 4. Server validates token, creates camera record, returns API key + device ID.
 5. Camera persists credentials (`api_key`, `device_id`, `server_url`) as flat files (0600 permissions) and starts streaming.
 6. On subsequent boots, camera loads stored credentials and starts immediately.
@@ -272,7 +272,7 @@ camera/
                    Resolution runtime override via {dataDir}/resolution
                    Video profiles: zero2w/480p, pi4/720p, pi5/1080p
   capture.go       Capture pipeline: rpicam-vid | ffmpeg → MPEG-TS segments (6s each)
-                   Test mode: ffmpeg testsrc2 + sine audio
+                   Test mode: ffmpeg testsrc2 + sine audio, or pre-encoded test-loop.mp4 (~5% CPU vs 49%)
                    Uses -segment_start_number to avoid filename collisions on restart
                    ffmpeg cleanup: SIGTERM to process group, then SIGKILL after 5s
   watcher.go       NewSegment type, motionDetector (rolling 10-window, 1.5x threshold)
@@ -286,6 +286,7 @@ camera/
   client.go        HTTP client for server API (telemetry POST, presign, provision, S3 upload)
   credentials.go   LoadCredentials / SaveCredentials — flat files (api_key, device_id, server_url) with 0600 permissions
   provisioning.go  Token-based provisioning via POST /api/v1/cameras/provision
+                   Note: QR scanning is not implemented in Go. Cameras provision via token files only.
   sensors_linux.go ReadTelemetry: CPU (/proc/stat), memory (/proc/meminfo), temp (/sys/class/thermal),
                    uptime (/proc/uptime), WiFi signal (/proc/net/wireless), GPS (gpsd → synthetic fallback)
   sensors_other.go Synthetic telemetry for non-Linux (dev/Docker)
@@ -326,7 +327,8 @@ server/
                   Database interface for testability
   handlers/       HTTP handlers for all API endpoints
                   handlers.go: defaultTierID = "free" (billing always on)
-                  auth.go: Login (failed login logging with email + IP), Register (auto-create free subscription)
+                  admin.go: FirmwareUpload (POST /api/v1/admin/firmware), FirmwareLatest (GET /api/v1/firmware/latest)
+                  auth.go: Login (failed login logging with email + IP), Register (returns 403 — disabled)
                   cameras.go: Enroll (camera limit 402), UpdateCamera (enqueues commands for resolution/recording_mode)
                   hls.go: GetManifest (dynamic m3u8 with #EXT-X-INDEPENDENT-SEGMENTS), GetSegment (302 redirect to S3),
                           GetInit (302 redirect), GetCoverage (segment list with motion flags)
@@ -371,6 +373,8 @@ components/
   HlsPlayer.svelte    hls.js wrapper for HLS playback via /hls/{deviceID}/playlist.m3u8
   TimelineScrubber.svelte  Timeline with coverage bars, playhead, live/playback mode switching
   camera/CameraCard.svelte  Camera card with HLS player, settings dialog
+  camera/CameraList.svelte  Sidebar camera list with right-click context menu (Rename, Delete)
+  camera/CameraSettingsDialog.svelte  Camera settings: Name, Resolution, Recording Mode
 ```
 
 ## Camera-Server Protocol
@@ -426,7 +430,7 @@ GET    /api/v1/telemetry/:id               ?from=<ms>&to=<ms>&limit=<n> — hist
 GET    /hls/:id/playlist.m3u8              Dynamic HLS manifest (?from=&to=, max 24h range, LIMIT 2000 segments)
 GET    /hls/:id/init.mp4                   Init segment → 307 redirect to S3
 GET    /hls/:id/:segmentID.ts              Segment → 302 redirect to S3 (presigned on the fly)
-GET    /hls/:id/coverage                   Segment coverage with motion flags (last 24h)
+GET    /hls/:id/coverage                   Segment coverage with motion flags (has_motion always present, not omitted when false)
 
 GET    /events                             SSE stream (telemetry, motion, storage_capped events)
 
@@ -436,12 +440,13 @@ DELETE /api/v1/tokens/:id                  Revoke token
 
 GET    /api/v1/billing/subscription         Returns { billing_enabled, tier }
 GET    /api/v1/billing/tiers               Available tiers with limits (public)
-POST   /api/v1/billing/checkout            { tier, success_url, cancel_url } → { url } (Stripe Checkout)
-POST   /api/v1/billing/portal              Stripe portal stub
+POST   /api/v1/billing/checkout            { tier, success_url, cancel_url } → { url } (creates Stripe Checkout Session)
+POST   /api/v1/billing/portal              { return_url } → { url } (Stripe Customer Portal)
 GET    /api/v1/billing/usage               Storage + camera usage for current user
 POST   /api/v1/webhooks/stripe             Stripe webhook: checkout.session.completed, subscription.updated, subscription.deleted
 
-GET    /api/v1/firmware/latest             Latest firmware release (public, no auth)
+GET    /api/v1/firmware/latest             Latest firmware version + presigned Tigris download URL (public, no auth)
+POST   /api/v1/admin/firmware             Upload firmware binary to Tigris + publish version via Redis — admin only
 POST   /api/v1/webhooks/github            GitHub release webhook (public, HMAC-verified)
 
 GET    /api/v1/audit                       Audit log query — admin only (?type=&since=&until=&limit=&offset=)
@@ -488,7 +493,8 @@ GET    /readyz                             200 when ready (no auth)
 - **Failed login logging**: Login failures are logged with email + IP address (via `X-Forwarded-For` or `RemoteAddr`).
 - **HLS segment expiry**: Manifests use relative `.ts` paths. Each segment request to `/hls/{id}/{segmentID}.ts` re-presigns on the fly and returns 302 to S3. No presigned URLs in manifests means no mid-stream expiry.
 - **Billing webhooks**: Stripe webhooks keep subscription state in sync. In production, set `STRIPE_WEBHOOK_SECRET` to the real signing secret.
-- **Firmware updates**: Cameras check `GET /api/v1/firmware/latest` on every startup. Set `GHOSTCAM_RELEASE_REPO` on the server to enable startup fetch from GitHub API.
+- **Firmware OTA**: Admin uploads firmware via `POST /api/v1/admin/firmware` (stored in Tigris, version published via Redis). Cameras check `GET /api/v1/firmware/latest` on startup and auto-update via staged binary + systemd `ExecStartPre` swap. Set `GHOSTCAM_RELEASE_REPO` on the server to enable startup fetch from GitHub API.
+- **Pre-encoded test loop**: Place `test-loop.mp4` in the camera's data dir for low-CPU test mode (~5% vs 49% with testsrc2 encoding). The camera uses `ffmpeg -stream_loop` to segment it continuously.
 - **Unenroll script**: `pi.sh unenroll` clears credential files (`api_key`, `device_id`, `server_url`) from the camera's data dir.
 
 ## Key Dependencies
