@@ -2,7 +2,7 @@ device:
   layer: rpizero2w
   hostname: ghostcam
   user1: ghostcam
-  user1pass: ghostcam
+  user1pass: Ghostcam1!
 
 image:
   layer: image-rpios
