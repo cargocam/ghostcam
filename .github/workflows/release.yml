@@ -85,6 +85,7 @@ jobs:
       - name: Build and push server
         uses: docker/build-push-action@v5
         with:
+          context: .
           push: true
           target: server
           tags: ${{ env.IMAGE_PREFIX }}-server:${{ github.ref_name }},${{ env.IMAGE_PREFIX }}-server:latest
@@ -122,8 +123,8 @@ jobs:
           cp -r "$GITHUB_WORKSPACE/pi/image/layer/ghostcam.yaml" layer/ghostcam.yaml
           cp -r "$GITHUB_WORKSPACE/pi/image/files" layer/ghostcam-files
           cp -r "$GITHUB_WORKSPACE/pi/image/pkgs" layer/ghostcam-pkgs
-          sed -i 's|files/|layer/ghostcam-files/|g' layer/ghostcam.yaml
-          sed -i 's|pkgs/|layer/ghostcam-pkgs/|g' layer/ghostcam.yaml
+          sed -i "s|files/|$PWD/layer/ghostcam-files/|g" layer/ghostcam.yaml
+          sed -i "s|pkgs/|$PWD/layer/ghostcam-pkgs/|g" layer/ghostcam.yaml
           sudo ./build.sh "$GITHUB_WORKSPACE/pi/image/config/ghostcam-${{ matrix.device }}.yaml"
       - name: Compress image
         run: |
@@ -144,7 +145,7 @@ jobs:
         with:
           merge-multiple: true
       - name: Generate checksums
-        run: sha256sum ghostcam-camera-* ghostcam-*.img.xz > checksums.txt 2>/dev/null || sha256sum ghostcam-camera-* > checksums.txt
+        run: sha256sum ghostcam-camera* ghostcam-*.img.xz > checksums.txt 2>/dev/null || sha256sum ghostcam-camera* > checksums.txt
       - uses: softprops/action-gh-release@v2
         with:
           files: |
