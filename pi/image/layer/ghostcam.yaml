@@ -32,9 +32,8 @@ mmdebstrap:
     - chroot "$1" chown 1000:1000 /var/ghostcam
 
     # Install ghostcam .deb package (camera binary)
-    # In CI, pkgs/ is copied alongside this YAML as ghostcam-pkgs/
     - cp pkgs/ghostcam-camera_*.deb "$1/tmp/"
-    - chroot "$1" dpkg -i /tmp/ghostcam-camera_*.deb
+    - chroot "$1" sh -c 'dpkg -i /tmp/ghostcam-camera_*.deb'
     - rm "$1"/tmp/ghostcam-camera_*.deb
 
     # Install systemd services
