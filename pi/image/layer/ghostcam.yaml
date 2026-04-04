@@ -8,6 +8,9 @@
 ---
 mmdebstrap:
   packages:
+    # ghostcam-camera .deb runtime deps
+    - ffmpeg
+    - ca-certificates
     # Camera
     - rpicam-apps
     # Audio (INMP441 I2S mic)
