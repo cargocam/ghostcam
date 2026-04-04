@@ -1,72 +1,80 @@
-name: ghostcam
+# METABEGIN
+# X-Env-Layer-Name: ghostcam
+# X-Env-Layer-Desc: Ghostcam camera agent with GPS, cellular, and audio support.
+# X-Env-Layer-Version: 1.0.0
+# X-Env-Layer-Category: app-misc
+# X-Env-Layer-Requires: openssh-server
+# METAEND
+---
+mmdebstrap:
+  packages:
+    # Camera
+    - rpicam-apps
+    # Audio (INMP441 I2S mic)
+    - libasound2
+    - alsa-utils
+    # GPS
+    - gpsd
+    - gpsd-clients
+    # Cellular modem
+    - modemmanager
+    - network-manager
+    - libqmi-utils
+    - usb-modeswitch
+    # Utilities
+    - jq
+    - curl
+    - htop
 
-packages:
-  # Camera
-  - rpicam-apps
-  # Audio (INMP441 I2S mic)
-  - libasound2
-  - alsa-utils
-  # GPS
-  - gpsd
-  - gpsd-clients
-  # Cellular modem
-  - modemmanager
-  - network-manager
-  - libqmi-utils
-  - usb-modeswitch
-  # Remote access
-  - openssh-server
-  # Utilities
-  - jq
-  - curl
-  - htop
+  customize-hooks:
+    # Create ghostcam directories
+    - mkdir -p "$1/var/ghostcam" "$1/etc/ghostcam"
+    - chroot "$1" chown 1000:1000 /var/ghostcam
 
-config_txt_append:
-  - camera_auto_detect=1
-  - dtparam=i2s=on
-  - dtoverlay=googlevoicehat-soundcard
-  - enable_uart=1
-  - gpu_mem=128
+    # Install ghostcam .deb package (camera binary)
+    # In CI, pkgs/ is copied alongside this YAML as ghostcam-pkgs/
+    - cp pkgs/ghostcam-camera_*.deb "$1/tmp/"
+    - chroot "$1" dpkg -i /tmp/ghostcam-camera_*.deb
+    - rm "$1"/tmp/ghostcam-camera_*.deb
 
-customize-hooks:
-  # Create ghostcam directories
-  - chroot "$ROOTFS_DIR" mkdir -p /var/ghostcam /etc/ghostcam
-  - chroot "$ROOTFS_DIR" chown 1000:1000 /var/ghostcam
+    # Install systemd services
+    - cp files/ghostcam-camera.service "$1/etc/systemd/system/"
+    - cp files/ghostcam-gps.service "$1/etc/systemd/system/"
 
-  # Install ghostcam .deb package (camera binary)
-  - cp pkgs/ghostcam-camera_*.deb "$ROOTFS_DIR/tmp/"
-  - chroot "$ROOTFS_DIR" dpkg -i /tmp/ghostcam-camera_*.deb
-  - rm "$ROOTFS_DIR"/tmp/ghostcam-camera_*.deb
+    # Install GPS setup script
+    - cp files/ghostcam-enable-gps.sh "$1/usr/local/bin/"
+    - chmod 755 "$1/usr/local/bin/ghostcam-enable-gps.sh"
 
-  # Install systemd services
-  - cp files/ghostcam-camera.service "$ROOTFS_DIR/etc/systemd/system/"
-  - cp files/ghostcam-gps.service "$ROOTFS_DIR/etc/systemd/system/"
+    # Install gpsd config
+    - cp files/gpsd.conf "$1/etc/default/gpsd"
 
-  # Install GPS setup script
-  - cp files/ghostcam-enable-gps.sh "$ROOTFS_DIR/usr/local/bin/"
-  - chmod 755 "$ROOTFS_DIR/usr/local/bin/ghostcam-enable-gps.sh"
+    # Install ALSA config for INMP441 I2S mic
+    - cp files/asound.conf "$1/etc/asound.conf"
 
-  # Install gpsd config
-  - cp files/gpsd.conf "$ROOTFS_DIR/etc/default/gpsd"
+    # Install NetworkManager configs
+    - mkdir -p "$1/etc/NetworkManager/conf.d"
+    - cp files/no-connectivity-check.conf "$1/etc/NetworkManager/conf.d/"
+    - mkdir -p "$1/etc/NetworkManager/dispatcher.d"
+    - cp files/99-keep-cellular-route "$1/etc/NetworkManager/dispatcher.d/"
+    - chmod 755 "$1/etc/NetworkManager/dispatcher.d/99-keep-cellular-route"
 
-  # Install ALSA config for INMP441 I2S mic
-  - cp files/asound.conf "$ROOTFS_DIR/etc/asound.conf"
+    # Install udev rules for SIM7600 modem
+    - cp files/99-sim7600.rules "$1/etc/udev/rules.d/"
 
-  # Install NetworkManager configs
-  - mkdir -p "$ROOTFS_DIR/etc/NetworkManager/conf.d"
-  - cp files/no-connectivity-check.conf "$ROOTFS_DIR/etc/NetworkManager/conf.d/"
-  - mkdir -p "$ROOTFS_DIR/etc/NetworkManager/dispatcher.d"
-  - cp files/99-keep-cellular-route "$ROOTFS_DIR/etc/NetworkManager/dispatcher.d/"
-  - chmod 755 "$ROOTFS_DIR/etc/NetworkManager/dispatcher.d/99-keep-cellular-route"
+    # Install default environment file
+    - cp files/ghostcam.env "$1/etc/ghostcam/env"
 
-  # Install udev rules for SIM7600 modem
-  - cp files/99-sim7600.rules "$ROOTFS_DIR/etc/udev/rules.d/"
+    # Append camera/audio/GPIO settings to config.txt
+    - |-
+      printf '%s\n' \
+        'camera_auto_detect=1' \
+        'dtparam=i2s=on' \
+        'dtoverlay=googlevoicehat-soundcard' \
+        'enable_uart=1' \
+        'gpu_mem=128' \
+        >> "$1/boot/firmware/config.txt"
 
-  # Install default environment file
-  - cp files/ghostcam.env "$ROOTFS_DIR/etc/ghostcam/env"
-
-  # Enable services
-  - chroot "$ROOTFS_DIR" systemctl enable ssh.service
-  - chroot "$ROOTFS_DIR" systemctl enable ghostcam-camera.service
-  - chroot "$ROOTFS_DIR" systemctl enable ghostcam-gps.service
-  - chroot "$ROOTFS_DIR" systemctl enable gpsd.service
+    # Enable services
+    - $BDEBSTRAP_HOOKS/enable-units "$1" ghostcam-camera
+    - $BDEBSTRAP_HOOKS/enable-units "$1" ghostcam-gps
+    - $BDEBSTRAP_HOOKS/enable-units "$1" gpsd

@@ -100,14 +100,13 @@ jobs:
         device: [zero2w, pi4, pi5]
     steps:
       - uses: actions/checkout@v4
+      - name: Clone rpi-image-gen
+        run: git clone --depth 1 https://github.com/raspberrypi/rpi-image-gen.git /tmp/rpi-image-gen
       - name: Install rpi-image-gen dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            binfmt-support qemu-user-static kpartx fdisk \
-            dosfstools e2fsprogs debootstrap systemd-container xz-utils
-      - name: Clone rpi-image-gen
-        run: git clone --depth 1 https://github.com/raspberrypi/rpi-image-gen.git /tmp/rpi-image-gen
+          sudo apt-get install -y binfmt-support qemu-user-static
+          sudo /tmp/rpi-image-gen/install_deps.sh
       - uses: actions/download-artifact@v4
         with:
           name: ghostcam-camera-deb
@@ -119,18 +118,14 @@ jobs:
           echo "GHOSTCAM_VIDEO_PROFILE=$PROFILE" >> pi/image/files/ghostcam.env
       - name: Build image for ${{ matrix.device }}
         run: |
-          cd /tmp/rpi-image-gen
-          cp -r "$GITHUB_WORKSPACE/pi/image/layer/ghostcam.yaml" layer/ghostcam.yaml
-          cp -r "$GITHUB_WORKSPACE/pi/image/files" layer/ghostcam-files
-          cp -r "$GITHUB_WORKSPACE/pi/image/pkgs" layer/ghostcam-pkgs
-          sed -i "s|files/|$PWD/layer/ghostcam-files/|g" layer/ghostcam.yaml
-          sed -i "s|pkgs/|$PWD/layer/ghostcam-pkgs/|g" layer/ghostcam.yaml
-          sudo ./build.sh "$GITHUB_WORKSPACE/pi/image/config/ghostcam-${{ matrix.device }}.yaml"
+          sudo /tmp/rpi-image-gen/rpi-image-gen build \
+            -c "$GITHUB_WORKSPACE/pi/image/config/ghostcam-${{ matrix.device }}.yaml" \
+            -S "$GITHUB_WORKSPACE/pi/image"
       - name: Compress image
         run: |
-          IMG=$(find /tmp/rpi-image-gen/output -name '*.img' | head -1)
-          xz -9 -T0 "$IMG"
-          cp "${IMG}.xz" "ghostcam-${{ matrix.device }}-${{ github.ref_name }}.img.xz"
+          IMG=$(sudo find work/ -name '*.img' | head -1)
+          sudo xz -9 -T0 "$IMG"
+          sudo cp "${IMG}.xz" "ghostcam-${{ matrix.device }}-${{ github.ref_name }}.img.xz"
       - uses: actions/upload-artifact@v4
         with:
           name: ghostcam-${{ matrix.device }}-image
