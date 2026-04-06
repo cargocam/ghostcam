@@ -2,18 +2,10 @@
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { cameraConfigStore } from '$lib/stores/cameraConfig.svelte.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
-	import { deleteCamera, updateCameraSettings } from '$lib/signaling.js';
+	import { updateCameraSettings } from '$lib/signaling.js';
 	import { cn } from '$lib/utils.js';
-	import { DropdownMenu } from 'bits-ui';
-	import { MoreVertical, Pencil, Trash2, Check, X } from 'lucide-svelte';
-	import {
-		Dialog,
-		DialogContent,
-		DialogHeader,
-		DialogTitle,
-		DialogDescription,
-	} from '$lib/components/ui/dialog/index.js';
-	import { Button } from '$lib/components/ui/button/index.js';
+	import { Settings, Check, X } from 'lucide-svelte';
+	import CameraSettingsDialog from './CameraSettingsDialog.svelte';
 
 	let {
 		onSelect,
@@ -23,8 +15,7 @@
 
 	let editingId = $state<string | null>(null);
 	let editingName = $state('');
-	let deleteTarget = $state<{ id: string; name: string } | null>(null);
-	let deleting = $state(false);
+	let settingsTarget = $state<string | null>(null);
 
 	let sortedCameras = $derived(() => {
 		return [...cameraStore.cameras].sort((a, b) => {
@@ -48,7 +39,6 @@
 	async function confirmEdit() {
 		if (editingId && editingName.trim()) {
 			const name = editingName.trim();
-			// Persist to server
 			try {
 				await updateCameraSettings(editingId, { display_name: name });
 			} catch {
@@ -68,28 +58,7 @@
 		else if (e.key === 'Escape') cancelEdit();
 	}
 
-	function promptDelete(id: string, name: string) {
-		deleteTarget = { id, name };
-	}
-
-	async function confirmDelete() {
-		if (!deleteTarget) return;
-		deleting = true;
-		try {
-			await deleteCamera(deleteTarget.id);
-			cameraStore.removeCamera(deleteTarget.id);
-			deleteTarget = null;
-		} catch (err) {
-			console.error('Delete camera failed:', err);
-		} finally {
-			deleting = false;
-		}
-	}
-
-	function handleContextMenu(e: MouseEvent, id: string) {
-		// Prevent default browser context menu — the DropdownMenu handles display
-		// We don't need to do anything here since we use the trigger button approach
-	}
+	let settingsOpen = $derived(settingsTarget !== null);
 </script>
 
 <div class="py-1">
@@ -151,44 +120,17 @@
 								</div>
 							{/if}
 						</div>
-
-						<span class={cn(
-							"text-[10px] uppercase tracking-wider flex-shrink-0",
-							camera.online ? "text-primary" : "text-muted-foreground"
-						)}>
-							{camera.online ? 'Live' : 'Off'}
-						</span>
 					</button>
 
-					<!-- Context menu trigger -->
+					<!-- Settings button -->
 					<div class="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover/item:opacity-100 transition-opacity">
-						<DropdownMenu.Root>
-							<DropdownMenu.Trigger
-								class="p-1 rounded hover:bg-accent"
-								onclick={(e: MouseEvent) => e.stopPropagation()}
-							>
-								<MoreVertical class="h-3.5 w-3.5 text-muted-foreground" />
-							</DropdownMenu.Trigger>
-							<DropdownMenu.Content
-								class="z-50 min-w-[140px] rounded-md border bg-popover p-1 shadow-md"
-								sideOffset={4}
-							>
-								<DropdownMenu.Item
-									class="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent outline-none"
-									onSelect={() => startEdit(camera.device_id, displayName)}
-								>
-									<Pencil class="h-3.5 w-3.5" />
-									Rename
-								</DropdownMenu.Item>
-								<DropdownMenu.Item
-									class="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-destructive hover:bg-destructive/10 outline-none"
-									onSelect={() => promptDelete(camera.device_id, displayName)}
-								>
-									<Trash2 class="h-3.5 w-3.5" />
-									Delete
-								</DropdownMenu.Item>
-							</DropdownMenu.Content>
-						</DropdownMenu.Root>
+						<button
+							class="p-1 rounded hover:bg-accent"
+							onclick={(e) => { e.stopPropagation(); settingsTarget = camera.device_id; }}
+							aria-label="Camera settings"
+						>
+							<Settings class="h-3.5 w-3.5 text-muted-foreground" />
+						</button>
 					</div>
 				{/if}
 			</div>
@@ -202,24 +144,10 @@
 	{/if}
 </div>
 
-<!-- Delete confirmation dialog -->
-{#if deleteTarget}
-	<Dialog open={true}>
-		<DialogContent class="sm:max-w-md">
-			<DialogHeader>
-				<DialogTitle>Delete Camera</DialogTitle>
-				<DialogDescription>
-					Are you sure you want to delete <strong>{deleteTarget.name}</strong>? This action cannot be undone. All recordings for this camera will remain in storage.
-				</DialogDescription>
-			</DialogHeader>
-			<div class="flex justify-end gap-2 pt-4">
-				<Button variant="outline" onclick={() => { deleteTarget = null; }}>
-					Cancel
-				</Button>
-				<Button variant="destructive" disabled={deleting} onclick={confirmDelete}>
-					{deleting ? 'Deleting...' : 'Delete'}
-				</Button>
-			</div>
-		</DialogContent>
-	</Dialog>
+{#if settingsTarget}
+	<CameraSettingsDialog
+		deviceId={settingsTarget}
+		open={settingsOpen}
+		onclose={() => { settingsTarget = null; }}
+	/>
 {/if}

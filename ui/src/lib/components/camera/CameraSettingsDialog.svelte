@@ -7,16 +7,18 @@
 		DialogDescription,
 	} from '$lib/components/ui/dialog/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import { updateCameraSettings } from '$lib/signaling.js';
+	import { updateCameraSettings, deleteCamera } from '$lib/signaling.js';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 
 	let {
 		open = $bindable(false),
 		deviceId,
+		onclose,
 	}: {
 		open?: boolean;
 		deviceId: string;
+		onclose?: () => void;
 	} = $props();
 
 	let camera = $derived(cameraStore.getCamera(deviceId));
@@ -26,6 +28,8 @@
 	let saving = $state(false);
 	let error = $state('');
 	let success = $state(false);
+	let confirmingDelete = $state(false);
+	let deleting = $state(false);
 
 	// Sync local state when dialog opens
 	$effect(() => {
@@ -35,6 +39,14 @@
 			recordingMode = camera.recording_mode || 'constant';
 			error = '';
 			success = false;
+			confirmingDelete = false;
+		}
+	});
+
+	// Notify parent when dialog closes
+	$effect(() => {
+		if (!open) {
+			onclose?.();
 		}
 	});
 
@@ -56,7 +68,6 @@
 			if (resolution !== camera.resolution) update.resolution = resolution;
 			if (recordingMode !== camera.recording_mode) update.recording_mode = recordingMode;
 			await updateCameraSettings(deviceId, update);
-			// Update local state
 			if (update.display_name) camera.device_name = displayName;
 			camera.resolution = resolution;
 			camera.recording_mode = recordingMode;
@@ -65,6 +76,20 @@
 			error = e instanceof Error ? e.message : 'Failed to update settings';
 		} finally {
 			saving = false;
+		}
+	}
+
+	async function handleDelete() {
+		deleting = true;
+		error = '';
+		try {
+			await deleteCamera(deviceId);
+			cameraStore.removeCamera(deviceId);
+			open = false;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to delete camera';
+		} finally {
+			deleting = false;
 		}
 	}
 </script>
@@ -142,6 +167,26 @@
 			<Button onclick={save} disabled={saving || !hasChanges} class="w-full">
 				{saving ? 'Saving...' : 'Save Settings'}
 			</Button>
+
+			<div class="border-t pt-4">
+				{#if confirmingDelete}
+					<p class="text-sm text-destructive mb-2">
+						Delete this camera? Recordings will remain in storage.
+					</p>
+					<div class="flex gap-2">
+						<Button variant="outline" class="flex-1" onclick={() => { confirmingDelete = false; }}>
+							Cancel
+						</Button>
+						<Button variant="destructive" class="flex-1" disabled={deleting} onclick={handleDelete}>
+							{deleting ? 'Deleting...' : 'Confirm Delete'}
+						</Button>
+					</div>
+				{:else}
+					<Button variant="ghost" class="w-full text-destructive hover:text-destructive hover:bg-destructive/10" onclick={() => { confirmingDelete = true; }}>
+						Delete Camera
+					</Button>
+				{/if}
+			</div>
 		</div>
 	</DialogContent>
 </Dialog>
