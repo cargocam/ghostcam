@@ -34,6 +34,7 @@ type ServerConfig struct {
 	StripePriceIDStarter string
 	StripePriceIDPro     string
 	StripePriceIDEnterprise string
+	StripePortalConfigID    string
 	// Segment retention in days (default 30)
 	SegmentRetentionDays int
 }
@@ -80,6 +81,7 @@ func LoadConfig() (*ServerConfig, error) {
 	cfg.StripePriceIDStarter = os.Getenv("STRIPE_PRICE_ID_STARTER")
 	cfg.StripePriceIDPro = os.Getenv("STRIPE_PRICE_ID_PRO")
 	cfg.StripePriceIDEnterprise = os.Getenv("STRIPE_PRICE_ID_ENTERPRISE")
+	cfg.StripePortalConfigID = os.Getenv("STRIPE_PORTAL_CONFIG_ID")
 
 	// Segment retention
 	cfg.SegmentRetentionDays = int(envOrDefaultUint64("GHOSTCAM_SEGMENT_RETENTION_DAYS", 30))

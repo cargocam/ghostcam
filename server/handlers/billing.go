@@ -11,6 +11,7 @@ import (
 	"github.com/cargocam/ghostcam/server/ctxutil"
 	"github.com/cargocam/ghostcam/server/db"
 	"github.com/stripe/stripe-go/v82"
+	portalsession "github.com/stripe/stripe-go/v82/billingportal/session"
 	checkoutsession "github.com/stripe/stripe-go/v82/checkout/session"
 	"github.com/stripe/stripe-go/v82/webhook"
 )
@@ -107,12 +108,50 @@ func (h *Handlers) CreateCheckout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"url": session.URL})
 }
 
+type portalRequest struct {
+	ReturnURL string `json:"return_url"`
+}
+
 // CreatePortal handles POST /api/v1/billing/portal.
-func (h *Handlers) CreatePortal(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
-		"billing_enabled": h.Stripe.SecretKey != "",
-		"message":         "Stripe portal not configured",
-	})
+// Creates a Stripe Customer Portal session for subscription management.
+func (h *Handlers) CreatePortal(w http.ResponseWriter, r *http.Request) {
+	if h.Stripe.SecretKey == "" {
+		writeError(w, http.StatusNotImplemented, "billing_not_configured")
+		return
+	}
+
+	userID := ctxutil.GetUserID(r)
+
+	var body portalRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	sub, _ := h.DB.GetSubscription(r.Context(), userID)
+	if sub == nil || sub.StripeCustomerID == nil {
+		writeError(w, http.StatusBadRequest, "no_stripe_customer")
+		return
+	}
+
+	stripe.Key = h.Stripe.SecretKey
+
+	params := &stripe.BillingPortalSessionParams{
+		Customer:  sub.StripeCustomerID,
+		ReturnURL: stripe.String(body.ReturnURL),
+	}
+	if h.Stripe.PortalConfigID != "" {
+		params.Configuration = stripe.String(h.Stripe.PortalConfigID)
+	}
+
+	session, err := portalsession.New(params)
+	if err != nil {
+		slog.Error("stripe portal session creation failed", "error", err)
+		writeError(w, http.StatusInternalServerError, "portal_failed")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"url": session.URL})
 }
 
 // GetUsage handles GET /api/v1/billing/usage.

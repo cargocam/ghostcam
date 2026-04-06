@@ -22,6 +22,7 @@ type StripeConfig struct {
 	PriceIDStarter     string
 	PriceIDPro         string
 	PriceIDEnterprise  string
+	PortalConfigID     string
 }
 
 // Handlers holds all HTTP handler methods and their shared dependencies.

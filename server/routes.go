@@ -26,6 +26,7 @@ func BuildRouter(app *App) http.Handler {
 		PriceIDStarter:    app.Config.StripePriceIDStarter,
 		PriceIDPro:        app.Config.StripePriceIDPro,
 		PriceIDEnterprise: app.Config.StripePriceIDEnterprise,
+		PortalConfigID:    app.Config.StripePortalConfigID,
 	}
 	h := handlers.New(app.DB, app.Redis, app.S3, app.HMACSecret, app.Config.S3PresignTTLSecs, app.Config.AdminEmail, app.Config.PublicURL, secureCookies, stripeConfig)
 
