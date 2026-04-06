@@ -8,6 +8,7 @@
 	} from '$lib/components/ui/dialog/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { generateEnrollmentQr } from '$lib/signaling.js';
+	import QRCode from 'qrcode';
 
 	let {
 		open = $bindable(false),
@@ -19,6 +20,7 @@
 	let wifiPassword = $state('');
 	let ttlHours = $state(24);
 	let qrSvg = $state('');
+	let provisionToken = $state('');
 	let loading = $state(false);
 	let error = $state('');
 
@@ -26,6 +28,7 @@
 	$effect(() => {
 		if (!open) {
 			qrSvg = '';
+			provisionToken = '';
 			error = '';
 			wifiSsid = '';
 			wifiPassword = '';
@@ -37,11 +40,13 @@
 		loading = true;
 		error = '';
 		try {
-			qrSvg = await generateEnrollmentQr({
+			const resp = await generateEnrollmentQr({
 				wifi_ssid: wifiSsid || undefined,
 				wifi_password: wifiPassword || undefined,
 				ttl_hours: ttlHours,
 			});
+			provisionToken = resp.token;
+			qrSvg = await QRCode.toString(resp.payload, { type: 'svg', margin: 1 });
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to generate QR code';
 		} finally {
@@ -117,14 +122,16 @@
 
 					<div class="text-center space-y-1">
 						<p class="text-sm text-muted-foreground">
-							Hold this QR code in front of any unclaimed camera.
+							Scan this QR code with a camera, or provision via CLI:
 						</p>
-						<p class="text-xs text-muted-foreground">
-							This QR code is reusable -- scan it on multiple cameras.
-							{#if wifiSsid}
+						<code class="block text-xs bg-muted px-2 py-1 rounded select-all break-all">
+							--provision-token {provisionToken}
+						</code>
+						{#if wifiSsid}
+							<p class="text-xs text-muted-foreground">
 								Includes WiFi credentials for <span class="font-medium">{wifiSsid}</span>.
-							{/if}
-						</p>
+							</p>
+						{/if}
 					</div>
 
 					<Button variant="outline" onclick={() => (qrSvg = '')} class="w-full">

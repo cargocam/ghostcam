@@ -6,6 +6,7 @@ export interface CameraInfo {
 	resolution: string;
 	recording_mode: string;
 	last_seen_at?: number;
+	provisioned?: boolean;
 }
 
 export interface GpsData {

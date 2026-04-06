@@ -10,7 +10,6 @@ import (
 	"github.com/cargocam/ghostcam/server/auth"
 	"github.com/cargocam/ghostcam/server/ctxutil"
 	"github.com/cargocam/ghostcam/server/db"
-	qrcode "github.com/skip2/go-qrcode"
 )
 
 type qrRequest struct {
@@ -19,7 +18,14 @@ type qrRequest struct {
 	TTLHours     uint64 `json:"ttl_hours,omitempty"`
 }
 
+type qrResponse struct {
+	Payload   string `json:"payload"`
+	Token     string `json:"token"`
+	ExpiresAt int64  `json:"expires_at"`
+}
+
 // EnrollmentQR handles GET/POST /api/v1/cameras/enroll/qr.
+// Returns JSON with the QR payload string for client-side QR rendering.
 func (h *Handlers) EnrollmentQR(w http.ResponseWriter, r *http.Request) {
 	userID := ctxutil.GetUserID(r)
 
@@ -66,16 +72,11 @@ func (h *Handlers) EnrollmentQR(w http.ResponseWriter, r *http.Request) {
 
 	payloadBytes, _ := json.Marshal(payload)
 
-	png, err := qrcode.Encode(string(payloadBytes), qrcode.Medium, 256)
-	if err != nil {
-		slog.Error("enrollment qr: generate QR failed", "error", err)
-		http.Error(w, "", http.StatusInternalServerError)
-		return
-	}
-
 	db.AuditLog("enrollment_started", "user_id", userID)
 
-	w.Header().Set("Content-Type", "image/png")
-	w.WriteHeader(http.StatusOK)
-	w.Write(png)
+	writeJSON(w, http.StatusOK, qrResponse{
+		Payload:   string(payloadBytes),
+		Token:     rawToken,
+		ExpiresAt: expiresAt,
+	})
 }

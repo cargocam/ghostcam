@@ -148,6 +148,17 @@ func uploadSegmentWithRetry(
 // storageCapped tracks whether the server has indicated storage is full.
 var storageCapped atomic.Bool
 
+// serverUnreachable is set after repeated presign failures so the capture
+// pipeline can pause instead of writing segments that will be evicted.
+var serverUnreachable atomic.Bool
+var presignFailCount atomic.Int32
+
+// IsServerUnreachable returns true when the upload loop has failed to reach
+// the server for multiple consecutive presign requests.
+func IsServerUnreachable() bool {
+	return serverUnreachable.Load()
+}
+
 // uploadSegment attempts to upload a single segment. Returns true on success,
 // false if the S3 upload failed and the segment should be retried.
 func uploadSegment(
@@ -190,6 +201,11 @@ func uploadSegment(
 	// Upload to S3
 	if err := client.UploadFile(ctx, presigned.PutURL, data); err != nil {
 		slog.Warn("S3 upload failed", "segment_id", seg.Filename, "err", err)
+		// On 4xx (expired/invalid URL), discard all cached URLs so the next
+		// attempt gets fresh presigned URLs. Don't burn a retry.
+		if s3Err, ok := err.(*S3UploadError); ok && s3Err.IsClientError() {
+			*availableURLs = nil
+		}
 		return false
 	}
 
@@ -227,7 +243,17 @@ func replenishURLs(
 	if err != nil {
 		// Put confirmations back so they aren't lost (on-disk copy is still intact)
 		*confirmations = pending
+		if n := presignFailCount.Add(1); n >= 3 {
+			serverUnreachable.Store(true)
+		}
 		return err
+	}
+
+	// Server reachable — reset failure tracking
+	presignFailCount.Store(0)
+	if serverUnreachable.Load() {
+		slog.Info("server reachable again, resuming capture")
+		serverUnreachable.Store(false)
 	}
 
 	// Server accepted the confirmations; clear the on-disk queue.

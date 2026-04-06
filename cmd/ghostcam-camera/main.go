@@ -48,7 +48,7 @@ func main() {
 	creds := camera.LoadCredentials(cfg.DataDir)
 	if creds == nil {
 		slog.Info("no credentials found, entering provisioning mode")
-		creds, err = camera.RunProvisioning(ctx, cfg.DataDir, deviceSerial)
+		creds, err = camera.RunProvisioning(ctx, cfg, deviceSerial)
 		if err != nil {
 			slog.Error("provisioning failed", "err", err)
 			os.Exit(1)
@@ -88,31 +88,51 @@ func main() {
 		defer wg.Done()
 		backoff := time.Second
 		const maxBackoff = 30 * time.Second
-		const healthyThreshold = 30 * time.Second
+		const stableDuration = 5 * time.Minute
+		const maxCrashesBeforeEscalation = 5
+
+		crashCount := 0
 
 		for {
+			// Wait if server is unreachable — no point capturing segments
+			// that will be evicted before they can upload.
+			for camera.IsServerUnreachable() {
+				slog.Debug("capture paused, server unreachable")
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(10 * time.Second):
+				}
+			}
+
 			start := time.Now()
 			err := camera.StartCapturePipeline(ctx, cfg)
 			if ctx.Err() != nil {
-				return // context cancelled, shutting down
+				return
 			}
 			if err != nil {
 				slog.Error("capture pipeline failed", "err", err)
 			}
 
-			// Reset backoff if the pipeline ran long enough to be considered healthy
-			if time.Since(start) > healthyThreshold {
+			// Only reset after sustained healthy operation (5 min)
+			if time.Since(start) > stableDuration {
 				backoff = time.Second
+				crashCount = 0
+			} else {
+				crashCount++
+				if crashCount >= maxCrashesBeforeEscalation {
+					slog.Error("capture pipeline unstable",
+						"crashes", crashCount, "backoff", maxBackoff)
+				}
 			}
 
-			slog.Info("restarting capture pipeline", "backoff", backoff)
+			slog.Info("restarting capture pipeline", "backoff", backoff, "crashes", crashCount)
 			select {
 			case <-ctx.Done():
 				return
 			case <-time.After(backoff):
 			}
 
-			// Exponential backoff
 			backoff *= 2
 			if backoff > maxBackoff {
 				backoff = maxBackoff
@@ -124,7 +144,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		camera.RunSegmentWatcher(ctx, cfg.SegmentDir, cfg.LocalStorageCapBytes, segments)
+		camera.RunSegmentWatcher(ctx, cfg.SegmentDir, cfg.DataDir, cfg.LocalStorageCapBytes, segments)
 	}()
 
 	// Start upload loop
@@ -211,8 +231,9 @@ func handleCommand(ctx context.Context, cmd api.CameraCommand, dataDir string) {
 		slog.Info("reboot command received")
 		os.Exit(0)
 	case "unregister":
-		slog.Info("unregister command received")
-		// TODO: clear credentials and re-enter provisioning
+		slog.Info("unregister command received, clearing credentials")
+		camera.ClearCredentials(dataDir)
+		os.Exit(0) // systemd restarts → re-enters provisioning mode
 	case "set_recording_mode":
 		slog.Info("recording mode change requested", "mode", cmd.Mode)
 		if err := camera.WriteStoredFile(dataDir, "recording_mode", cmd.Mode); err != nil {

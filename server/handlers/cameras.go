@@ -20,6 +20,7 @@ type cameraResponse struct {
 	DisplayName   string  `json:"display_name"`
 	EnrolledAt    uint64  `json:"enrolled_at"`
 	LastSeenAt    *int64  `json:"last_seen_at,omitempty"`
+	Provisioned   bool    `json:"provisioned"`
 	Notes         *string `json:"notes,omitempty"`
 	Resolution    string  `json:"resolution"`
 	RecordingMode string  `json:"recording_mode"`
@@ -48,6 +49,7 @@ func (h *Handlers) ListCameras(w http.ResponseWriter, r *http.Request) {
 			DisplayName:   c.DisplayName,
 			EnrolledAt:    uint64(c.EnrolledAt),
 			LastSeenAt:    c.LastSeenAt,
+			Provisioned:   c.LastSeenAt != nil,
 			Notes:         c.Notes,
 			Resolution:    c.Resolution,
 			RecordingMode: c.RecordingMode,
@@ -122,6 +124,7 @@ func (h *Handlers) GetCamera(w http.ResponseWriter, r *http.Request) {
 		DisplayName:   camera.DisplayName,
 		EnrolledAt:    uint64(camera.EnrolledAt),
 		LastSeenAt:    camera.LastSeenAt,
+		Provisioned:   camera.LastSeenAt != nil,
 		Notes:         camera.Notes,
 		Resolution:    camera.Resolution,
 		RecordingMode: camera.RecordingMode,

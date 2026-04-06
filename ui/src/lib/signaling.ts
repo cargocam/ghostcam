@@ -136,11 +136,16 @@ export interface EnrollQrRequest {
 	ttl_hours?: number;
 }
 
+export interface EnrollQrResponse {
+	payload: string;
+	token: string;
+	expires_at: number;
+}
+
 /**
- * Generate a QR code SVG for camera enrollment.
- * Returns the raw SVG string.
+ * Create a provision token and return the QR payload for client-side rendering.
  */
-export async function generateEnrollmentQr(opts?: EnrollQrRequest): Promise<string> {
+export async function generateEnrollmentQr(opts?: EnrollQrRequest): Promise<EnrollQrResponse> {
 	const body = opts ? JSON.stringify(opts) : '{}';
 	const res = await fetch(`${API_BASE}/cameras/enroll/qr`, {
 		method: 'POST',
@@ -152,7 +157,7 @@ export async function generateEnrollmentQr(opts?: EnrollQrRequest): Promise<stri
 		const text = await res.text();
 		throw new Error(`generateEnrollmentQr failed: ${res.status} ${text}`);
 	}
-	return res.text();
+	return res.json();
 }
 
 // --- Telemetry ---

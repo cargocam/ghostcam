@@ -1,6 +1,8 @@
 package handlers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -39,12 +41,16 @@ func (h *Handlers) FirmwareLatest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"release": map[string]any{
-			"version":      version,
-			"download_url": downloadURL,
-		},
-	})
+	sha256hex, _ := h.Redis.RDB().Get(ctx, "firmware:latest:sha256").Result()
+
+	release := map[string]any{
+		"version":      version,
+		"download_url": downloadURL,
+	}
+	if sha256hex != "" {
+		release["sha256"] = sha256hex
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"release": release})
 }
 
 // FirmwareUpload handles POST /api/v1/admin/firmware (admin only).
@@ -90,8 +96,15 @@ func (h *Handlers) FirmwareUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set latest version in Redis
-	if err := h.Redis.RDB().Set(ctx, "firmware:latest:version", version, 0).Err(); err != nil {
+	// Compute SHA256 for integrity verification on camera side
+	hash := sha256.Sum256(data)
+	sha256hex := hex.EncodeToString(hash[:])
+
+	// Set latest version + hash in Redis
+	pipe := h.Redis.RDB().Pipeline()
+	pipe.Set(ctx, "firmware:latest:version", version, 0)
+	pipe.Set(ctx, "firmware:latest:sha256", sha256hex, 0)
+	if _, err := pipe.Exec(ctx); err != nil {
 		slog.Error("firmware: failed to set latest version in Redis", "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
 		return
@@ -102,13 +115,15 @@ func (h *Handlers) FirmwareUpload(w http.ResponseWriter, r *http.Request) {
 		"version":    version,
 		"s3_key":     key,
 		"size_bytes": len(data),
+		"sha256":     sha256hex,
 	})
 	h.Redis.RDB().Set(ctx, "firmware:latest:meta", meta, 0)
 
-	slog.Info("firmware published", "version", version, "size_bytes", len(data))
+	slog.Info("firmware published", "version", version, "size_bytes", len(data), "sha256", sha256hex)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":    version,
 		"size_bytes": len(data),
+		"sha256":     sha256hex,
 	})
 }
 

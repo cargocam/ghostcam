@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/cargocam/ghostcam/server/ctxutil"
@@ -53,7 +52,7 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 
 	rdb := h.Redis.RDB()
 
-	// Build stream keys
+	// Build stream keys for telemetry
 	streamKeys := make([]string, 0, len(cameras))
 	keyToDevice := make(map[string]string, len(cameras))
 	for _, c := range cameras {
@@ -70,15 +69,10 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Build device ID set for filtering motion events
-	deviceIDs := make(map[string]bool, len(cameras))
-	for _, c := range cameras {
-		deviceIDs[c.DeviceID] = true
-	}
-
-	// Subscribe to motion_detected pub/sub
-	motionCh := make(chan string, 32)
-	pubsub := rdb.Subscribe(ctx, "motion_detected", "storage_capped")
+	// Subscribe to per-user motion + storage_capped channels.
+	// Events are already filtered to this user by the publisher.
+	eventCh := make(chan string, 32)
+	pubsub := rdb.Subscribe(ctx, fmt.Sprintf("motion:%s", userID), fmt.Sprintf("storage_capped:%s", userID))
 	go func() {
 		defer pubsub.Close()
 		ch := pubsub.Channel()
@@ -91,7 +85,7 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 					return
 				}
 				select {
-				case motionCh <- msg.Channel + "|" + msg.Payload:
+				case eventCh <- msg.Channel + "|" + msg.Payload:
 				default:
 				}
 			}
@@ -108,28 +102,22 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 		case <-keepAliveTicker.C:
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flusher.Flush()
-		case raw := <-motionCh:
+		case raw := <-eventCh:
 			parts := splitOnce(raw, "|")
 			channel, payload := parts[0], parts[1]
-			switch channel {
-			case "motion_detected":
-				// Filter to only this user's cameras
-				var motionData struct {
-					DeviceID string `json:"device_id"`
+			// Per-user channels — no filtering needed, forward directly
+			var eventType string
+			if len(channel) > 0 {
+				// channel is "motion:<userID>" or "storage_capped:<userID>"
+				if channel[0] == 'm' {
+					eventType = "motion_detected"
+				} else {
+					eventType = "storage_capped"
 				}
-				if json.Unmarshal([]byte(payload), &motionData) == nil && deviceIDs[motionData.DeviceID] {
-					fmt.Fprintf(w, "event: motion_detected\ndata: %s\n\n", payload)
-					flusher.Flush()
-				}
-			case "storage_capped":
-				// Storage capped events carry user_id — match current user
-				var capData struct {
-					UserID string `json:"user_id"`
-				}
-				if json.Unmarshal([]byte(payload), &capData) == nil && capData.UserID == userID {
-					fmt.Fprintf(w, "event: storage_capped\ndata: %s\n\n", payload)
-					flusher.Flush()
-				}
+			}
+			if eventType != "" {
+				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, payload)
+				flusher.Flush()
 			}
 		default:
 		}
@@ -191,11 +179,12 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 }
 
 func splitOnce(s, sep string) [2]string {
-	i := strings.Index(s, sep)
-	if i < 0 {
-		return [2]string{s, ""}
+	for i := 0; i < len(s); i++ {
+		if s[i] == sep[0] {
+			return [2]string{s[:i], s[i+1:]}
+		}
 	}
-	return [2]string{s[:i], s[i+len(sep):]}
+	return [2]string{s, ""}
 }
 
 func (h *Handlers) sseKeepAlive(ctx context.Context, w http.ResponseWriter, flusher http.Flusher) {

@@ -4,6 +4,7 @@
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import CameraCard from '$lib/components/camera/CameraCard.svelte';
 	import { cn } from '$lib/utils.js';
+	import { Camera } from 'lucide-svelte';
 
 	let gridLayout = $derived(settingsStore.gridLayout);
 
@@ -28,19 +29,23 @@
 </script>
 
 <div class="h-full overflow-y-auto p-2">
-	<div class={cn("grid gap-3", gridClass)}>
-		{#each sortedCameras as camera, i (camera.device_id)}
-			<CameraCard
-				deviceId={camera.device_id}
-				name={cameraConfigStore.getDisplayName(camera.device_id, camera.device_name)}
-				featured={gridLayout === '1+5' && i === 0}
-			/>
-		{/each}
-
-		{#if cameras.length === 0}
-			<div class="col-span-full flex items-center justify-center text-muted-foreground text-sm py-20">
-				No cameras connected. Waiting for feeds...
+	{#if cameras.length === 0}
+		<div class="flex flex-col items-center justify-center gap-4 text-muted-foreground py-32">
+			<Camera class="h-12 w-12 opacity-40" />
+			<div class="text-center space-y-1">
+				<p class="text-lg font-semibold">No cameras yet</p>
+				<p class="text-sm">Click <span class="font-bold">+</span> in the sidebar to add your first camera</p>
 			</div>
-		{/if}
-	</div>
+		</div>
+	{:else}
+		<div class={cn("grid gap-3", gridClass)}>
+			{#each sortedCameras as camera, i (camera.device_id)}
+				<CameraCard
+					deviceId={camera.device_id}
+					name={cameraConfigStore.getDisplayName(camera.device_id, camera.device_name)}
+					featured={gridLayout === '1+5' && i === 0}
+				/>
+			{/each}
+		</div>
+	{/if}
 </div>

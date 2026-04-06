@@ -59,20 +59,38 @@ func (md *motionDetector) detect(sizeBytes uint64) bool {
 // RunSegmentWatcher polls segmentDir every 2 seconds for new .ts files and
 // sends them to the segments channel. It skips 0-byte files and files modified
 // less than 2 seconds ago (still being written by ffmpeg).
-func RunSegmentWatcher(ctx context.Context, segmentDir string, localStorageCap uint64, segments chan<- NewSegment) {
+//
+// On startup, only segments tracked in pending_confirms.json are marked as known
+// (they've already been uploaded to S3). Any other existing .ts files are treated
+// as new — they'll be re-queued for upload, recovering from crashes.
+func RunSegmentWatcher(ctx context.Context, segmentDir, dataDir string, localStorageCap uint64, segments chan<- NewSegment) {
 	known := make(map[string]struct{})
 	md := newMotionDetector()
 
-	// Seed known files so we don't re-upload old segments on restart
+	// Seed known from pending confirms — these segments are already uploaded to
+	// S3 and waiting for server-side confirmation. All other on-disk .ts files
+	// are orphans that should be re-uploaded.
+	if confirms := loadPendingConfirms(dataDir); len(confirms) > 0 {
+		for _, c := range confirms {
+			known[c.SegmentID+".ts"] = struct{}{}
+		}
+		slog.Info("segment watcher: seeded known from pending confirms", "count", len(confirms))
+	}
+
 	entries, err := os.ReadDir(segmentDir)
+	orphaned := 0
 	if err == nil {
 		for _, e := range entries {
 			if filepath.Ext(e.Name()) == ".ts" {
-				known[e.Name()] = struct{}{}
+				if _, ok := known[e.Name()]; !ok {
+					orphaned++
+				}
 			}
 		}
 	}
-	slog.Info("segment watcher started, ignoring existing files", "existing", len(known))
+	if orphaned > 0 {
+		slog.Info("segment watcher: found orphaned segments to re-upload", "count", orphaned)
+	}
 
 	ticker := time.NewTicker(2 * time.Second)
 	defer ticker.Stop()
@@ -182,6 +200,12 @@ func scanSegments(dir string, known map[string]struct{}, md *motionDetector, out
 			continue // still being written
 		}
 
+		// Validate MPEG-TS sync byte to skip corrupt/partial files
+		if !isValidTS(filepath.Join(dir, name)) {
+			slog.Warn("skipping corrupt/partial segment", "file", name)
+			continue
+		}
+
 		newFiles = append(newFiles, candidate{
 			name:    name,
 			path:    filepath.Join(dir, name),
@@ -220,4 +244,18 @@ func scanSegments(dir string, known map[string]struct{}, md *motionDetector, out
 			slog.Warn("segment channel full after 5s timeout, dropping segment", "file", f.name)
 		}
 	}
+}
+
+// isValidTS checks whether the file starts with an MPEG-TS sync byte (0x47).
+func isValidTS(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	var buf [1]byte
+	if _, err := f.Read(buf[:]); err != nil {
+		return false
+	}
+	return buf[0] == 0x47
 }

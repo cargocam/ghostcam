@@ -8,29 +8,14 @@ import (
 	"strings"
 )
 
-// RunProvisioning checks for a pre-provisioned token file, calls Provision,
-// saves credentials, and returns them. Returns nil credentials if provisioning
-// fails or no token is available.
-func RunProvisioning(ctx context.Context, dataDir, deviceSerial string) (*Credentials, error) {
-	tokenPath := filepath.Join(dataDir, "provision_token")
-	serverURLPath := filepath.Join(dataDir, "server_url")
-
-	tokenData, err := os.ReadFile(tokenPath)
-	if err != nil {
-		slog.Info("no provision_token file found, waiting for provisioning")
-		return nil, nil
-	}
-	serverURLData, err := os.ReadFile(serverURLPath)
-	if err != nil {
-		slog.Info("no server_url file found, waiting for provisioning")
-		return nil, nil
-	}
-
-	token := strings.TrimSpace(string(tokenData))
-	serverURL := strings.TrimSpace(string(serverURLData))
-
+// RunProvisioning provisions the camera via a one-time token. Token and server
+// URL are resolved in order: CLI/env (cfg.ProvisionToken, cfg.ServerURL) →
+// flat files ({dataDir}/provision_token, {dataDir}/server_url).
+// Returns nil credentials if no token is available.
+func RunProvisioning(ctx context.Context, cfg *CameraConfig, deviceSerial string) (*Credentials, error) {
+	token, serverURL := resolveProvisionInputs(cfg)
 	if token == "" || serverURL == "" {
-		slog.Info("provision_token or server_url empty")
+		slog.Info("no provision token available, waiting for provisioning")
 		return nil, nil
 	}
 
@@ -39,7 +24,7 @@ func RunProvisioning(ctx context.Context, dataDir, deviceSerial string) (*Creden
 		serverURL = "https://" + serverURL
 	}
 
-	slog.Info("found pre-provisioned token, attempting provisioning", "server", serverURL)
+	slog.Info("attempting provisioning", "server", serverURL)
 
 	resp, err := Provision(ctx, serverURL, token, deviceSerial)
 	if err != nil {
@@ -53,13 +38,28 @@ func RunProvisioning(ctx context.Context, dataDir, deviceSerial string) (*Creden
 		ServerURL: serverURL,
 	}
 
-	if err := SaveCredentials(dataDir, creds); err != nil {
+	if err := SaveCredentials(cfg.DataDir, creds); err != nil {
 		return nil, err
 	}
 
-	// Remove the one-time token file
-	_ = os.Remove(tokenPath)
+	// Remove the one-time token file (if it exists)
+	_ = os.Remove(filepath.Join(cfg.DataDir, "provision_token"))
 
 	slog.Info("provisioning complete", "device_id", creds.DeviceID)
 	return creds, nil
+}
+
+// resolveProvisionInputs returns (token, serverURL) from CLI/env first, then flat files.
+func resolveProvisionInputs(cfg *CameraConfig) (string, string) {
+	if cfg.ProvisionToken != "" && cfg.ServerURL != "" {
+		return cfg.ProvisionToken, cfg.ServerURL
+	}
+
+	token := readTrimmedFile(filepath.Join(cfg.DataDir, "provision_token"))
+	serverURL := readTrimmedFile(filepath.Join(cfg.DataDir, "server_url"))
+	if token != "" && serverURL != "" {
+		return token, serverURL
+	}
+
+	return "", ""
 }

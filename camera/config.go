@@ -14,6 +14,7 @@ import (
 // CameraConfig is the fully resolved camera configuration.
 type CameraConfig struct {
 	ServerURL             string
+	ProvisionToken        string // one-time token for headless provisioning
 	TestSource            bool
 	SegmentDir            string
 	DataDir               string
@@ -48,8 +49,9 @@ type cameraConfigFile struct {
 func LoadConfig() (*CameraConfig, error) {
 	var (
 		configPath = flag.String("config", "", "path to TOML config file")
-		serverURL  = flag.String("server-url", "", "server HTTPS URL")
-		testSource = flag.Bool("test-source", false, "use ffmpeg test source instead of real capture")
+		serverURL      = flag.String("server-url", "", "server HTTPS URL")
+		provisionToken = flag.String("provision-token", "", "one-time token for headless provisioning")
+		testSource     = flag.Bool("test-source", false, "use ffmpeg test source instead of real capture")
 		segmentDir = flag.String("segment-dir", "", "directory for segment ring buffer")
 		dataDir    = flag.String("data-dir", "", "data directory")
 		noGPS      = flag.Bool("no-gps", false, "disable GPS")
@@ -74,6 +76,12 @@ func LoadConfig() (*CameraConfig, error) {
 		envOpt("GHOSTCAM_SERVER_URL"),
 		ptrStr(file.ServerURL),
 		readStoredServerURL(resolvedDataDir),
+		"",
+	)
+
+	resolvedProvisionToken := coalesceStr(
+		*provisionToken,
+		envOpt("GHOSTCAM_PROVISION_TOKEN"),
 		"",
 	)
 
@@ -149,6 +157,7 @@ func LoadConfig() (*CameraConfig, error) {
 
 	cfg := &CameraConfig{
 		ServerURL:             resolvedServerURL,
+		ProvisionToken:        resolvedProvisionToken,
 		TestSource:            resolvedTestSource,
 		SegmentDir:            resolvedSegmentDir,
 		DataDir:               resolvedDataDir,

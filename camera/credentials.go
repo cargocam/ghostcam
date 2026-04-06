@@ -46,6 +46,14 @@ func SaveCredentials(dataDir string, creds *Credentials) error {
 	return nil
 }
 
+// ClearCredentials removes api_key, device_id, and server_url from dataDir.
+// The camera will re-enter provisioning mode on next startup.
+func ClearCredentials(dataDir string) {
+	for _, name := range []string{"api_key", "device_id", "server_url"} {
+		_ = os.Remove(filepath.Join(dataDir, name))
+	}
+}
+
 func readTrimmedFile(path string) string {
 	data, err := os.ReadFile(path)
 	if err != nil {

@@ -79,6 +79,20 @@ func (c *Client) RequestPresignedURLs(ctx context.Context, count uint32, uploade
 	return &resp, nil
 }
 
+// S3UploadError is returned by UploadFile when S3 returns a non-2xx status.
+type S3UploadError struct {
+	StatusCode int
+}
+
+func (e *S3UploadError) Error() string {
+	return fmt.Sprintf("S3 PUT returned %d", e.StatusCode)
+}
+
+// IsClientError returns true for 4xx errors (expired URL, auth failure, etc.).
+func (e *S3UploadError) IsClientError() bool {
+	return e.StatusCode/100 == 4
+}
+
 // UploadFile uploads segment data to a presigned S3 PUT URL.
 func (c *Client) UploadFile(ctx context.Context, presignedURL string, data []byte) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, presignedURL, bytes.NewReader(data))
@@ -95,7 +109,7 @@ func (c *Client) UploadFile(ctx context.Context, presignedURL string, data []byt
 	io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode/100 != 2 {
-		return fmt.Errorf("S3 PUT returned %d", resp.StatusCode)
+		return &S3UploadError{StatusCode: resp.StatusCode}
 	}
 	return nil
 }

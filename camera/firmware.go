@@ -2,6 +2,8 @@ package camera
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -15,6 +17,7 @@ import (
 type firmwareRelease struct {
 	Version     string `json:"version"`
 	DownloadURL string `json:"download_url"`
+	SHA256      string `json:"sha256"`
 }
 
 type firmwareResponse struct {
@@ -57,6 +60,23 @@ func CheckFirmwareUpdate(ctx context.Context, client *Client, dataDir string) bo
 		return false
 	}
 
+	// Verify SHA256 if server provided a hash (backward-compat: skip if empty)
+	if resp.Release.SHA256 != "" {
+		actual, err := fileHash(stagedPath)
+		if err != nil {
+			slog.Error("firmware hash computation failed", "error", err)
+			os.Remove(stagedPath)
+			return false
+		}
+		if actual != resp.Release.SHA256 {
+			slog.Error("firmware hash mismatch, discarding",
+				"expected", resp.Release.SHA256, "actual", actual)
+			os.Remove(stagedPath)
+			return false
+		}
+		slog.Info("firmware hash verified", "sha256", actual)
+	}
+
 	slog.Info("firmware staged, restarting for install", "new_version", resp.Release.Version, "staged", stagedPath)
 	return true
 }
@@ -86,6 +106,19 @@ func (c *Client) getFirmwareLatest(ctx context.Context) (*firmwareResponse, erro
 		return nil, fmt.Errorf("decoding firmware response: %w", err)
 	}
 	return &result, nil
+}
+
+func fileHash(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 func downloadToFile(ctx context.Context, url, destPath string) error {

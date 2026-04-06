@@ -149,6 +149,19 @@ func run() error {
 							}
 						}
 					}
+					// Decrement cached storage counters per user
+					if redisClient != nil {
+						byDevice := make(map[string]int64)
+						for _, seg := range deleted {
+							byDevice[seg.DeviceID] += int64(seg.SizeBytes)
+						}
+						for devID, bytes := range byDevice {
+							cam, _ := database.GetCamera(ctx, devID)
+							if cam != nil && cam.UserID != nil {
+								redisClient.RDB().DecrBy(ctx, "storage_bytes:"+*cam.UserID, bytes)
+							}
+						}
+					}
 					totalDeleted += len(deleted)
 					if len(deleted) < 100 {
 						break
