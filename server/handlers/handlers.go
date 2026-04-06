@@ -10,9 +10,26 @@ import (
 	"github.com/cargocam/ghostcam/server/s3"
 )
 
-// defaultTierID is the tier assigned to users without a subscription record.
-// Billing is always on; users without a subscription are on the free tier.
+// defaultTierID is the tier assigned to users without a paid Stripe subscription.
 const defaultTierID = "free"
+
+// effectiveTier returns the user's billing tier. Paid tiers require an active
+// Stripe subscription — a tier column alone is not enough. When Stripe is not
+// configured (dev/local), returns "enterprise" (unlimited) so testing works
+// without payment infrastructure.
+func effectiveTier(sub *db.SubscriptionRecord, stripeConfigured bool) string {
+	if !stripeConfigured {
+		return "enterprise" // dev mode: unlimited
+	}
+	if sub == nil {
+		return defaultTierID
+	}
+	// Paid tiers require an active Stripe subscription
+	if sub.Tier != defaultTierID && (sub.StripeSubscriptionID == nil || sub.Status != "active") {
+		return defaultTierID
+	}
+	return sub.Tier
+}
 
 // StripeConfig holds Stripe-specific configuration. All fields are empty when
 // billing is disabled (STRIPE_SECRET_KEY not set).

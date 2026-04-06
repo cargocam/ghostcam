@@ -19,11 +19,8 @@ import (
 // GetSubscription handles GET /api/v1/billing/subscription.
 func (h *Handlers) GetSubscription(w http.ResponseWriter, r *http.Request) {
 	userID := ctxutil.GetUserID(r)
-	tierID := defaultTierID
 	sub, _ := h.DB.GetSubscription(r.Context(), userID)
-	if sub != nil {
-		tierID = sub.Tier
-	}
+	tierID := effectiveTier(sub, h.Stripe.SecretKey != "")
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"billing_enabled": h.Stripe.SecretKey != "",
@@ -171,12 +168,8 @@ func (h *Handlers) GetUsage(w http.ResponseWriter, r *http.Request) {
 		cameraCount = 0
 	}
 
-	tierID := defaultTierID
 	sub, _ := h.DB.GetSubscription(ctx, userID)
-	if sub != nil {
-		tierID = sub.Tier
-	}
-	tier := billing.GetTier(tierID)
+	tier := billing.GetTier(effectiveTier(sub, h.Stripe.SecretKey != ""))
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cameras_count":    cameraCount,

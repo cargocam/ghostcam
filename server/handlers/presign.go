@@ -96,12 +96,8 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 3. Check storage limits
-	tierID := defaultTierID
 	sub, _ := h.DB.GetSubscription(ctx, userID)
-	if sub != nil {
-		tierID = sub.Tier
-	}
-	tier := billing.GetTier(tierID)
+	tier := billing.GetTier(effectiveTier(sub, h.Stripe.SecretKey != ""))
 
 	storageLimitBytes := tier.StorageLimitBytes()
 	if storageLimitBytes > 0 {

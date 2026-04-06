@@ -155,13 +155,11 @@ func (db *PostgresDB) Initialize(ctx context.Context, presetPassword, adminEmail
 		if err != nil {
 			return "", fmt.Errorf("creating admin user: %w", err)
 		}
-		// Auto-create subscription for admin.
-		// If password was preset (dev mode), use "pro" tier for easier testing.
-		adminTier := "free"
-		if presetPassword != "" {
-			adminTier = "pro"
-		}
-		if err := db.CreateSubscription(ctx, userID, adminTier, "active"); err != nil {
+		// Auto-create subscription for admin on the free tier.
+		// Paid tiers require an active Stripe subscription. In dev mode
+		// (Stripe not configured), effectiveTier() returns "enterprise"
+		// so tier limits are not enforced regardless of this value.
+		if err := db.CreateSubscription(ctx, userID, "free", "active"); err != nil {
 			slog.Warn("failed to create admin subscription", "error", err)
 		}
 		initialPassword = password

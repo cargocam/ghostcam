@@ -64,12 +64,8 @@ func (h *Handlers) Enroll(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	// Enforce camera limit based on tier
-	tierID := defaultTierID
 	sub, _ := h.DB.GetSubscription(ctx, userID)
-	if sub != nil {
-		tierID = sub.Tier
-	}
-	tier := billing.GetTier(tierID)
+	tier := billing.GetTier(effectiveTier(sub, h.Stripe.SecretKey != ""))
 	if tier.CameraLimit != nil {
 		count, err := h.DB.GetCameraCount(ctx, userID)
 		if err != nil {
