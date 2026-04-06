@@ -4,6 +4,7 @@ import { cameraStore } from '$lib/stores/cameras.svelte.js';
 import { groupStore } from '$lib/stores/groups.svelte.js';
 import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 import { alertsStore } from '$lib/stores/alerts.svelte.js';
+import { settingsStore } from '$lib/stores/settings.svelte.js';
 
 class TransportStore {
 	authenticated = $state(false);
@@ -93,6 +94,7 @@ class TransportStore {
 		es.addEventListener('motion_detected', (e: MessageEvent) => {
 			try {
 				const data = JSON.parse(e.data) as { device_id: string; segment_id: string; start_ts: number; end_ts: number };
+				if (settingsStore.isMotionAlertsMuted(data.device_id)) return;
 				const cam = cameraStore.getCamera(data.device_id);
 				const name = cam?.device_name ?? data.device_id;
 				alertsStore.addAlert('motion', data.device_id, name, 'Motion detected');

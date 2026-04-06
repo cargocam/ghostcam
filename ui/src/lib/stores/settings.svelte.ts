@@ -12,6 +12,8 @@ class SettingsStore {
 	globalMuted = $state(true);
 	/** Only one camera unmuted at a time (standard VMS pattern) */
 	unmutedCameraId = $state<string | null>(null);
+	/** Per-camera motion alert suppression (device IDs with alerts disabled) */
+	motionAlertsMuted = $state<Set<string>>(new Set());
 
 	constructor() {
 		if (typeof window !== 'undefined') {
@@ -26,6 +28,12 @@ class SettingsStore {
 			const savedMuted = localStorage.getItem('ghostcam-muted');
 			if (savedMuted === 'false') {
 				this.globalMuted = false;
+			}
+			const savedMotionMuted = localStorage.getItem('ghostcam-motion-alerts-muted');
+			if (savedMotionMuted) {
+				try {
+					this.motionAlertsMuted = new Set(JSON.parse(savedMotionMuted));
+				} catch { /* ignore */ }
 			}
 		}
 	}
@@ -102,6 +110,23 @@ class SettingsStore {
 
 	isCameraMuted(deviceId: string): boolean {
 		return this.globalMuted || this.unmutedCameraId !== deviceId;
+	}
+
+	isMotionAlertsMuted(deviceId: string): boolean {
+		return this.motionAlertsMuted.has(deviceId);
+	}
+
+	setMotionAlertsMuted(deviceId: string, muted: boolean) {
+		if (muted) {
+			this.motionAlertsMuted.add(deviceId);
+		} else {
+			this.motionAlertsMuted.delete(deviceId);
+		}
+		// Trigger reactivity by reassigning
+		this.motionAlertsMuted = new Set(this.motionAlertsMuted);
+		if (typeof window !== 'undefined') {
+			localStorage.setItem('ghostcam-motion-alerts-muted', JSON.stringify([...this.motionAlertsMuted]));
+		}
 	}
 }
 

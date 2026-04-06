@@ -9,6 +9,7 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { updateCameraSettings } from '$lib/signaling.js';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
+	import { settingsStore } from '$lib/stores/settings.svelte.js';
 
 	let {
 		open = $bindable(false),
@@ -117,6 +118,17 @@
 						? 'Only uploads segments with detected motion. Saves storage.'
 						: 'Records and uploads all footage continuously.'}
 				</p>
+			</div>
+
+			<div class="flex items-center gap-2">
+				<input
+					id="motion-alerts"
+					type="checkbox"
+					checked={!settingsStore.isMotionAlertsMuted(deviceId)}
+					onchange={(e) => settingsStore.setMotionAlertsMuted(deviceId, !e.currentTarget.checked)}
+					class="h-4 w-4 rounded border-input"
+				/>
+				<label for="motion-alerts" class="text-sm font-medium">Motion alerts</label>
 			</div>
 
 			{#if error}
