@@ -46,7 +46,7 @@
 				ttl_hours: ttlHours,
 			});
 			provisionToken = resp.token;
-			qrSvg = await QRCode.toString(resp.payload, { type: 'svg', margin: 1 });
+			qrSvg = await QRCode.toString(resp.payload, { type: 'svg', margin: 1, width: 256 });
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to generate QR code';
 		} finally {
