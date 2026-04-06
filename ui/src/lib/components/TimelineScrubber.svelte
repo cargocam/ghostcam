@@ -6,7 +6,8 @@
 	let dragging = $state(false);
 
 	const MIN_WINDOW_SECS = 5 * 60;
-	const MARGIN_SECS = 30;
+	const LIVE_MARGIN_SECS = 5;
+	const SEEK_MARGIN_SECS = 30;
 
 	// Freeze the window edge when seeking so timeline doesn't shift
 	let frozenEnd = $state(Date.now() / 1000);
@@ -14,13 +15,14 @@
 		if (scrubberStore.isLive) frozenEnd = scrubberStore.playheadTime;
 	});
 
-	let windowEnd = $derived((scrubberStore.isLive ? scrubberStore.playheadTime : frozenEnd) + MARGIN_SECS);
+	let margin = $derived(scrubberStore.isLive ? LIVE_MARGIN_SECS : SEEK_MARGIN_SECS);
+	let windowEnd = $derived((scrubberStore.isLive ? scrubberStore.playheadTime : frozenEnd) + margin);
 	let windowStart = $derived.by(() => {
 		const avail = scrubberStore.availableWindow;
 		if (avail) {
 			const duration = windowEnd - avail.start;
 			if (duration < MIN_WINDOW_SECS) return windowEnd - MIN_WINDOW_SECS;
-			return avail.start - MARGIN_SECS;
+			return avail.start - margin;
 		}
 		return windowEnd - MIN_WINDOW_SECS;
 	});

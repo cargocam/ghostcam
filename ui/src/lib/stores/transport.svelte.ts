@@ -21,6 +21,7 @@ class TransportStore {
 	private sse: EventSource | null = null;
 	/** Periodically recompute online flags (cameras go offline when telemetry stops). */
 	private onlineRefreshInterval: ReturnType<typeof setInterval> | null = null;
+	private coverageRefreshInterval: ReturnType<typeof setInterval> | null = null;
 
 	async initialize() {
 		this.authenticated = await checkSession();
@@ -41,6 +42,13 @@ class TransportStore {
 			this.onlineRefreshInterval = setInterval(() => {
 				cameraStore.refreshOnlineStatus();
 			}, 5_000);
+
+			// Refresh coverage every 30s so timeline bars stay current
+			this.coverageRefreshInterval = setInterval(() => {
+				for (const cam of cameraStore.cameras) {
+					this.refreshCoverage(cam.device_id);
+				}
+			}, 30_000);
 
 			this.connected = true;
 			this.connectedAt = Date.now();
@@ -178,6 +186,10 @@ class TransportStore {
 			clearInterval(this.onlineRefreshInterval);
 			this.onlineRefreshInterval = null;
 		}
+		if (this.coverageRefreshInterval) {
+			clearInterval(this.coverageRefreshInterval);
+			this.coverageRefreshInterval = null;
+		}
 		cameraStore.clear();
 		groupStore.clear();
 	}
@@ -192,6 +204,10 @@ class TransportStore {
 		if (this.onlineRefreshInterval) {
 			clearInterval(this.onlineRefreshInterval);
 			this.onlineRefreshInterval = null;
+		}
+		if (this.coverageRefreshInterval) {
+			clearInterval(this.coverageRefreshInterval);
+			this.coverageRefreshInterval = null;
 		}
 	}
 }
