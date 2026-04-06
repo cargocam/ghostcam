@@ -284,6 +284,9 @@ camera/
   upload.go        RunUploadLoop: consumes segments from channel, uploads via presigned PUT URLs
                    Retry queue: 3 retries with exponential backoff (2s, 4s, 8s)
                    storageCapped: atomic.Bool — pauses uploads when server indicates storage full
+                   Pending confirmations persisted to {dataDir}/pending_confirms.json so a crash
+                   or restart between S3 PUT and the confirming presign request does not orphan
+                   uploaded S3 objects — loaded on startup, cleared after server accepts confirms
                    Graceful shutdown: flushes pending confirmations with 5s timeout
   client.go        HTTP client for server API (telemetry POST, presign, provision, S3 upload)
   credentials.go   LoadCredentials / SaveCredentials — flat files (api_key, device_id, server_url) with 0600 permissions
@@ -331,11 +334,14 @@ server/
                   handlers.go: defaultTierID = "free" (billing always on)
                   admin.go: FirmwareUpload (POST /api/v1/admin/firmware), FirmwareLatest (GET /api/v1/firmware/latest)
                   auth.go: Login (failed login logging with email + IP), Register (returns 403 — disabled)
+                  camera_telemetry.go: PostTelemetry — writes telemetry to Redis, updates cameras.last_seen_at
                   cameras.go: Enroll (camera limit 402), UpdateCamera (enqueues commands for resolution/recording_mode)
+                              ListCameras/GetCamera responses include last_seen_at (unix seconds, nullable)
                   hls.go: GetManifest (dynamic m3u8 with #EXT-X-INDEPENDENT-SEGMENTS), GetSegment (302 redirect to S3),
                           GetInit (302 redirect), GetCoverage (segment list with motion flags)
-                  presign.go: Storage limit check with Redis INCRBY atomic reservation,
-                              storage_capped event deduplication (5 min cooldown via Redis SETNX)
+                  presign.go: Confirms uploaded segments (created_at in unix milliseconds, matching
+                              retention's cutoffMs comparison), storage limit check with Redis INCRBY
+                              atomic reservation, storage_capped event deduplication (5 min cooldown via Redis SETNX)
                   sse.go: SSE via Redis XREAD + pub/sub, write deadline disabled for long-lived connections
                   qr.go: QR code generation using PublicURL (not r.Host)
                   provision.go: Camera provisioning with one-time token

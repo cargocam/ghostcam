@@ -2,22 +2,77 @@ package camera
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"sync/atomic"
 	"time"
 
 	"github.com/cargocam/ghostcam/api"
 )
 
-const maxUploadRetries = 3
+const (
+	maxUploadRetries = 3
+	pendingFile      = "pending_confirms.json"
+)
+
+// loadPendingConfirms reads any confirmations persisted from a previous run.
+// Returns nil on any error (missing file, corrupt, etc.) -- the worst case is
+// that the server never gets the confirm and the segment becomes an orphan,
+// which is exactly the state we'd be in without persistence.
+func loadPendingConfirms(dataDir string) []api.UploadedSegment {
+	if dataDir == "" {
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(dataDir, pendingFile))
+	if err != nil {
+		return nil
+	}
+	var out []api.UploadedSegment
+	if err := json.Unmarshal(data, &out); err != nil {
+		slog.Warn("corrupt pending_confirms.json, discarding", "err", err)
+		return nil
+	}
+	return out
+}
+
+// savePendingConfirms writes the confirm queue atomically (tmp + rename).
+// Called after any mutation so a crash between PUT and confirm doesn't orphan
+// uploaded S3 objects.
+func savePendingConfirms(dataDir string, confirms []api.UploadedSegment) {
+	if dataDir == "" {
+		return
+	}
+	path := filepath.Join(dataDir, pendingFile)
+	data, err := json.Marshal(confirms)
+	if err != nil {
+		slog.Warn("failed to marshal pending confirms", "err", err)
+		return
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		slog.Warn("failed to write pending confirms", "err", err)
+		return
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		slog.Warn("failed to rename pending confirms", "err", err)
+	}
+}
 
 // RunUploadLoop consumes segments from the channel, uploads them via presigned
 // URLs, confirms uploads with the server, and deletes local files.
 // On upload failure, segments are re-enqueued up to maxUploadRetries times.
-func RunUploadLoop(ctx context.Context, client *Client, segments <-chan NewSegment) {
+//
+// Pending confirmations are persisted to {dataDir}/pending_confirms.json so a
+// crash or restart between the S3 PUT and the confirming presign request does
+// not leave orphaned objects in the bucket.
+func RunUploadLoop(ctx context.Context, client *Client, dataDir string, segments <-chan NewSegment) {
 	var availableURLs []api.PresignedUrl
-	var confirmations []api.UploadedSegment
+	confirmations := loadPendingConfirms(dataDir)
+	if len(confirmations) > 0 {
+		slog.Info("resuming pending upload confirmations", "count", len(confirmations))
+	}
 
 	// retryQueue holds segments that failed to upload and need retry
 	var retryQueue []NewSegment
@@ -36,7 +91,7 @@ func RunUploadLoop(ctx context.Context, client *Client, segments <-chan NewSegme
 			case <-time.After(backoff):
 			}
 
-			if failed := uploadSegmentWithRetry(ctx, client, seg, &availableURLs, &confirmations); failed != nil {
+			if failed := uploadSegmentWithRetry(ctx, client, dataDir, seg, &availableURLs, &confirmations); failed != nil {
 				retryQueue = append(retryQueue, *failed)
 			}
 			continue
@@ -47,15 +102,18 @@ func RunUploadLoop(ctx context.Context, client *Client, segments <-chan NewSegme
 			// Flush pending confirmations on shutdown
 			if len(confirmations) > 0 {
 				flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				_, _ = client.RequestPresignedURLs(flushCtx, 0, confirmations)
+				_, err := client.RequestPresignedURLs(flushCtx, 0, confirmations)
 				flushCancel()
+				if err == nil {
+					savePendingConfirms(dataDir, nil)
+				}
 			}
 			return
 		case seg, ok := <-segments:
 			if !ok {
 				return
 			}
-			if failed := uploadSegmentWithRetry(ctx, client, seg, &availableURLs, &confirmations); failed != nil {
+			if failed := uploadSegmentWithRetry(ctx, client, dataDir, seg, &availableURLs, &confirmations); failed != nil {
 				retryQueue = append(retryQueue, *failed)
 			}
 		}
@@ -67,11 +125,12 @@ func RunUploadLoop(ctx context.Context, client *Client, segments <-chan NewSegme
 func uploadSegmentWithRetry(
 	ctx context.Context,
 	client *Client,
+	dataDir string,
 	seg NewSegment,
 	availableURLs *[]api.PresignedUrl,
 	confirmations *[]api.UploadedSegment,
 ) *NewSegment {
-	ok := uploadSegment(ctx, client, seg, availableURLs, confirmations)
+	ok := uploadSegment(ctx, client, dataDir, seg, availableURLs, confirmations)
 	if ok {
 		return nil
 	}
@@ -94,13 +153,14 @@ var storageCapped atomic.Bool
 func uploadSegment(
 	ctx context.Context,
 	client *Client,
+	dataDir string,
 	seg NewSegment,
 	availableURLs *[]api.PresignedUrl,
 	confirmations *[]api.UploadedSegment,
 ) bool {
 	// Get a presigned URL (request more if we're out)
 	if len(*availableURLs) == 0 {
-		if err := replenishURLs(ctx, client, availableURLs, confirmations); err != nil {
+		if err := replenishURLs(ctx, client, dataDir, availableURLs, confirmations); err != nil {
 			slog.Warn("failed to get presigned URLs", "err", err)
 			return false
 		}
@@ -135,7 +195,8 @@ func uploadSegment(
 
 	slog.Debug("segment uploaded to S3", "segment_id", presigned.SegmentID)
 
-	// Queue confirmation for next presign request
+	// Queue confirmation for next presign request and persist immediately so a
+	// crash before the next presign request doesn't orphan this S3 object.
 	*confirmations = append(*confirmations, api.UploadedSegment{
 		SegmentID: presigned.SegmentID,
 		StartTS:   seg.StartTS,
@@ -143,6 +204,7 @@ func uploadSegment(
 		SizeBytes: seg.SizeBytes,
 		HasMotion: seg.HasMotion,
 	})
+	savePendingConfirms(dataDir, *confirmations)
 
 	// Delete local file
 	if err := os.Remove(seg.Path); err != nil {
@@ -154,6 +216,7 @@ func uploadSegment(
 func replenishURLs(
 	ctx context.Context,
 	client *Client,
+	dataDir string,
 	availableURLs *[]api.PresignedUrl,
 	confirmations *[]api.UploadedSegment,
 ) error {
@@ -162,9 +225,14 @@ func replenishURLs(
 
 	resp, err := client.RequestPresignedURLs(ctx, 3, pending)
 	if err != nil {
-		// Put confirmations back so they aren't lost
+		// Put confirmations back so they aren't lost (on-disk copy is still intact)
 		*confirmations = pending
 		return err
+	}
+
+	// Server accepted the confirmations; clear the on-disk queue.
+	if len(pending) > 0 {
+		savePendingConfirms(dataDir, nil)
 	}
 
 	if resp.StorageCapped {

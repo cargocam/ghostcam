@@ -61,6 +61,17 @@ func (db *PostgresDB) UpdateCamera(ctx context.Context, deviceID string, update 
 	return nil
 }
 
+// TouchCameraLastSeen updates last_seen_at to the current unix timestamp (seconds).
+func (db *PostgresDB) TouchCameraLastSeen(ctx context.Context, deviceID string) error {
+	_, err := db.pool.Exec(ctx,
+		`UPDATE cameras SET last_seen_at = $1 WHERE device_id = $2`,
+		nowUnix(), deviceID)
+	if err != nil {
+		return fmt.Errorf("touch camera last_seen_at: %w", err)
+	}
+	return nil
+}
+
 func (db *PostgresDB) DeleteCamera(ctx context.Context, deviceID string) error {
 	_, err := db.pool.Exec(ctx, "DELETE FROM cameras WHERE device_id = $1", deviceID)
 	if err != nil {

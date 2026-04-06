@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"log/slog"
 	"net/http"
 
 	"github.com/cargocam/ghostcam/api"
@@ -22,6 +23,11 @@ func (h *Handlers) PostTelemetry(w http.ResponseWriter, r *http.Request) {
 	// Write telemetry to Redis
 	if h.Redis != nil {
 		redis.WriteTelemetry(r.Context(), h.Redis.RDB(), deviceID, &body.Telemetry)
+	}
+
+	// Mark camera as seen (non-fatal)
+	if err := h.DB.TouchCameraLastSeen(r.Context(), deviceID); err != nil {
+		slog.Warn("failed to touch camera last_seen_at", "device_id", deviceID, "error", err)
 	}
 
 	// Claim pending commands

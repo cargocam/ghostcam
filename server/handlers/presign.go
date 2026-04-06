@@ -36,7 +36,10 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 	// 1. Confirm uploaded segments
 	if len(body.Uploaded) > 0 {
 		records := make([]db.SegmentRecord, 0, len(body.Uploaded))
-		now := uint64(time.Now().Unix())
+		// created_at is unix milliseconds to match start_ts/end_ts and the
+		// retention job's cutoffMs comparison. Writing seconds here used to
+		// cause retention to wipe every segment on every hourly tick.
+		now := uint64(time.Now().UnixMilli())
 		for _, u := range body.Uploaded {
 			records = append(records, db.SegmentRecord{
 				SegmentID:  u.SegmentID,

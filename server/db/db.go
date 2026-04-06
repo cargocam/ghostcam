@@ -19,6 +19,7 @@ type Database interface {
 	GetCamera(ctx context.Context, deviceID string) (*CameraRecord, error)
 	ListCameras(ctx context.Context, userID string) ([]CameraRecord, error)
 	UpdateCamera(ctx context.Context, deviceID string, update *CameraUpdate) error
+	TouchCameraLastSeen(ctx context.Context, deviceID string) error
 	DeleteCamera(ctx context.Context, deviceID string) error
 	CreateProvisionedCamera(ctx context.Context, deviceID, userID, deviceSerial string) error
 

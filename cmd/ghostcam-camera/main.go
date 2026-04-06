@@ -131,7 +131,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		camera.RunUploadLoop(ctx, client, segments)
+		camera.RunUploadLoop(ctx, client, cfg.DataDir, segments)
 	}()
 
 	// Start telemetry poll loop
