@@ -72,7 +72,7 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 	// Subscribe to per-user motion + storage_capped channels.
 	// Events are already filtered to this user by the publisher.
 	eventCh := make(chan string, 32)
-	pubsub := rdb.Subscribe(ctx, fmt.Sprintf("motion:%s", userID), fmt.Sprintf("storage_capped:%s", userID))
+	pubsub := rdb.Subscribe(ctx, fmt.Sprintf("motion:%s", userID), fmt.Sprintf("storage_capped:%s", userID), fmt.Sprintf("coverage:%s", userID))
 	go func() {
 		defer pubsub.Close()
 		ch := pubsub.Channel()
@@ -108,11 +108,13 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 			// Per-user channels — no filtering needed, forward directly
 			var eventType string
 			if len(channel) > 0 {
-				// channel is "motion:<userID>" or "storage_capped:<userID>"
-				if channel[0] == 'm' {
+				switch channel[0] {
+				case 'm': // motion:{userID}
 					eventType = "motion_detected"
-				} else {
+				case 's': // storage_capped:{userID}
 					eventType = "storage_capped"
+				case 'c': // coverage:{userID}
+					eventType = "coverage"
 				}
 			}
 			if eventType != "" {

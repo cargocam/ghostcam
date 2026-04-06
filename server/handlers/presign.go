@@ -78,8 +78,15 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 				h.Redis.RDB().Expire(ctx, storageKey, 5*time.Minute)
 			}
 
-			// Publish motion events to per-user channel
+			// Publish coverage + motion events to per-user channel
+			covSegments := make([]map[string]any, 0, len(body.Uploaded))
 			for _, u := range body.Uploaded {
+				covSegments = append(covSegments, map[string]any{
+					"id":         u.SegmentID,
+					"start_ms":   u.StartTS,
+					"end_ms":     u.EndTS,
+					"has_motion": u.HasMotion,
+				})
 				if u.HasMotion {
 					motionPayload, _ := json.Marshal(map[string]any{
 						"device_id":  deviceID,
@@ -92,6 +99,11 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
+			covPayload, _ := json.Marshal(map[string]any{
+				"device_id": deviceID,
+				"segments":  covSegments,
+			})
+			h.Redis.RDB().Publish(ctx, fmt.Sprintf("coverage:%s", userID), covPayload)
 		}
 	}
 

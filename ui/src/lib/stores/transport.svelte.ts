@@ -43,12 +43,8 @@ class TransportStore {
 				cameraStore.refreshOnlineStatus();
 			}, 5_000);
 
-			// Refresh coverage every 30s so timeline bars stay current
-			this.coverageRefreshInterval = setInterval(() => {
-				for (const cam of cameraStore.cameras) {
-					this.refreshCoverage(cam.device_id);
-				}
-			}, 30_000);
+			// Coverage updates arrive in realtime via SSE "coverage" events.
+			// No polling needed.
 
 			this.connected = true;
 			this.connectedAt = Date.now();
@@ -106,6 +102,24 @@ class TransportStore {
 				const cam = cameraStore.getCamera(data.device_id);
 				const name = cam?.device_name ?? data.device_id;
 				alertsStore.addAlert('motion', data.device_id, name, 'Motion detected');
+			} catch { /* ignore */ }
+		});
+
+		es.addEventListener('coverage', (e: MessageEvent) => {
+			try {
+				const data = JSON.parse(e.data) as {
+					device_id: string;
+					segments: { id: string; start_ms: number; end_ms: number; has_motion: boolean }[];
+				};
+				// Append new segments to the scrubber's coverage
+				const existing = scrubberStore.cameraCoverage.get(data.device_id) ?? [];
+				const newSegs = data.segments.map((s) => ({
+					start: s.start_ms / 1000,
+					end: s.end_ms / 1000,
+					hasMotion: s.has_motion,
+				}));
+				scrubberStore.setCameraCoverage(data.device_id, [...existing, ...newSegs]);
+				this.updateAvailableWindow();
 			} catch { /* ignore */ }
 		});
 
