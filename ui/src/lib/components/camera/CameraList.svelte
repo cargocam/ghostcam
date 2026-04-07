@@ -3,7 +3,6 @@
 	import { cameraConfigStore } from '$lib/stores/cameraConfig.svelte.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { updateCameraSettings } from '$lib/signaling.js';
-	import { cameraColor } from '$lib/utils/colors.js';
 	import { cn } from '$lib/utils.js';
 	import { Settings, Check, X } from 'lucide-svelte';
 	import CameraSettingsDialog from './CameraSettingsDialog.svelte';
@@ -64,17 +63,17 @@
 
 <div class="py-1">
 	<div class="space-y-0.5">
-		{#each sortedCameras() as camera, _sortedIdx (camera.device_id)}
-			{@const camIdx = cameraStore.cameras.findIndex(c => c.device_id === camera.device_id)}
+		{#each sortedCameras() as camera (camera.device_id)}
 			{@const displayName = cameraConfigStore.getDisplayName(camera.device_id, camera.device_name)}
-			{@const color = cameraColor(camIdx >= 0 ? camIdx : 0)}
 			<div class="group/item relative">
 				{#if editingId === camera.device_id}
 					<div class="px-3 py-2 space-y-1.5">
 						<div class="flex items-center gap-1">
 							<span
-								class="h-2 w-2 rounded-full flex-shrink-0"
-							style="background: {color}; opacity: {camera.online ? 1 : 0.3}"
+								class={cn(
+								"h-2 w-2 rounded-full flex-shrink-0",
+								camera.online ? "bg-primary" : "bg-destructive"
+							)}
 							></span>
 							<input
 								type="text"

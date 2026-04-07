@@ -1,8 +1,6 @@
 <script lang="ts">
 	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
-	import { cameraConfigStore } from '$lib/stores/cameraConfig.svelte.js';
-	import { cameraColor } from '$lib/utils/colors.js';
 	import { cn } from '$lib/utils.js';
 
 	let trackEl = $state<HTMLDivElement | undefined>(undefined);
@@ -11,8 +9,8 @@
 	const MIN_WINDOW_SECS = 5 * 60;
 	const LIVE_MARGIN_SECS = 5;
 	const SEEK_MARGIN_SECS = 30;
+	const GAP_THRESHOLD = 30;
 
-	// Freeze the window edge when seeking so timeline doesn't shift
 	let frozenEnd = $state(Date.now() / 1000);
 	$effect(() => {
 		if (scrubberStore.isLive) frozenEnd = scrubberStore.playheadTime;
@@ -66,34 +64,49 @@
 		window.addEventListener('pointerup', onUp);
 	}
 
-	// Per-camera coverage bars: each camera gets its own row of bars with a unique color
-	let cameraIds = $derived(Array.from(scrubberStore.cameraCoverage.keys()));
-	let cameraCount = $derived(cameraIds.length);
-	let trackHeight = $derived(Math.max(6, cameraCount > 0 ? 12 : 6));
-
-	let perCameraBars = $derived.by(() => {
+	function mergeSpans(segments: { start: number; end: number }[]): { left: number; width: number }[] {
 		const range = windowEnd - windowStart;
-		if (range <= 0) return [];
+		if (range <= 0 || segments.length === 0) return [];
 
-		return cameraIds.map((deviceId, idx) => {
-			const coverage = scrubberStore.cameraCoverage.get(deviceId) ?? [];
-			const camIdx = cameraStore.cameras.findIndex(c => c.device_id === deviceId);
-			const color = cameraColor(camIdx >= 0 ? camIdx : idx);
-			const name = cameraConfigStore.getDisplayName(deviceId);
-			const laneHeight = cameraCount > 1 ? 1 / cameraCount : 1;
-			const laneTop = cameraCount > 1 ? idx * laneHeight : 0;
+		const sorted = [...segments].sort((a, b) => a.start - b.start);
+		const merged: { start: number; end: number }[] = [{ ...sorted[0] }];
+		for (let i = 1; i < sorted.length; i++) {
+			const last = merged[merged.length - 1];
+			if (sorted[i].start <= last.end + GAP_THRESHOLD) {
+				last.end = Math.max(last.end, sorted[i].end);
+			} else {
+				merged.push({ ...sorted[i] });
+			}
+		}
 
-			const bars = coverage
-				.map((s) => {
-					const left = Math.max(0, ((s.start - windowStart) / range) * 100);
-					const right = Math.min(100, ((s.end - windowStart) / range) * 100);
-					return { left, width: right - left };
-				})
-				.filter((s) => s.width > 0);
+		return merged
+			.map((s) => {
+				const left = Math.max(0, ((s.start - windowStart) / range) * 100);
+				const right = Math.min(100, ((s.end - windowStart) / range) * 100);
+				return { left, width: right - left };
+			})
+			.filter((s) => s.width > 0);
+	}
 
-			return { deviceId, color, name, bars, laneTop, laneHeight };
-		});
+	// Union of all cameras
+	let unionBars = $derived.by(() => {
+		const all: { start: number; end: number }[] = [];
+		for (const [, coverage] of scrubberStore.cameraCoverage) {
+			for (const s of coverage) all.push(s);
+		}
+		return mergeSpans(all);
 	});
+
+	// Selected camera only
+	let selectedBars = $derived.by(() => {
+		const id = cameraStore.selectedId;
+		if (!id) return [];
+		const coverage = scrubberStore.cameraCoverage.get(id);
+		if (!coverage) return [];
+		return mergeSpans(coverage);
+	});
+
+	let hasSelection = $derived(cameraStore.selectedId != null && selectedBars.length > 0);
 </script>
 
 <div class="flex items-center gap-3 px-4 py-2 bg-black/60 backdrop-blur-sm border-t border-white/10">
@@ -103,33 +116,34 @@
 
 	<div
 		bind:this={trackEl}
-		class="relative flex-1 cursor-pointer select-none touch-none"
-		style="height: {trackHeight * 2 + 16}px"
+		class="relative flex-1 h-8 cursor-pointer select-none touch-none"
 		role="slider"
 		tabindex="0"
 		aria-valuenow={scrubberStore.playheadTime}
 		onpointerdown={onPointerDown}
 	>
 		<!-- Track background -->
-		<div class="absolute inset-x-0 top-1/2 -translate-y-1/2 rounded-full bg-white/10" style="height: {trackHeight}px"></div>
+		<div class="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-white/10"></div>
 
-		<!-- Per-camera stacked bars -->
-		{#each perCameraBars as cam}
-			{#each cam.bars as bar}
+		<!-- Union coverage (semi-transparent when a camera is selected) -->
+		{#each unionBars as bar}
+			<div
+				class="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-emerald-500"
+				class:opacity-25={hasSelection}
+				class:opacity-70={!hasSelection}
+				style="left: {bar.left}%; width: {bar.width}%"
+			></div>
+		{/each}
+
+		<!-- Selected camera coverage (solid, on top) -->
+		{#if hasSelection}
+			{#each selectedBars as bar}
 				<div
-					class="absolute rounded-sm"
-					style="
-						left: {bar.left}%;
-						width: {bar.width}%;
-						top: calc(50% - {trackHeight / 2}px + {cam.laneTop * trackHeight}px);
-						height: {cam.laneHeight * trackHeight}px;
-						background: {cam.color};
-						opacity: 0.7;
-					"
-					title="{cam.name}"
+					class="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-emerald-400"
+					style="left: {bar.left}%; width: {bar.width}%"
 				></div>
 			{/each}
-		{/each}
+		{/if}
 
 		<!-- Playhead + tooltip -->
 		<div
