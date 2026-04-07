@@ -103,6 +103,7 @@ services:
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
     volumes:
       - camera-1-data:/var/ghostcam
+      - ./test-loop.mp4:/var/ghostcam/test-loop.mp4:ro
     command: ["--test-source"]
 
   camera-2:
@@ -119,6 +120,7 @@ services:
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
     volumes:
       - camera-2-data:/var/ghostcam
+      - ./test-loop.mp4:/var/ghostcam/test-loop.mp4:ro
     command: ["--test-source"]
 
 volumes:

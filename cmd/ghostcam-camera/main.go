@@ -43,6 +43,7 @@ func main() {
 	// Get device serial
 	deviceSerial := camera.GetDeviceSerial(cfg.DataDir)
 	slog.Info("device identity", "serial", deviceSerial)
+	camera.SetGPSSeed(deviceSerial)
 
 	// Load or obtain credentials
 	creds := camera.LoadCredentials(cfg.DataDir)
@@ -194,10 +195,6 @@ func runTelemetryPoll(ctx context.Context, client *camera.Client, dataDir string
 			return
 		case <-time.After(interval):
 			telemetry := camera.ReadTelemetry()
-			// Ensure GPS is always set for dev/testing
-			if telemetry.Lat == nil {
-				camera.InjectSyntheticGPS(&telemetry)
-			}
 			commands, err := client.PostTelemetry(ctx, telemetry)
 			if err != nil {
 				consecutiveFailures++

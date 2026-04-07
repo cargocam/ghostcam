@@ -3,11 +3,8 @@ package camera
 import (
 	"crypto/rand"
 	"fmt"
-	"math"
 	"os"
 	"time"
-
-	"github.com/cargocam/ghostcam/api"
 )
 
 // nowMillis returns the current time as Unix milliseconds.
@@ -15,24 +12,20 @@ func nowMillis() uint64 {
 	return uint64(time.Now().UnixMilli())
 }
 
+// gpsSeed is set at startup from the device serial so synthetic GPS
+// positions are deterministic and unique per device.
+var gpsSeed string
+
+// SetGPSSeed sets the device-specific seed used by synthetic GPS.
+func SetGPSSeed(seed string) {
+	gpsSeed = seed
+}
+
 // generateAndStoreSerial generates a random UUID serial and persists it.
 func generateAndStoreSerial(dataDir string) string {
 	serial := generateUUID()
 	_ = os.WriteFile(dataDir+"/device_serial", []byte(serial), 0644)
 	return serial
-}
-
-// InjectSyntheticGPS adds synthetic GPS coordinates that drift around Seattle.
-func InjectSyntheticGPS(d *api.TelemetryDatagram) {
-	t := float64(time.Now().UnixMilli()) / 1000.0
-	lat := 47.6062 + 0.001*math.Sin(t/60.0)
-	lon := -122.3321 + 0.001*math.Cos(t/45.0)
-	alt := float32(50.0)
-	fix := uint8(3)
-	d.Lat = &lat
-	d.Lon = &lon
-	d.Alt = &alt
-	d.GPSFix = &fix
 }
 
 // generateUUID produces a v4 UUID without external dependencies.
