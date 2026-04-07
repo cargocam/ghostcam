@@ -2,7 +2,9 @@
 	import { onMount } from 'svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { cameraConfigStore } from '$lib/stores/cameraConfig.svelte.js';
+	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 	import type { CameraState } from '$lib/stores/cameras.svelte.js';
+	import Hls from 'hls.js';
 	import type L from 'leaflet';
 
 	let {
@@ -22,7 +24,8 @@
 	} = $props();
 
 	let marker: L.Marker | null = null;
-	let videoEl: HTMLVideoElement | null = null;
+	let pipHls: Hls | null = null;
+	let pipVideo: HTMLVideoElement | null = null;
 	let lastPipKey = '';
 
 	let gps = $derived(gpsOverride ?? camera.telemetry?.gps);
@@ -31,6 +34,14 @@
 
 	function pipKey(): string {
 		return `${selected}|${camera.online}|${displayName}`;
+	}
+
+	function hlsSrc(): string {
+		const base = `/hls/${encodeURIComponent(camera.device_id)}/playlist.m3u8`;
+		const target = scrubberStore.seekTarget;
+		if (target === null) return base;
+		const center = Math.floor(target * 1000);
+		return `${base}?from=${center}&to=${center + 2 * 60 * 1000}`;
 	}
 
 	function createIcon(): L.DivIcon {
@@ -98,16 +109,61 @@
 		});
 	}
 
+	function destroyPipPlayer() {
+		if (pipHls) { pipHls.destroy(); pipHls = null; }
+		pipVideo = null;
+	}
+
 	function injectVideo() {
-		// Video preview on map markers removed in HLS rewrite.
-		// Map markers now show status icon only.
+		if (!marker) return;
+		const el = marker.getElement();
+		const slot = el?.querySelector('.pip-video-slot') as HTMLElement | null;
+		if (!slot) return;
+
+		// Reuse existing video if already injected
+		if (pipVideo && slot.contains(pipVideo)) return;
+
+		destroyPipPlayer();
+
+		const video = document.createElement('video');
+		video.autoplay = true;
+		video.muted = true;
+		video.playsInline = true;
+		video.style.cssText = 'width:160px;height:90px;object-fit:cover;display:block';
+		slot.innerHTML = '';
+		slot.appendChild(video);
+		pipVideo = video;
+
+		const src = hlsSrc();
+		if (Hls.isSupported()) {
+			const instance = new Hls({
+				enableWorker: false, // lightweight for pip
+				liveSyncDurationCount: 2,
+				liveMaxLatencyDurationCount: 4,
+			});
+			pipHls = instance;
+			instance.loadSource(src);
+			instance.attachMedia(video);
+			instance.on(Hls.Events.MANIFEST_PARSED, () => {
+				video.play().catch(() => {});
+			});
+			instance.on(Hls.Events.ERROR, (_event, data) => {
+				if (data.fatal) {
+					if (data.type === Hls.ErrorTypes.NETWORK_ERROR) instance.startLoad();
+					else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) instance.recoverMediaError();
+					else { instance.destroy(); if (pipHls === instance) pipHls = null; }
+				}
+			});
+		} else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+			video.src = src;
+			video.addEventListener('loadedmetadata', () => video.play().catch(() => {}));
+		}
 	}
 
 	// Create/update marker position and icon
 	$effect(() => {
 		if (!gps) return;
 
-		// Track dependencies for non-pip icon rebuilds
 		void selected;
 
 		if (!marker) {
@@ -117,29 +173,27 @@
 			marker.on('click', () => onMarkerClick?.(camera.device_id));
 			if (markerMode === 'pip') {
 				lastPipKey = pipKey();
-				injectVideo();
+				// Defer video injection until Leaflet renders the DOM
+				requestAnimationFrame(() => injectVideo());
 			}
 		} else {
 			marker.setLatLng([gps.latitude, gps.longitude]);
 
 			if (markerMode === 'pip') {
-				// Only rebuild pip icon when visual properties change, to preserve live video
 				const key = pipKey();
 				if (key !== lastPipKey) {
 					marker.setIcon(createIcon());
 					lastPipKey = key;
-					videoEl = null;
-					injectVideo();
+					destroyPipPlayer();
+					requestAnimationFrame(() => injectVideo());
+				} else {
+					// Ensure video is still injected (Leaflet may have recreated DOM)
+					requestAnimationFrame(() => injectVideo());
 				}
 			} else {
 				marker.setIcon(createIcon());
-				videoEl = null;
+				destroyPipPlayer();
 			}
-		}
-
-		// Video preview disabled in HLS-only mode
-		if (markerMode === 'pip') {
-			injectVideo();
 		}
 	});
 
@@ -148,17 +202,17 @@
 		if (!marker) return;
 		void markerMode;
 		marker.setIcon(createIcon());
-		videoEl = null;
+		destroyPipPlayer();
 		if (markerMode === 'pip') {
 			lastPipKey = pipKey();
-			injectVideo();
+			requestAnimationFrame(() => injectVideo());
 		}
 	});
 
 	// Cleanup on unmount
 	onMount(() => {
 		return () => {
-			videoEl = null;
+			destroyPipPlayer();
 			marker?.remove();
 		};
 	});
