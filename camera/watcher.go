@@ -20,42 +20,6 @@ type NewSegment struct {
 	RetryCount int // number of upload retries attempted
 }
 
-// motionDetector maintains a rolling window of segment sizes for motion detection.
-type motionDetector struct {
-	sizes     []uint64
-	maxWindow int
-	threshold float64 // motion if size > avg * threshold
-}
-
-func newMotionDetector() *motionDetector {
-	return &motionDetector{
-		maxWindow: 10,
-		threshold: 1.5,
-	}
-}
-
-func (md *motionDetector) detect(sizeBytes uint64) bool {
-	if len(md.sizes) < 3 {
-		// Not enough history to judge — don't flag as motion
-		md.sizes = append(md.sizes, sizeBytes)
-		return false
-	}
-
-	var sum uint64
-	for _, s := range md.sizes {
-		sum += s
-	}
-	avg := float64(sum) / float64(len(md.sizes))
-	hasMotion := float64(sizeBytes) > avg*md.threshold
-
-	md.sizes = append(md.sizes, sizeBytes)
-	if len(md.sizes) > md.maxWindow {
-		md.sizes = md.sizes[1:]
-	}
-
-	return hasMotion
-}
-
 // RunSegmentWatcher polls segmentDir every 2 seconds for new .ts files and
 // sends them to the segments channel. It skips 0-byte files and files modified
 // less than 2 seconds ago (still being written by ffmpeg).
@@ -224,7 +188,7 @@ func scanSegments(dir string, known map[string]struct{}, md *motionDetector, out
 
 		startTS := f.mtimeMs - segmentDurationSecs*1000
 		endTS := f.mtimeMs
-		hasMotion := md.detect(f.size)
+		hasMotion := md.detect(f.path, f.size)
 
 		slog.Debug("new segment detected", "file", f.name, "size_bytes", f.size, "has_motion", hasMotion)
 
