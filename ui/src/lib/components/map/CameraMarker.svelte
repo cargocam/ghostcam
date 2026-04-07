@@ -83,10 +83,10 @@
 		const anchorX = ox > 0 ? 0 : -panelW; // left edge if going right, right edge if going left
 		const anchorY = oy < 0 ? 0 : -panelH; // top edge if going up, bottom edge if going down
 
-		// Total icon: enough space for dot at center + panel anywhere around it
-		const margin = 10;
-		const totalW = panelW + DOT_SIZE + dist * 2 + margin * 2;
-		const totalH = panelH + DOT_SIZE + dist * 2 + margin * 2;
+		// Total icon: panel can be on any side of the centered dot.
+		// Size must fit the worst case (panel fully to one side).
+		const totalW = 2 * (dist + panelW) + DOT_SIZE;
+		const totalH = 2 * (dist + panelH) + DOT_SIZE;
 
 		const dotLeft = totalW / 2 - DOT_SIZE / 2;
 		const dotTop = totalH / 2 - DOT_SIZE / 2;
