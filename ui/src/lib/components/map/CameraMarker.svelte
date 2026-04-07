@@ -54,7 +54,7 @@
 	function createIcon(): L.DivIcon {
 		const online = camera.online;
 		const t = camera.telemetry;
-		const dotColor = online ? '#22c55e' : '#ef4444';
+		const dotColor = online ? '#22c55e' : '#9ca3af';
 		const dotRing = selected ? 'box-shadow:0 0 0 3px #22c55e,0 1px 3px rgba(0,0,0,0.3)' : 'box-shadow:0 1px 3px rgba(0,0,0,0.3)';
 
 		const dotHtml = `<div style="position:absolute;width:${DOT_SIZE}px;height:${DOT_SIZE}px;border-radius:50%;background:${dotColor};border:2px solid white;${dotRing};z-index:2"></div>`;

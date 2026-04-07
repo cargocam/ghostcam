@@ -98,15 +98,15 @@
 			<div class="flex items-center gap-2">
 				<span class={cn(
 					"h-2 w-2 rounded-full",
-					isOnline ? "bg-primary animate-pulse" : "bg-destructive"
+					isOnline ? "bg-primary animate-pulse" : "bg-muted-foreground/40"
 				)}></span>
 				<span class="text-xs font-medium text-white/90 drop-shadow-sm">{name}</span>
 			</div>
 			<span class={cn(
 				"text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded",
-				isOnline ? "bg-primary/20 text-primary" : "bg-destructive/20 text-destructive"
+				isOnline ? "bg-primary/20 text-primary" : "bg-white/10 text-white/40"
 			)}>
-				{isOnline ? 'LIVE' : 'OFF'}
+				{isOnline ? 'LIVE' : 'OFFLINE'}
 			</span>
 		</div>
 	</div>

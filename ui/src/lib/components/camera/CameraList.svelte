@@ -72,7 +72,7 @@
 							<span
 								class={cn(
 								"h-2 w-2 rounded-full flex-shrink-0",
-								camera.online ? "bg-primary" : "bg-destructive"
+								camera.online ? "bg-primary" : "bg-muted-foreground/40"
 							)}
 							></span>
 							<input
@@ -105,7 +105,7 @@
 						<span
 							class={cn(
 								"h-2 w-2 rounded-full flex-shrink-0",
-								camera.online ? "bg-primary" : "bg-destructive"
+								camera.online ? "bg-primary" : "bg-muted-foreground/40"
 							)}
 						></span>
 
