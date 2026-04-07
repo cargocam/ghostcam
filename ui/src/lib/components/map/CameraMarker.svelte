@@ -73,12 +73,8 @@
 
 		// Panel anchored to top-right of dot by default (offsetAngle 315°).
 		// When markers overlap, offsetAngle rotates the panel around the dot.
-		// Spread markers use a larger gap so their panels clear the space where
-		// a neighbor's default-position panel would sit.
-		const isSpread = Math.abs(offsetAngle - 315) > 1;
-		const gap = isSpread ? PANEL_GAP + Math.max(panelW, panelH) * 0.35 : PANEL_GAP;
 		const rad = (offsetAngle * Math.PI) / 180;
-		const dist = DOT_SIZE / 2 + gap;
+		const dist = DOT_SIZE / 2 + PANEL_GAP;
 		// Offset of panel's nearest corner from dot center
 		const ox = Math.cos(rad) * dist;
 		const oy = -Math.sin(rad) * dist; // CSS y is down
@@ -89,9 +85,8 @@
 
 		// Total icon: enough space for dot at center + panel anywhere around it
 		const margin = 10;
-		const maxDist = DOT_SIZE / 2 + PANEL_GAP + Math.max(panelW, panelH) * 0.35;
-		const totalW = panelW + DOT_SIZE + maxDist * 2 + margin * 2;
-		const totalH = panelH + DOT_SIZE + maxDist * 2 + margin * 2;
+		const totalW = panelW + DOT_SIZE + dist * 2 + margin * 2;
+		const totalH = panelH + DOT_SIZE + dist * 2 + margin * 2;
 
 		const dotLeft = totalW / 2 - DOT_SIZE / 2;
 		const dotTop = totalH / 2 - DOT_SIZE / 2;
