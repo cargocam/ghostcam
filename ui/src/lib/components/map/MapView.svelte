@@ -157,8 +157,11 @@
 	});
 
 	// Compute offset angles for overlapping markers.
-	// Cameras close together in pixel space get spread to opposite sides.
-	const OVERLAP_PX = 180; // markers closer than this (px) get spread
+	// Only markers whose dots are very close (<50px) get spread. Others stay
+	// at the default top-right (315°). Uses union-find to build clusters so
+	// only mutual neighbors are grouped — an isolated camera far from a pair
+	// never gets pulled into their cluster.
+	const OVERLAP_PX = 50;
 	let markerOffsets = $derived.by((): Record<string, number> => {
 		if (!map || !L) return {};
 		const positions: { id: string; px: { x: number; y: number } }[] = [];
@@ -170,26 +173,39 @@
 			positions.push({ id: cam.device_id, px: pt });
 		}
 
-		const offsets: Record<string, number> = {};
+		// Union-find to build clusters of overlapping markers
+		const parent = positions.map((_, i) => i);
+		function find(x: number): number { return parent[x] === x ? x : (parent[x] = find(parent[x])); }
+		function union(a: number, b: number) { parent[find(a)] = find(b); }
+
 		for (let i = 0; i < positions.length; i++) {
-			// Find neighbors within OVERLAP_PX
-			const neighbors: number[] = [];
-			for (let j = 0; j < positions.length; j++) {
-				if (i === j) continue;
+			for (let j = i + 1; j < positions.length; j++) {
 				const dx = positions[i].px.x - positions[j].px.x;
 				const dy = positions[i].px.y - positions[j].px.y;
 				if (Math.sqrt(dx * dx + dy * dy) < OVERLAP_PX) {
-					neighbors.push(j);
+					union(i, j);
 				}
 			}
-			if (neighbors.length === 0) {
-				offsets[positions[i].id] = 315; // default: top-right
+		}
+
+		// Group by cluster root
+		const clusters = new Map<number, number[]>();
+		for (let i = 0; i < positions.length; i++) {
+			const root = find(i);
+			if (!clusters.has(root)) clusters.set(root, []);
+			clusters.get(root)!.push(i);
+		}
+
+		const offsets: Record<string, number> = {};
+		for (const members of clusters.values()) {
+			if (members.length === 1) {
+				offsets[positions[members[0]].id] = 315; // default: top-right
 			} else {
-				// Spread evenly around the circle among the cluster
-				const clusterIndices = [i, ...neighbors].sort((a, b) => a - b);
-				const myRank = clusterIndices.indexOf(i);
-				const angleStep = 360 / clusterIndices.length;
-				offsets[positions[i].id] = (315 + myRank * angleStep) % 360;
+				// Spread cluster members evenly
+				const angleStep = 360 / members.length;
+				for (let rank = 0; rank < members.length; rank++) {
+					offsets[positions[members[rank]].id] = (315 + rank * angleStep) % 360;
+				}
 			}
 		}
 		return offsets;
