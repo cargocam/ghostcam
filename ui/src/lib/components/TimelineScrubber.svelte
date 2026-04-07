@@ -1,5 +1,8 @@
 <script lang="ts">
 	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
+	import { cameraStore } from '$lib/stores/cameras.svelte.js';
+	import { cameraConfigStore } from '$lib/stores/cameraConfig.svelte.js';
+	import { cameraColor } from '$lib/utils/colors.js';
 	import { cn } from '$lib/utils.js';
 
 	let trackEl = $state<HTMLDivElement | undefined>(undefined);
@@ -47,7 +50,6 @@
 	function onPointerDown(e: PointerEvent) {
 		e.preventDefault();
 		dragging = true;
-		// Move playhead visually but don't commit yet
 		scrubberStore.isLive = false;
 		scrubberStore.playheadTime = timeFromEvent(e);
 
@@ -58,46 +60,39 @@
 			dragging = false;
 			window.removeEventListener('pointermove', onMove);
 			window.removeEventListener('pointerup', onUp);
-			// Commit on release — this triggers manifest reload
 			scrubberStore.seekTo(timeFromEvent(ev));
 		};
 		window.addEventListener('pointermove', onMove);
 		window.addEventListener('pointerup', onUp);
 	}
 
-	// Union all camera coverage into bars, preserving motion state
-	let coverageBars = $derived.by(() => {
+	// Per-camera coverage bars: each camera gets its own row of bars with a unique color
+	let cameraIds = $derived(Array.from(scrubberStore.cameraCoverage.keys()));
+	let cameraCount = $derived(cameraIds.length);
+	let trackHeight = $derived(Math.max(6, cameraCount > 0 ? 12 : 6));
+
+	let perCameraBars = $derived.by(() => {
 		const range = windowEnd - windowStart;
 		if (range <= 0) return [];
 
-		// Collect all segments from all cameras
-		const all: { start: number; end: number; hasMotion: boolean }[] = [];
-		for (const [, coverage] of scrubberStore.cameraCoverage) {
-			for (const s of coverage) all.push({ start: s.start, end: s.end, hasMotion: s.hasMotion ?? false });
-		}
-		if (all.length === 0) return [];
+		return cameraIds.map((deviceId, idx) => {
+			const coverage = scrubberStore.cameraCoverage.get(deviceId) ?? [];
+			const camIdx = cameraStore.cameras.findIndex(c => c.device_id === deviceId);
+			const color = cameraColor(camIdx >= 0 ? camIdx : idx);
+			const name = cameraConfigStore.getDisplayName(deviceId);
+			const laneHeight = cameraCount > 1 ? 1 / cameraCount : 1;
+			const laneTop = cameraCount > 1 ? idx * laneHeight : 0;
 
-		// Sort and merge overlapping/adjacent segments regardless of motion state
-		all.sort((a, b) => a.start - b.start);
-		const merged: { start: number; end: number; hasMotion: boolean }[] = [{ ...all[0] }];
-		for (let i = 1; i < all.length; i++) {
-			const last = merged[merged.length - 1];
-			if (all[i].start <= last.end + 30) {
-				last.end = Math.max(last.end, all[i].end);
-				if (all[i].hasMotion) last.hasMotion = true;
-			} else {
-				merged.push({ ...all[i] });
-			}
-		}
+			const bars = coverage
+				.map((s) => {
+					const left = Math.max(0, ((s.start - windowStart) / range) * 100);
+					const right = Math.min(100, ((s.end - windowStart) / range) * 100);
+					return { left, width: right - left };
+				})
+				.filter((s) => s.width > 0);
 
-		// Convert to percentages
-		return merged
-			.map((s) => {
-				const left = Math.max(0, ((s.start - windowStart) / range) * 100);
-				const right = Math.min(100, ((s.end - windowStart) / range) * 100);
-				return { left, width: right - left, hasMotion: s.hasMotion };
-			})
-			.filter((s) => s.width > 0);
+			return { deviceId, color, name, bars, laneTop, laneHeight };
+		});
 	});
 </script>
 
@@ -108,25 +103,37 @@
 
 	<div
 		bind:this={trackEl}
-		class="relative flex-1 h-8 cursor-pointer select-none touch-none"
+		class="relative flex-1 cursor-pointer select-none touch-none"
+		style="height: {trackHeight * 2 + 16}px"
 		role="slider"
 		tabindex="0"
 		aria-valuenow={scrubberStore.playheadTime}
 		onpointerdown={onPointerDown}
 	>
-		<div class="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-white/10"></div>
+		<!-- Track background -->
+		<div class="absolute inset-x-0 top-1/2 -translate-y-1/2 rounded-full bg-white/10" style="height: {trackHeight}px"></div>
 
-		{#each coverageBars as bar}
-			<div
-				class="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full {bar.hasMotion ? 'bg-amber-500/60' : 'bg-green-500/60'}"
-				style="left: {bar.left}%; width: {bar.width}%"
-				title={bar.hasMotion ? 'Motion detected' : 'Recording'}
-			></div>
+		<!-- Per-camera stacked bars -->
+		{#each perCameraBars as cam}
+			{#each cam.bars as bar}
+				<div
+					class="absolute rounded-sm"
+					style="
+						left: {bar.left}%;
+						width: {bar.width}%;
+						top: calc(50% - {trackHeight / 2}px + {cam.laneTop * trackHeight}px);
+						height: {cam.laneHeight * trackHeight}px;
+						background: {cam.color};
+						opacity: 0.7;
+					"
+					title="{cam.name}"
+				></div>
+			{/each}
 		{/each}
 
 		<!-- Playhead + tooltip -->
 		<div
-			class="absolute top-1/2 -translate-y-1/2 -translate-x-1/2"
+			class="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-10"
 			style="left: {playheadPercent}%"
 		>
 			{#if dragging}
@@ -145,6 +152,7 @@
 			></div>
 		</div>
 
+		<!-- Time labels -->
 		<div class="absolute inset-x-0 bottom-0 flex justify-between pointer-events-none">
 			{#each Array(5) as _, i}
 				{@const t = windowStart + (i / 4) * (windowEnd - windowStart)}
