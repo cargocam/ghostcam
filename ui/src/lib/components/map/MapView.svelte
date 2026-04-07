@@ -166,25 +166,42 @@
 		}
 	});
 
+	// Resolve current GPS positions: playback points when scrubbing, live telemetry otherwise
+	let trackablePoints = $derived.by(() => {
+		const points: { deviceId: string; lat: number; lon: number }[] = [];
+		for (const cam of cameraStore.cameras) {
+			if (!scrubberStore.isLive) {
+				const pb = playbackPointByDevice[cam.device_id];
+				if (pb) {
+					points.push({ deviceId: cam.device_id, lat: pb[0], lon: pb[1] });
+					continue;
+				}
+			}
+			if (cam.telemetry?.gps) {
+				points.push({ deviceId: cam.device_id, lat: cam.telemetry.gps.latitude, lon: cam.telemetry.gps.longitude });
+			}
+		}
+		return points;
+	});
+
 	// Auto-fit / pan effect
 	$effect(() => {
 		if (!map || !L) return;
 		const _tracking = tracking;
 		const _trackedId = trackedDeviceId;
-		const _cams = gpsCameras;
+		const _points = trackablePoints;
 
-		if (_tracking === 'all' && _cams.length > 0) {
+		if (_tracking === 'all' && _points.length > 0) {
 			const bounds = L.latLngBounds(
-				_cams.map((c) => [c.telemetry!.gps!.latitude, c.telemetry!.gps!.longitude] as [number, number])
+				_points.map((p) => [p.lat, p.lon] as [number, number])
 			);
 			programmaticMove = true;
 			map.fitBounds(bounds, { padding: fitPadding, maxZoom: 16 });
-			// fitBounds is async — reset flag after moveend
 			map.once('moveend', () => { programmaticMove = false; });
 		} else if (_tracking === 'single' && _trackedId) {
-			const cam = _cams.find((c) => c.device_id === _trackedId);
-			if (cam?.telemetry?.gps) {
-				const latlng: [number, number] = [cam.telemetry.gps.latitude, cam.telemetry.gps.longitude];
+			const pt = _points.find((p) => p.deviceId === _trackedId);
+			if (pt) {
+				const latlng: [number, number] = [pt.lat, pt.lon];
 				programmaticMove = true;
 				if (map.getZoom() < 14) {
 					map.setView(latlng, 14);
