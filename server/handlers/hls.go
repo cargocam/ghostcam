@@ -34,8 +34,17 @@ func (h *Handlers) GetManifest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nowMs := uint64(time.Now().UnixMilli())
+	_, hasFrom := r.URL.Query()["from"]
+	_, hasTo := r.URL.Query()["to"]
 	toMs := parseQueryUint64(r, "to", nowMs)
-	fromMs := parseQueryUint64(r, "from", toMs-30*60*1000)
+	// Live mode (no params): tight 90s window so hls.js gets a small sliding
+	// manifest (~15 segments) instead of hundreds. Seeked playback uses the
+	// full requested range.
+	defaultFrom := toMs - 30*60*1000
+	if !hasFrom && !hasTo {
+		defaultFrom = toMs - 90*1000
+	}
+	fromMs := parseQueryUint64(r, "from", defaultFrom)
 
 	// Validate range: from <= to, max 24 hours
 	if fromMs > toMs {
@@ -83,7 +92,6 @@ func (h *Handlers) GetManifest(w http.ResponseWriter, r *http.Request) {
 	// Omit EXT-X-ENDLIST for live streams so hls.js keeps polling.
 	// Live = no explicit "to" param and latest segment within 2 minutes.
 	lastEnd := segments[len(segments)-1].EndTS
-	_, hasTo := r.URL.Query()["to"]
 	isLive := !hasTo && (nowMs-lastEnd) < 120_000
 	if !isLive {
 		b.WriteString("#EXT-X-ENDLIST\n")
