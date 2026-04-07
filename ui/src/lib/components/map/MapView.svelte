@@ -156,6 +156,45 @@
 
 	});
 
+	// Compute offset angles for overlapping markers.
+	// Cameras close together in pixel space get spread to opposite sides.
+	const OVERLAP_PX = 180; // markers closer than this (px) get spread
+	let markerOffsets = $derived.by((): Record<string, number> => {
+		if (!map || !L) return {};
+		const positions: { id: string; px: { x: number; y: number } }[] = [];
+		for (const cam of markerCameras) {
+			const gpsOv = !scrubberStore.isLive ? playbackPointByDevice[cam.device_id] : null;
+			const gps = gpsOv ? { latitude: gpsOv[0], longitude: gpsOv[1] } : cam.telemetry?.gps;
+			if (!gps) continue;
+			const pt = map.latLngToContainerPoint([gps.latitude, gps.longitude]);
+			positions.push({ id: cam.device_id, px: pt });
+		}
+
+		const offsets: Record<string, number> = {};
+		for (let i = 0; i < positions.length; i++) {
+			// Find neighbors within OVERLAP_PX
+			const neighbors: number[] = [];
+			for (let j = 0; j < positions.length; j++) {
+				if (i === j) continue;
+				const dx = positions[i].px.x - positions[j].px.x;
+				const dy = positions[i].px.y - positions[j].px.y;
+				if (Math.sqrt(dx * dx + dy * dy) < OVERLAP_PX) {
+					neighbors.push(j);
+				}
+			}
+			if (neighbors.length === 0) {
+				offsets[positions[i].id] = 315; // default: top-right
+			} else {
+				// Spread evenly around the circle among the cluster
+				const clusterIndices = [i, ...neighbors].sort((a, b) => a - b);
+				const myRank = clusterIndices.indexOf(i);
+				const angleStep = 360 / clusterIndices.length;
+				offsets[positions[i].id] = (315 + myRank * angleStep) % 360;
+			}
+		}
+		return offsets;
+	});
+
 	// Re-engage tracking when scrubbing or returning to live
 	$effect(() => {
 		// Track these reactive values to trigger on change
@@ -311,6 +350,7 @@
 					? { latitude: playbackPoint[0], longitude: playbackPoint[1] }
 					: undefined}
 				selected={tracking === 'single' && trackedDeviceId === camera.device_id}
+				offsetAngle={markerOffsets[camera.device_id] ?? 315}
 				onMarkerClick={handleMarkerClick}
 			/>
 		{/each}

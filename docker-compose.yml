@@ -123,6 +123,23 @@ services:
       - ./test-loop.mp4:/var/ghostcam/test-loop.mp4:ro
     command: ["--test-source"]
 
+  camera-3:
+    profiles: [test]
+    build:
+      context: .
+      target: camera
+    restart: unless-stopped
+    depends_on: [server]
+    environment:
+      - GHOSTCAM_DATA_DIR=/var/ghostcam
+      - GHOSTCAM_SERVER_URL=http://server:3000
+      - GHOSTCAM_ADMIN_EMAIL=admin@ghostcam.dev
+      - GHOSTCAM_ADMIN_PASSWORD=dev-password
+    volumes:
+      - camera-3-data:/var/ghostcam
+      - ./test-loop.mp4:/var/ghostcam/test-loop.mp4:ro
+    command: ["--test-source"]
+
 volumes:
   pg-data:
   redis-data:
@@ -130,3 +147,4 @@ volumes:
   server-data:
   camera-1-data:
   camera-2-data:
+  camera-3-data:
