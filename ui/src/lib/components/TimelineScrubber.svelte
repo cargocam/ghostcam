@@ -77,13 +77,14 @@
 		}
 		if (all.length === 0) return [];
 
-		// Sort and merge overlapping/adjacent segments (only if same motion state)
+		// Sort and merge overlapping/adjacent segments regardless of motion state
 		all.sort((a, b) => a.start - b.start);
 		const merged: { start: number; end: number; hasMotion: boolean }[] = [{ ...all[0] }];
 		for (let i = 1; i < all.length; i++) {
 			const last = merged[merged.length - 1];
-			if (all[i].start <= last.end + 30 && all[i].hasMotion === last.hasMotion) {
+			if (all[i].start <= last.end + 30) {
 				last.end = Math.max(last.end, all[i].end);
+				if (all[i].hasMotion) last.hasMotion = true;
 			} else {
 				merged.push({ ...all[i] });
 			}

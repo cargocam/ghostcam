@@ -33,14 +33,16 @@ class ScrubberStore {
 	setCameraCoverage(deviceId: string, segments: { start: number; end: number; hasMotion?: boolean }[]) {
 		const GAP_THRESHOLD_SEC = 30;
 		const sorted = [...segments].sort((a, b) => a.start - b.start);
-		const merged: { start: number; end: number; hasMotion?: boolean }[] = [];
+		const merged: { start: number; end: number; hasMotion: boolean }[] = [];
 		for (const seg of sorted) {
 			const last = merged[merged.length - 1];
-			// Only merge if same motion state and within gap threshold
-			if (last && seg.start - last.end <= GAP_THRESHOLD_SEC && (last.hasMotion ?? false) === (seg.hasMotion ?? false)) {
+			// Merge contiguous/overlapping segments regardless of motion state.
+			// Motion state is for bar coloring only, not for splitting coverage.
+			if (last && seg.start - last.end <= GAP_THRESHOLD_SEC) {
 				last.end = Math.max(last.end, seg.end);
+				if (seg.hasMotion) last.hasMotion = true;
 			} else {
-				merged.push({ ...seg });
+				merged.push({ start: seg.start, end: seg.end, hasMotion: seg.hasMotion ?? false });
 			}
 		}
 		this.cameraCoverage = new Map(this.cameraCoverage).set(deviceId, merged);
