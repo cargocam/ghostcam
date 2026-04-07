@@ -23,15 +23,15 @@
 	let isMuted = $derived(settingsStore.isCameraMuted(deviceId));
 
 	// HLS manifest URL. When live, use default (server returns latest 30 min).
-	// When seeking, use a 10-min window centered on the committed seek target.
-	// Uses seekTarget (not playheadTime) so dragging doesn't cause reloads.
+	// When seeking, use a tight window starting at the seek target so clicking
+	// a gap doesn't bleed in segments from adjacent covered areas.
 	let hlsSrc = $derived.by(() => {
 		const base = `/hls/${encodeURIComponent(deviceId)}/playlist.m3u8`;
 		const target = scrubberStore.seekTarget;
 		if (target === null) return base;
 		const center = Math.floor(target * 1000);
-		const from = Math.max(0, center - 5 * 60 * 1000);
-		const to = center + 5 * 60 * 1000;
+		const from = center;
+		const to = center + 2 * 60 * 1000; // 2 min forward from seek point
 		return `${base}?from=${from}&to=${to}`;
 	});
 
