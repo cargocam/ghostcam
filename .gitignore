@@ -13,3 +13,7 @@ ui/.svelte-kit/
 # OS
 .DS_Store
 /ghostcam-camera-*
+
+# Test fixtures (generated on demand)
+test-loop.mp4
+.pi.env
