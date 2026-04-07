@@ -104,7 +104,7 @@
 		onclick={resetOverlayTimer}
 	>
 		<div class="absolute inset-0">
-			<HlsPlayer src={`/hls/${encodeURIComponent(cameraId)}/playlist.m3u8`} muted={isMuted} />
+			<HlsPlayer src={`/hls/${encodeURIComponent(cameraId)}/live.m3u8`} muted={isMuted} />
 		</div>
 
 		<!-- Top overlay -->

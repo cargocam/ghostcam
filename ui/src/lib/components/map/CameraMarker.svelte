@@ -45,11 +45,11 @@
 	}
 
 	function hlsSrc(): string {
-		const base = `/hls/${encodeURIComponent(camera.device_id)}/playlist.m3u8`;
+		const id = encodeURIComponent(camera.device_id);
 		const target = scrubberStore.seekTarget;
-		if (target === null) return base;
-		const center = Math.floor(target * 1000);
-		return `${base}?from=${center}&to=${center + 2 * 60 * 1000}`;
+		if (target === null) return `/hls/${id}/live.m3u8`;
+		const from = Math.floor(target * 1000);
+		return `/hls/${id}/vod.m3u8?from=${from}&to=${from + 2 * 60 * 1000}`;
 	}
 
 	function createIcon(): L.DivIcon {

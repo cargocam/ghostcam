@@ -83,7 +83,8 @@ func BuildRouter(app *App) http.Handler {
 		r.Get("/events", h.SSE)
 
 		// HLS
-		r.Get("/hls/{deviceID}/playlist.m3u8", h.GetManifest)
+		r.Get("/hls/{deviceID}/live.m3u8", h.GetLiveManifest)
+		r.Get("/hls/{deviceID}/vod.m3u8", h.GetVodManifest)
 		r.Get("/hls/{deviceID}/init.mp4", h.GetInit)
 		r.Get("/hls/{deviceID}/{segmentID}.ts", h.GetSegment)
 		r.Get("/hls/{deviceID}/coverage", h.GetCoverage)

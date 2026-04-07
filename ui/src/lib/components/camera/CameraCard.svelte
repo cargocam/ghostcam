@@ -22,17 +22,15 @@
 	let camera = $derived(cameraStore.cameras.find((c) => c.device_id === deviceId));
 	let isMuted = $derived(settingsStore.isCameraMuted(deviceId));
 
-	// HLS manifest URL. When live, use default (server returns latest 30 min).
-	// When seeking, use a tight window starting at the seek target so clicking
-	// a gap doesn't bleed in segments from adjacent covered areas.
+	// Live: sliding window manifest, hls.js polls for new segments.
+	// VOD: tight window from seek point, finite playlist.
 	let hlsSrc = $derived.by(() => {
-		const base = `/hls/${encodeURIComponent(deviceId)}/playlist.m3u8`;
+		const id = encodeURIComponent(deviceId);
 		const target = scrubberStore.seekTarget;
-		if (target === null) return base;
-		const center = Math.floor(target * 1000);
-		const from = center;
-		const to = center + 2 * 60 * 1000; // 2 min forward from seek point
-		return `${base}?from=${from}&to=${to}`;
+		if (target === null) return `/hls/${id}/live.m3u8`;
+		const from = Math.floor(target * 1000);
+		const to = from + 2 * 60 * 1000;
+		return `/hls/${id}/vod.m3u8?from=${from}&to=${to}`;
 	});
 
 	let videoElement = $state<HTMLVideoElement | undefined>(undefined);
