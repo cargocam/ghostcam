@@ -10,20 +10,22 @@ import (
 	"github.com/cargocam/ghostcam/server/billing"
 	"github.com/cargocam/ghostcam/server/ctxutil"
 	"github.com/cargocam/ghostcam/server/db"
+	"github.com/cargocam/ghostcam/server/redis"
 	"github.com/go-chi/chi/v5"
 )
 
 const provisionTokenTTLSecs = 24 * 3600 // 24 hours
 
 type cameraResponse struct {
-	DeviceID      string  `json:"device_id"`
-	DisplayName   string  `json:"display_name"`
-	EnrolledAt    uint64  `json:"enrolled_at"`
-	LastSeenAt    *int64  `json:"last_seen_at,omitempty"`
-	Provisioned   bool    `json:"provisioned"`
-	Notes         *string `json:"notes,omitempty"`
-	Resolution    string  `json:"resolution"`
-	RecordingMode string  `json:"recording_mode"`
+	DeviceID      string               `json:"device_id"`
+	DisplayName   string               `json:"display_name"`
+	EnrolledAt    uint64               `json:"enrolled_at"`
+	LastSeenAt    *int64               `json:"last_seen_at,omitempty"`
+	Provisioned   bool                 `json:"provisioned"`
+	Notes         *string              `json:"notes,omitempty"`
+	Resolution    string               `json:"resolution"`
+	RecordingMode string               `json:"recording_mode"`
+	Telemetry     *redis.TelemetryEntry `json:"telemetry,omitempty"`
 }
 
 type enrollResponse struct {
@@ -42,9 +44,10 @@ func (h *Handlers) ListCameras(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
 	resp := make([]cameraResponse, 0, len(cameras))
 	for _, c := range cameras {
-		resp = append(resp, cameraResponse{
+		cr := cameraResponse{
 			DeviceID:      c.DeviceID,
 			DisplayName:   c.DisplayName,
 			EnrolledAt:    uint64(c.EnrolledAt),
@@ -53,7 +56,12 @@ func (h *Handlers) ListCameras(w http.ResponseWriter, r *http.Request) {
 			Notes:         c.Notes,
 			Resolution:    c.Resolution,
 			RecordingMode: c.RecordingMode,
-		})
+		}
+		if h.Redis != nil {
+			entry, _ := redis.QueryTelemetryLatest(ctx, h.Redis.RDB(), c.DeviceID)
+			cr.Telemetry = entry
+		}
+		resp = append(resp, cr)
 	}
 	writeJSON(w, http.StatusOK, resp)
 }

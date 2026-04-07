@@ -39,16 +39,25 @@ class CameraStore {
 	setInitialList(list: CameraInfo[]) {
 		const now = Date.now();
 		this.cameras = list.map((c) => {
-			// Seed online status from last_seen_at (unix seconds) so cameras
-			// show as online immediately on page load instead of waiting for
-			// the first SSE telemetry event (~10s delay).
+			// Seed online status + telemetry from the API response so cameras
+			// show full state immediately on page load without waiting for SSE.
 			const seenMs = c.last_seen_at ? c.last_seen_at * 1000 : null;
 			const recentlySeen = seenMs != null && now - seenMs < ONLINE_THRESHOLD_MS;
+			const t = c.telemetry;
+			const initialTelemetry: TelemetryData | null = t ? {
+				cpu_percent: t.cpu,
+				temp_celsius: t.temp,
+				memory_mb: t.mem,
+				uptime_secs: t.uptime,
+				gps: t.lat != null && t.lon != null
+					? { latitude: t.lat, longitude: t.lon, alt: t.alt }
+					: undefined,
+			} : null;
 			return {
 				device_id: c.device_id,
 				device_name: c.display_name,
 				online: recentlySeen,
-				telemetry: null,
+				telemetry: initialTelemetry,
 				lastTelemetryAt: recentlySeen ? seenMs : null,
 				resolution: c.resolution ?? '720p',
 				recording_mode: c.recording_mode ?? 'constant',

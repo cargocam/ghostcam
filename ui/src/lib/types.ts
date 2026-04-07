@@ -7,6 +7,18 @@ export interface CameraInfo {
 	recording_mode: string;
 	last_seen_at?: number;
 	provisioned?: boolean;
+	telemetry?: {
+		ts: number;
+		cpu?: number;
+		temp?: number;
+		mem?: number;
+		uptime?: number;
+		sig?: number;
+		lat?: number;
+		lon?: number;
+		alt?: number;
+		gps_fix?: number;
+	};
 }
 
 export interface GpsData {
