@@ -55,6 +55,7 @@ type Database interface {
 	// Segments
 	InsertSegments(ctx context.Context, segments []SegmentRecord) error
 	ListSegments(ctx context.Context, deviceID string, fromTS, toTS uint64) ([]SegmentRecord, error)
+	ListSegmentCoverage(ctx context.Context, deviceID string, fromTS, toTS uint64) ([]CoverageRecord, error)
 	LatestSegment(ctx context.Context, deviceID string) (*SegmentRecord, error)
 
 	// Commands
@@ -272,6 +273,14 @@ type SegmentRecord struct {
 	Resolution string
 	CreatedAt  uint64
 	HasMotion  bool
+}
+
+// CoverageRecord is a lightweight segment record for timeline coverage.
+type CoverageRecord struct {
+	SegmentID string
+	StartTS   uint64
+	EndTS     uint64
+	HasMotion bool
 }
 
 // SubscriptionRecord is a subscription from the database.

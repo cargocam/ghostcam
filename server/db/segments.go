@@ -61,6 +61,34 @@ func (db *PostgresDB) ListSegments(ctx context.Context, deviceID string, fromTS,
 	return segments, rows.Err()
 }
 
+// ListSegmentCoverage returns lightweight coverage data (no s3_key, size, resolution)
+// for all segments in a time range. No row limit — intended for timeline rendering.
+func (db *PostgresDB) ListSegmentCoverage(ctx context.Context, deviceID string, fromTS, toTS uint64) ([]CoverageRecord, error) {
+	rows, err := db.pool.Query(ctx,
+		`SELECT segment_id, start_ts, end_ts, has_motion
+		 FROM segments
+		 WHERE device_id = $1 AND start_ts >= $2 AND start_ts <= $3
+		 ORDER BY start_ts`,
+		deviceID, int64(fromTS), int64(toTS))
+	if err != nil {
+		return nil, fmt.Errorf("list segment coverage: %w", err)
+	}
+	defer rows.Close()
+
+	var records []CoverageRecord
+	for rows.Next() {
+		var r CoverageRecord
+		var startTS, endTS int64
+		if err := rows.Scan(&r.SegmentID, &startTS, &endTS, &r.HasMotion); err != nil {
+			return nil, fmt.Errorf("scanning coverage: %w", err)
+		}
+		r.StartTS = uint64(startTS)
+		r.EndTS = uint64(endTS)
+		records = append(records, r)
+	}
+	return records, rows.Err()
+}
+
 // DeleteOldSegments deletes segments older than olderThanMs and returns the deleted records
 // (so their S3 keys can be cleaned up). Deletes at most batchSize rows.
 func (db *PostgresDB) DeleteOldSegments(ctx context.Context, olderThanMs uint64, batchSize int) ([]SegmentRecord, error) {

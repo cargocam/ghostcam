@@ -209,9 +209,9 @@ func (h *Handlers) GetCoverage(w http.ResponseWriter, r *http.Request) {
 	fromMs := parseQueryUint64(r, "from", nowMs-retentionMs)
 	toMs := parseQueryUint64(r, "to", nowMs)
 
-	segments, err := h.DB.ListSegments(r.Context(), deviceID, fromMs, toMs)
+	segments, err := h.DB.ListSegmentCoverage(r.Context(), deviceID, fromMs, toMs)
 	if err != nil {
-		slog.Error("list segments failed", "device_id", deviceID, "error", err)
+		slog.Error("list segment coverage failed", "device_id", deviceID, "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
