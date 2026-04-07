@@ -34,8 +34,7 @@
 	let displayName = $derived(cameraConfigStore.getDisplayName(camera.device_id, camera.device_name));
 	let markerMode = $derived(settingsStore.markerMode);
 
-	// Panel offset from dot center (px), along offsetAngle
-	const PANEL_DISTANCE = 20;
+	const PANEL_GAP = 6; // px between dot edge and panel
 	const PIP_W = 160, PIP_H = 110;
 	const INFO_W = 160, INFO_H = 56;
 	const DOT_SIZE = 12;
@@ -69,33 +68,36 @@
 			});
 		}
 
-		// Compute panel offset position from dot center
-		const rad = (offsetAngle * Math.PI) / 180;
 		const panelW = markerMode === 'pip' ? PIP_W : INFO_W;
 		const panelH = markerMode === 'pip' ? PIP_H : INFO_H;
 
-		// Panel center offset from dot center
-		const cx = Math.cos(rad) * (PANEL_DISTANCE + panelW / 2);
-		const cy = -Math.sin(rad) * (PANEL_DISTANCE + panelH / 2); // negative because CSS y is down
+		// Panel anchored to top-right of dot by default (offsetAngle 315°).
+		// When markers overlap, offsetAngle rotates the panel around the dot.
+		const rad = (offsetAngle * Math.PI) / 180;
+		const dist = DOT_SIZE / 2 + PANEL_GAP;
+		// Offset of panel's nearest corner from dot center
+		const ox = Math.cos(rad) * dist;
+		const oy = -Math.sin(rad) * dist; // CSS y is down
 
-		// Total icon size must contain both dot and panel
-		const pad = 10;
-		const totalW = Math.max(panelW, DOT_SIZE) + PANEL_DISTANCE * 2 + panelW + pad * 2;
-		const totalH = Math.max(panelH, DOT_SIZE) + PANEL_DISTANCE * 2 + panelH + pad * 2;
+		// Place panel so its nearest corner is at the offset point
+		const anchorX = ox > 0 ? 0 : -panelW; // left edge if going right, right edge if going left
+		const anchorY = oy < 0 ? 0 : -panelH; // top edge if going up, bottom edge if going down
 
-		// Dot is at the center of the total icon
+		// Total icon: enough space for dot at center + panel anywhere around it
+		const margin = 10;
+		const totalW = panelW + DOT_SIZE + dist * 2 + margin * 2;
+		const totalH = panelH + DOT_SIZE + dist * 2 + margin * 2;
+
 		const dotLeft = totalW / 2 - DOT_SIZE / 2;
 		const dotTop = totalH / 2 - DOT_SIZE / 2;
+		const panelLeft = totalW / 2 + ox + anchorX;
+		const panelTop = totalH / 2 + oy + anchorY;
 
-		// Panel positioned relative to dot center
-		const panelLeft = totalW / 2 + cx - panelW / 2;
-		const panelTop = totalH / 2 + cy - panelH / 2;
-
-		// Line from dot edge to panel edge
+		// Connecting line from dot edge to panel corner
 		const lineX1 = totalW / 2;
 		const lineY1 = totalH / 2;
-		const lineX2 = panelLeft + panelW / 2;
-		const lineY2 = panelTop + panelH / 2;
+		const lineX2 = panelLeft + (anchorX === 0 ? 0 : panelW);
+		const lineY2 = panelTop + (anchorY === 0 ? 0 : panelH);
 
 		const lineHtml = `<svg style="position:absolute;left:0;top:0;width:${totalW}px;height:${totalH}px;pointer-events:none;z-index:0"><line x1="${lineX1}" y1="${lineY1}" x2="${lineX2}" y2="${lineY2}" stroke="rgba(255,255,255,0.3)" stroke-width="1"/></svg>`;
 
