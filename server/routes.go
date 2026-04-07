@@ -28,7 +28,11 @@ func BuildRouter(app *App) http.Handler {
 		PriceIDEnterprise: app.Config.StripePriceIDEnterprise,
 		PortalConfigID:    app.Config.StripePortalConfigID,
 	}
-	h := handlers.New(app.DB, app.Redis, app.S3, app.HMACSecret, app.Config.S3PresignTTLSecs, app.Config.AdminEmail, app.Config.PublicURL, secureCookies, stripeConfig)
+	retentionDays := app.Config.SegmentRetentionDays
+	if retentionDays <= 0 {
+		retentionDays = 30
+	}
+	h := handlers.New(app.DB, app.Redis, app.S3, app.HMACSecret, app.Config.S3PresignTTLSecs, app.Config.AdminEmail, app.Config.PublicURL, secureCookies, retentionDays, stripeConfig)
 
 	// Rate limiters for public auth endpoints
 	loginRL := NewRateLimiter(10)     // 10 req/min per IP

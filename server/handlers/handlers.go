@@ -52,11 +52,12 @@ type Handlers struct {
 	AdminEmail     string
 	PublicURL      string // configured public URL for QR codes etc.
 	SecureCookies  bool   // set Secure flag on auth cookies (true behind TLS)
+	RetentionDays  int    // segment retention period (for coverage window default)
 	Stripe         StripeConfig
 }
 
 // New creates a new Handlers instance.
-func New(database db.Database, redisClient *redis.Client, s3Client *s3.Client, hmacSecret []byte, presignTTLSecs uint64, adminEmail, publicURL string, secureCookies bool, stripe StripeConfig) *Handlers {
+func New(database db.Database, redisClient *redis.Client, s3Client *s3.Client, hmacSecret []byte, presignTTLSecs uint64, adminEmail, publicURL string, secureCookies bool, retentionDays int, stripe StripeConfig) *Handlers {
 	return &Handlers{
 		DB:             database,
 		Redis:          redisClient,
@@ -66,6 +67,7 @@ func New(database db.Database, redisClient *redis.Client, s3Client *s3.Client, h
 		AdminEmail:     adminEmail,
 		PublicURL:      publicURL,
 		SecureCookies:  secureCookies,
+		RetentionDays:  retentionDays,
 		Stripe:         stripe,
 	}
 }

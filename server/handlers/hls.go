@@ -203,9 +203,13 @@ func (h *Handlers) GetCoverage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	nowMs := uint64(time.Now().UnixMilli())
-	fromMs := nowMs - 24*60*60*1000
+	// Default to full retention window so all available footage appears on the timeline.
+	// Clients can narrow with ?from=&to= if needed.
+	retentionMs := uint64(h.RetentionDays) * 24 * 60 * 60 * 1000
+	fromMs := parseQueryUint64(r, "from", nowMs-retentionMs)
+	toMs := parseQueryUint64(r, "to", nowMs)
 
-	segments, err := h.DB.ListSegments(r.Context(), deviceID, fromMs, nowMs)
+	segments, err := h.DB.ListSegments(r.Context(), deviceID, fromMs, toMs)
 	if err != nil {
 		slog.Error("list segments failed", "device_id", deviceID, "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
