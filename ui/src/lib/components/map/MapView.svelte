@@ -17,8 +17,8 @@
 	let satellite = $state(false);
 	let ready = $state(false);
 
-	// Tracking state
-	let tracking = $state<'all' | 'single' | 'off'>('off');
+	// Tracking state — on by default, disengaged only by manual map interaction
+	let tracking = $state<'all' | 'single' | 'off'>('all');
 	let trackedDeviceId = $state<string | null>(null);
 	let programmaticMove = false;
 	let playbackTrailsByDevice = $state<Record<string, [number, number][]>>({});
@@ -156,6 +156,16 @@
 
 	});
 
+	// Re-engage tracking when scrubbing or returning to live
+	$effect(() => {
+		// Track these reactive values to trigger on change
+		const _seekTarget = scrubberStore.seekTarget;
+		const _isLive = scrubberStore.isLive;
+		if (tracking === 'off') {
+			tracking = 'all';
+		}
+	});
+
 	// Auto-fit / pan effect
 	$effect(() => {
 		if (!map || !L) return;
@@ -241,13 +251,9 @@
 	}
 
 	function toggleFocus() {
-		if (tracking === 'off') {
-			tracking = 'all';
-			trackedDeviceId = null;
-			cameraStore.selectedId = null;
-		} else {
-			disengageTracking();
-		}
+		tracking = 'all';
+		trackedDeviceId = null;
+		cameraStore.selectedId = null;
 	}
 
 	function handleMarkerClick(deviceId: string) {
