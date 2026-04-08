@@ -4,7 +4,7 @@
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 	import { cn } from '$lib/utils.js';
-	import { Camera, PictureInPicture2, Volume2, VolumeOff, Settings } from 'lucide-svelte';
+	import { Camera, PictureInPicture2, Volume2, VolumeOff, VideoOff, Settings } from 'lucide-svelte';
 	import CameraSettingsDialog from '$lib/components/camera/CameraSettingsDialog.svelte';
 
 	let {
@@ -23,12 +23,24 @@
 	let camera = $derived(cameraStore.cameras.find((c) => c.device_id === deviceId));
 	let isMuted = $derived(settingsStore.isCameraMuted(deviceId));
 
+	// Check if the seek target falls within this camera's coverage
+	let hasCoverageAtSeek = $derived.by(() => {
+		const target = scrubberStore.seekTarget;
+		if (target === null) return true; // live mode — always show
+		const coverage = scrubberStore.cameraCoverage.get(deviceId);
+		if (!coverage || coverage.length === 0) return false;
+		// Check if seek time falls within any coverage span (already merged with 30s gap threshold)
+		return coverage.some((s) => target >= s.start && target <= s.end);
+	});
+
 	// Live: sliding window manifest, hls.js polls for new segments.
 	// VOD: 30-min window from seek point for continuous archive playback.
+	// Empty string when no coverage at seek time — HlsPlayer won't load.
 	let hlsSrc = $derived.by(() => {
 		const id = encodeURIComponent(deviceId);
 		const target = scrubberStore.seekTarget;
 		if (target === null) return `/hls/${id}/live.m3u8`;
+		if (!hasCoverageAtSeek) return '';
 		const from = Math.floor(target * 1000);
 		const to = from + 30 * 60 * 1000;
 		return `/hls/${id}/vod.m3u8?from=${from}&to=${to}`;
@@ -87,12 +99,21 @@
 	ondblclick={() => settingsStore.openCameraView(deviceId)}
 >
 	<div class="absolute inset-0">
-		<HlsPlayer
-			src={hlsSrc}
-			muted={isMuted}
-			seekTo={scrubberStore.seekTarget ?? -1}
-			onError={(err) => console.warn(`HLS error for ${deviceId}:`, err)}
-		/>
+		{#if hlsSrc}
+			<HlsPlayer
+				src={hlsSrc}
+				muted={isMuted}
+				seekTo={scrubberStore.seekTarget ?? -1}
+				onError={(err) => console.warn(`HLS error for ${deviceId}:`, err)}
+			/>
+		{:else}
+			<div class="w-full h-full grid place-items-center bg-black/80">
+				<div class="flex flex-col items-center gap-2 text-muted-foreground">
+					<VideoOff class="h-8 w-8 opacity-40" />
+					<span class="text-xs">No footage</span>
+				</div>
+			</div>
+		{/if}
 	</div>
 
 	<!-- Top gradient overlay -->
