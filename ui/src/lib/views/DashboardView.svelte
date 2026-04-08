@@ -231,10 +231,10 @@
 								</td>
 								<td class="px-4 py-2.5">
 									<span class={cn("inline-flex items-center gap-1.5",
-										camera.online ? 'text-green-500' : 'text-red-500'
+										camera.online ? 'text-green-500' : 'text-muted-foreground'
 									)}>
 										<span class={cn("h-1.5 w-1.5 rounded-full",
-											camera.online ? 'bg-green-500' : 'bg-red-500'
+											camera.online ? 'bg-green-500' : 'bg-muted-foreground/40'
 										)}></span>
 										{camera.online ? 'Online' : 'Offline'}
 									</span>

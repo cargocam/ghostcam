@@ -122,14 +122,14 @@
 					<div class="flex items-center gap-2">
 						<span class={cn(
 							"h-2.5 w-2.5 rounded-full",
-							camera.online ? "bg-primary animate-pulse" : "bg-destructive"
+							camera.online ? "bg-primary animate-pulse" : "bg-muted-foreground/40"
 						)}></span>
 						<span class="text-sm font-medium text-white">{displayName}</span>
 						<span class={cn(
 							"text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded",
-							camera.online ? "bg-primary/20 text-primary" : "bg-destructive/20 text-destructive"
+							camera.online ? "bg-primary/20 text-primary" : "bg-white/10 text-white/40"
 						)}>
-							{camera.online ? 'LIVE' : 'OFF'}
+							{camera.online ? 'LIVE' : 'OFFLINE'}
 						</span>
 					</div>
 				</div>

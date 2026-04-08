@@ -17,7 +17,7 @@
 		featured?: boolean;
 	} = $props();
 
-	let isOnline = $derived(cameraStore.isOnline(deviceId));
+	let isOnline = $derived(cameraStore.getCamera(deviceId)?.online ?? false);
 	let isSelected = $derived(cameraStore.selectedId === deviceId);
 	let camera = $derived(cameraStore.cameras.find((c) => c.device_id === deviceId));
 	let isMuted = $derived(settingsStore.isCameraMuted(deviceId));
