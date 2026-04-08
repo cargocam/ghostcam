@@ -24,15 +24,16 @@
 	let isMuted = $derived(settingsStore.isCameraMuted(deviceId));
 
 	// Live: sliding window manifest, hls.js polls for new segments.
-	// VOD: tight window from seek point, finite playlist.
+	// VOD: 30-min window from seek point for continuous archive playback.
 	let hlsSrc = $derived.by(() => {
 		const id = encodeURIComponent(deviceId);
 		const target = scrubberStore.seekTarget;
 		if (target === null) return `/hls/${id}/live.m3u8`;
 		const from = Math.floor(target * 1000);
-		const to = from + 2 * 60 * 1000;
+		const to = from + 30 * 60 * 1000;
 		return `/hls/${id}/vod.m3u8?from=${from}&to=${to}`;
 	});
+
 
 	let videoElement = $state<HTMLVideoElement | undefined>(undefined);
 	let cardEl = $state<HTMLButtonElement | undefined>(undefined);
@@ -89,6 +90,7 @@
 		<HlsPlayer
 			src={hlsSrc}
 			muted={isMuted}
+			seekTo={scrubberStore.seekTarget ?? -1}
 			onError={(err) => console.warn(`HLS error for ${deviceId}:`, err)}
 		/>
 	</div>

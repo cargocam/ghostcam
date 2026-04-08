@@ -6,11 +6,13 @@
 	let {
 		src,
 		muted = false,
+		seekTo = -1,
 		class: className = '',
 		onError = undefined,
 	}: {
 		src: string;
 		muted?: boolean;
+		seekTo?: number;
 		class?: string;
 		onError?: (error: string) => void;
 	} = $props();
@@ -23,6 +25,7 @@
 	$effect(() => {
 		if (!videoEl || !src) return;
 		const mediaEl = videoEl;
+		const targetSeek = seekTo;
 		loading = false;
 		noFootage = false;
 
@@ -37,6 +40,23 @@
 			instance.attachMedia(mediaEl);
 			instance.on(Hls.Events.MANIFEST_PARSED, () => {
 				noFootage = false;
+
+				// For VOD playback: seek to the exact time within the manifest
+				// using program date time. hls.js exposes playingDate after
+				// attaching, but the simplest approach is to compute the offset
+				// from the manifest start and set currentTime.
+				if (targetSeek > 0 && instance.levels?.[0]?.details) {
+					const details = instance.levels[0].details;
+					// programDateTime of the first fragment (ms)
+					const firstPDT = details.fragments[0]?.programDateTime;
+					if (firstPDT) {
+						const offsetSec = targetSeek - firstPDT / 1000;
+						if (offsetSec > 0) {
+							mediaEl.currentTime = offsetSec;
+						}
+					}
+				}
+
 				mediaEl.play().catch(() => {});
 			});
 			instance.on(Hls.Events.FRAG_LOADING, () => { loading = true; });
@@ -45,7 +65,6 @@
 				const errMsg = data.error instanceof Error ? data.error.message : String(data.error ?? '');
 				onError?.(`type=${data.type} details=${data.details} fatal=${data.fatal ? '1' : '0'} msg=${errMsg}`);
 				if (data.fatal) {
-					// Manifest 404 = no footage at this time
 					if (data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) {
 						noFootage = true;
 						loading = false;
