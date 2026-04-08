@@ -55,13 +55,18 @@ func (h *Handlers) GetLiveManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Derive MEDIA-SEQUENCE from the first segment's timestamp so it
+	// increments as the sliding window advances. hls.js uses this to detect
+	// new segments vs stale manifest — a static 0 causes "media sequence
+	// mismatch" errors on reload.
+	mediaSeq := segments[0].StartTS / (segmentDurationSecs * 1000)
+
 	var b strings.Builder
 	b.WriteString("#EXTM3U\n")
 	b.WriteString("#EXT-X-VERSION:7\n")
 	b.WriteString(fmt.Sprintf("#EXT-X-TARGETDURATION:%d\n", segmentDurationSecs))
 	b.WriteString("#EXT-X-INDEPENDENT-SEGMENTS\n")
-	// Use first segment's sequence number so hls.js tracks discontinuities
-	b.WriteString(fmt.Sprintf("#EXT-X-MEDIA-SEQUENCE:%d\n", 0))
+	b.WriteString(fmt.Sprintf("#EXT-X-MEDIA-SEQUENCE:%d\n", mediaSeq))
 
 	for _, seg := range segments {
 		durationSecs := float64(seg.EndTS-seg.StartTS) / 1000.0

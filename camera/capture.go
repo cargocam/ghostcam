@@ -100,7 +100,6 @@ func runTestFileLoop(ctx context.Context, testFile, pattern string, startNum int
 		"-segment_time", fmt.Sprintf("%d", segmentDurationSecs),
 		"-segment_format", "mpegts",
 		"-segment_start_number", fmt.Sprintf("%d", startNum),
-		"-reset_timestamps", "1",
 		pattern,
 	)
 

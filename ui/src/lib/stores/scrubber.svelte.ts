@@ -7,8 +7,11 @@ class ScrubberStore {
 	availableWindow = $state<{ start: number; end: number } | null>(null);
 
 	private animationFrame: number | null = null;
+	/** Wall-clock time when playback started (for VOD tick offset). */
+	private playbackStartWall: number = 0;
+	private playbackStartTime: number = 0;
 
-	initialize() { this.startLiveTick(); }
+	initialize() { this.startTick(); }
 	destroy() { this.stopTick(); }
 
 	/** Click on timeline — seek to that time. */
@@ -16,14 +19,17 @@ class ScrubberStore {
 		this.isLive = false;
 		this.seekTarget = time;
 		this.playheadTime = time;
-		this.stopTick();
+		// Start advancing the playhead in real time from the seek point
+		this.playbackStartWall = Date.now() / 1000;
+		this.playbackStartTime = time;
+		this.startTick();
 	}
 
 	goLive() {
 		this.isLive = true;
 		this.seekTarget = null;
 		this.playheadTime = Date.now() / 1000;
-		this.startLiveTick();
+		this.startTick();
 	}
 
 	setAvailableWindow(window: { start: number; end: number }) {
@@ -36,8 +42,6 @@ class ScrubberStore {
 		const merged: { start: number; end: number; hasMotion: boolean }[] = [];
 		for (const seg of sorted) {
 			const last = merged[merged.length - 1];
-			// Merge contiguous/overlapping segments regardless of motion state.
-			// Motion state is for bar coloring only, not for splitting coverage.
 			if (last && seg.start - last.end <= GAP_THRESHOLD_SEC) {
 				last.end = Math.max(last.end, seg.end);
 				if (seg.hasMotion) last.hasMotion = true;
@@ -48,13 +52,17 @@ class ScrubberStore {
 		this.cameraCoverage = new Map(this.cameraCoverage).set(deviceId, merged);
 	}
 
-	private startLiveTick() {
+	private startTick() {
 		this.stopTick();
 		const tick = () => {
 			if (this.isLive) {
 				this.playheadTime = Date.now() / 1000;
-				this.animationFrame = requestAnimationFrame(tick);
+			} else if (this.seekTarget !== null) {
+				// VOD playback: advance in real time from the seek point
+				const elapsed = Date.now() / 1000 - this.playbackStartWall;
+				this.playheadTime = this.playbackStartTime + elapsed;
 			}
+			this.animationFrame = requestAnimationFrame(tick);
 		};
 		this.animationFrame = requestAnimationFrame(tick);
 	}
