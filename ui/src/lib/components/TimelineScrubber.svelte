@@ -45,6 +45,22 @@
 		return windowStart + pct * (windowEnd - windowStart);
 	}
 
+	let hoverTime = $state<number | null>(null);
+	let hoverPercent = $state<number>(0);
+
+	function onMouseMove(e: MouseEvent) {
+		if (dragging) return;
+		if (!trackEl) return;
+		const rect = trackEl.getBoundingClientRect();
+		const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+		hoverPercent = pct * 100;
+		hoverTime = windowStart + pct * (windowEnd - windowStart);
+	}
+
+	function onMouseLeave() {
+		hoverTime = null;
+	}
+
 	function onPointerDown(e: PointerEvent) {
 		e.preventDefault();
 		dragging = true;
@@ -137,6 +153,8 @@
 		tabindex="0"
 		aria-valuenow={scrubberStore.playheadTime}
 		onpointerdown={onPointerDown}
+		onmousemove={onMouseMove}
+		onmouseleave={onMouseLeave}
 	>
 		<!-- Track background -->
 		<div class="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-muted"></div>
@@ -169,6 +187,16 @@
 				title="Motion detected"
 			></div>
 		{/each}
+
+		<!-- Hover tooltip -->
+		{#if hoverTime !== null && !dragging}
+			<div
+				class="absolute bottom-5 -translate-x-1/2 whitespace-nowrap rounded bg-popover px-2 py-1 text-[11px] font-mono text-popover-foreground shadow-lg pointer-events-none border border-border z-20"
+				style="left: {hoverPercent}%"
+			>
+				{formatTime(hoverTime)}
+			</div>
+		{/if}
 
 		<!-- Playhead + tooltip -->
 		<div
