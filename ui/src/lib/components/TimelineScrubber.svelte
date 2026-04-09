@@ -11,7 +11,7 @@
 	const LIVE_MARGIN_SECS = 5;
 	const SEEK_MARGIN_SECS = 30;
 	const GAP_THRESHOLD = 30;
-	const ZOOM_DELAY_MS = 2200;
+	const ZOOM_DELAY_MS = 1800;
 	const ZOOM_DURATION_MS = 600;
 
 	let frozenEnd = $state(Date.now() / 1000);
@@ -97,6 +97,40 @@
 		zoomAnim = requestAnimationFrame(animate);
 	}
 
+	// Edge panning: when dragging near the edge of the zoomed window,
+	// slowly shift the window in that direction.
+	const PAN_EDGE_ZONE = 0.15; // 15% of track width on each side
+	const PAN_SPEED = 30; // seconds per second of panning
+	let panFrame: number | null = null;
+	let lastPanTime = 0;
+
+	function startEdgePan(getPixelRatio: () => number) {
+		stopEdgePan();
+		lastPanTime = performance.now();
+		const tick = (now: number) => {
+			if (!zoomOverride) { panFrame = null; return; }
+			const dt = (now - lastPanTime) / 1000;
+			lastPanTime = now;
+			const ratio = getPixelRatio();
+			// ratio: -1 = hard left, +1 = hard right, 0 = center (no pan)
+			if (Math.abs(ratio) > 0) {
+				const shift = ratio * PAN_SPEED * dt;
+				zoomOverride = {
+					start: zoomOverride.start + shift,
+					end: zoomOverride.end + shift,
+				};
+				// Update playhead to match the shifted window edge
+				scrubberStore.playheadTime += shift;
+			}
+			panFrame = requestAnimationFrame(tick);
+		};
+		panFrame = requestAnimationFrame(tick);
+	}
+
+	function stopEdgePan() {
+		if (panFrame != null) { cancelAnimationFrame(panFrame); panFrame = null; }
+	}
+
 	function onPointerDown(e: PointerEvent) {
 		e.preventDefault();
 		dragging = true;
@@ -107,7 +141,6 @@
 		const clickTime = timeFromEvent(e);
 		let zoomed = false;
 
-		// Snapshot the current window for zoom animation start
 		const snapStart = windowStart;
 		const snapEnd = windowEnd;
 
@@ -118,18 +151,37 @@
 			animateZoom(snapStart, snapEnd, clickTime - halfZoom, clickTime + halfZoom);
 		}, ZOOM_DELAY_MS);
 
+		let panRatio = 0;
+		const getPanRatio = () => panRatio;
+
 		const onMove = (ev: PointerEvent) => {
 			scrubberStore.playheadTime = timeFromEvent(ev);
+
+			// Edge panning when zoomed
+			if (zoomed && zoomOverride && trackEl) {
+				const rect = trackEl.getBoundingClientRect();
+				const pct = (ev.clientX - rect.left) / rect.width;
+				if (pct < PAN_EDGE_ZONE) {
+					panRatio = -(1 - pct / PAN_EDGE_ZONE); // -1 at far left
+					if (!panFrame) startEdgePan(getPanRatio);
+				} else if (pct > 1 - PAN_EDGE_ZONE) {
+					panRatio = (pct - (1 - PAN_EDGE_ZONE)) / PAN_EDGE_ZONE; // +1 at far right
+					if (!panFrame) startEdgePan(getPanRatio);
+				} else {
+					panRatio = 0;
+					stopEdgePan();
+				}
+			}
 		};
 		const onUp = (ev: PointerEvent) => {
 			dragging = false;
 			scrubberStore.dragging = false;
 			stopZoom();
+			stopEdgePan();
 			window.removeEventListener('pointermove', onMove);
 			window.removeEventListener('pointerup', onUp);
 			scrubberStore.seekTo(timeFromEvent(ev));
 			if (zoomed && zoomOverride) {
-				// Animate back to natural window
 				const zs = zoomOverride.start;
 				const ze = zoomOverride.end;
 				animateZoom(zs, ze, naturalStart, naturalEnd, () => {
