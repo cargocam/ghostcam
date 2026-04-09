@@ -86,6 +86,13 @@ func BuildRouter(app *App) http.Handler {
 		// SSE
 		r.Get("/events", h.SSE)
 
+		// Events / notifications
+		r.Get("/api/v1/events", h.ListEvents)
+		r.Get("/api/v1/events/unread", h.GetUnreadCount)
+		r.Patch("/api/v1/events/{eventID}/read", h.MarkEventRead)
+		r.Post("/api/v1/events/read-all", h.MarkAllEventsRead)
+		r.Delete("/api/v1/events/{eventID}", h.DismissEvent)
+
 		// HLS
 		r.Get("/hls/{deviceID}/live.m3u8", h.GetLiveManifest)
 		r.Get("/hls/{deviceID}/vod.m3u8", h.GetVodManifest)

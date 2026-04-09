@@ -182,3 +182,52 @@ export async function fetchTelemetryRange(
 	if (!res.ok) throw new Error(`fetchTelemetryRange failed: ${res.status}`);
 	return res.json();
 }
+
+// --- Events / Notifications ---
+
+export interface ServerEvent {
+	id: string;
+	type: string;
+	device_id: string;
+	data: string; // JSON string
+	created_at: number;
+	read: boolean;
+	dismissed: boolean;
+}
+
+export async function fetchEvents(count = 50, before?: string): Promise<ServerEvent[]> {
+	const params = new URLSearchParams({ count: String(count) });
+	if (before) params.set('before', before);
+	const res = await fetch(`${API_BASE}/events?${params}`, { credentials: 'include' });
+	if (!res.ok) throw new Error(`fetchEvents failed: ${res.status}`);
+	const data = await res.json();
+	return data.events ?? [];
+}
+
+export async function fetchUnreadCount(): Promise<number> {
+	const res = await fetch(`${API_BASE}/events/unread`, { credentials: 'include' });
+	if (!res.ok) return 0;
+	const data = await res.json();
+	return data.count ?? 0;
+}
+
+export async function markEventRead(eventId: string): Promise<void> {
+	await fetch(`${API_BASE}/events/${encodeURIComponent(eventId)}/read`, {
+		method: 'PATCH',
+		credentials: 'include',
+	});
+}
+
+export async function markAllEventsRead(): Promise<void> {
+	await fetch(`${API_BASE}/events/read-all`, {
+		method: 'POST',
+		credentials: 'include',
+	});
+}
+
+export async function dismissEvent(eventId: string): Promise<void> {
+	await fetch(`${API_BASE}/events/${encodeURIComponent(eventId)}`, {
+		method: 'DELETE',
+		credentials: 'include',
+	});
+}

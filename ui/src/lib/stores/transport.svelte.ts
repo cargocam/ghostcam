@@ -34,8 +34,10 @@ class TransportStore {
 			// Fetch coverage for all cameras
 			await Promise.all(cameras.map((c) => this.refreshCoverage(c.device_id)));
 
+			// Load persisted events/notifications
+			await alertsStore.initialize();
+
 			// Connect SSE for realtime telemetry
-			this.connectSse();
 
 			// Refresh online flags every 5s (detects cameras that stopped sending telemetry)
 			this.onlineRefreshInterval = setInterval(() => {
@@ -96,11 +98,11 @@ class TransportStore {
 
 		es.addEventListener('motion_detected', (e: MessageEvent) => {
 			try {
-				const data = JSON.parse(e.data) as { device_id: string; segment_id: string; start_ts: number; end_ts: number };
+				const data = JSON.parse(e.data) as { event_id?: string; device_id: string; segment_id: string; start_ts: number; end_ts: number };
 				if (settingsStore.isMotionAlertsMuted(data.device_id)) return;
 				const cam = cameraStore.getCamera(data.device_id);
 				const name = cam?.device_name ?? data.device_id;
-				alertsStore.addAlert('motion', data.device_id, name, 'Motion detected');
+				alertsStore.addAlert('motion', data.device_id, name, 'Motion detected', data.event_id);
 			} catch { /* ignore */ }
 		});
 
@@ -124,8 +126,15 @@ class TransportStore {
 
 		es.addEventListener('storage_capped', (e: MessageEvent) => {
 			try {
-				const data = JSON.parse(e.data) as { device_id?: string; storage_bytes?: number; limit_gb?: number };
-				alertsStore.addAlert('storage_capped', data.device_id ?? '', 'Storage', 'Storage limit reached. Uploads paused.');
+				const data = JSON.parse(e.data) as { event_id?: string; device_id?: string; storage_bytes?: number; limit_gb?: number };
+				alertsStore.addAlert('storage_capped', data.device_id ?? '', 'Storage', 'Storage limit reached. Uploads paused.', data.event_id);
+			} catch { /* ignore */ }
+		});
+
+		es.addEventListener('events_sync', (e: MessageEvent) => {
+			try {
+				const data = JSON.parse(e.data) as { action: string; event_id?: string };
+				alertsStore.applySync(data.action, data.event_id);
 			} catch { /* ignore */ }
 		});
 

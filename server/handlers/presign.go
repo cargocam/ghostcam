@@ -12,6 +12,7 @@ import (
 	"github.com/cargocam/ghostcam/server/billing"
 	"github.com/cargocam/ghostcam/server/ctxutil"
 	"github.com/cargocam/ghostcam/server/db"
+	"github.com/cargocam/ghostcam/server/redis"
 	"github.com/cargocam/ghostcam/server/s3"
 	"github.com/google/uuid"
 	goredis "github.com/redis/go-redis/v9"
@@ -94,7 +95,16 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 						"start_ts":   u.StartTS,
 						"end_ts":     u.EndTS,
 					})
-					if err := h.Redis.RDB().Publish(ctx, fmt.Sprintf("motion:%s", userID), motionPayload).Err(); err != nil {
+					// Persist to event stream + include event_id in SSE payload
+					eventID, _ := redis.WriteEvent(ctx, h.Redis.RDB(), userID, deviceID, "motion_detected", string(motionPayload))
+					motionWithID, _ := json.Marshal(map[string]any{
+						"event_id":   eventID,
+						"device_id":  deviceID,
+						"segment_id": u.SegmentID,
+						"start_ts":   u.StartTS,
+						"end_ts":     u.EndTS,
+					})
+					if err := h.Redis.RDB().Publish(ctx, fmt.Sprintf("motion:%s", userID), motionWithID).Err(); err != nil {
 						slog.Debug("failed to publish motion event", "error", err)
 					}
 				}
@@ -134,7 +144,15 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 						"storage_bytes": storageLimitBytes,
 						"limit_gb":      *tier.StorageLimitGB,
 					})
-					h.Redis.RDB().Publish(ctx, fmt.Sprintf("storage_capped:%s", userID), capPayload)
+					eventID, _ := redis.WriteEvent(ctx, h.Redis.RDB(), userID, deviceID, "storage_capped", string(capPayload))
+					capWithID, _ := json.Marshal(map[string]any{
+						"event_id":      eventID,
+						"user_id":       userID,
+						"device_id":     deviceID,
+						"storage_bytes": storageLimitBytes,
+						"limit_gb":      *tier.StorageLimitGB,
+					})
+					h.Redis.RDB().Publish(ctx, fmt.Sprintf("storage_capped:%s", userID), capWithID)
 				}
 			}
 

@@ -1,69 +1,103 @@
+import {
+	fetchEvents,
+	markEventRead as apiMarkRead,
+	markAllEventsRead as apiMarkAllRead,
+	dismissEvent as apiDismiss,
+	type ServerEvent,
+} from '$lib/signaling.js';
+
 export type AlertType = 'disconnect' | 'reconnect' | 'motion' | 'storage_capped';
 
 export interface Alert {
-	id: number;
+	id: string; // Redis stream ID (or client-generated for ephemeral alerts)
 	type: AlertType;
 	cameraId: string;
 	cameraName: string;
 	message: string;
 	timestamp: number;
 	read: boolean;
+	/** Server-persisted events have a stream ID; client-only alerts do not. */
+	persisted: boolean;
 }
 
-const MAX_ALERTS = 100;
+const MAX_ALERTS = 200;
 
-/** Alert types that are state-based (not time-based) and should upsert
- *  instead of creating duplicates. Keyed by type + cameraId. */
+/** Alert types that are state-based and should upsert instead of duplicating. */
 const UPSERT_TYPES: Set<AlertType> = new Set(['storage_capped', 'disconnect', 'reconnect']);
+
+let clientIdCounter = 0;
 
 class AlertsStore {
 	alerts = $state<Alert[]>([]);
 	enabled = $state(true);
-
-	private nextId = 1;
+	initialized = $state(false);
 
 	unreadCount = $derived(this.alerts.filter((a) => !a.read).length);
 
-	addAlert(type: AlertType, cameraId: string, cameraName: string, message: string) {
+	/** Load persisted events from server on startup. */
+	async initialize() {
+		try {
+			const events = await fetchEvents(100);
+			this.alerts = events.map(serverEventToAlert);
+			this.initialized = true;
+		} catch {
+			this.initialized = true; // proceed even if server unavailable
+		}
+	}
+
+	/** Add an alert from an SSE event. Server-persisted events include an event_id. */
+	addAlert(type: AlertType, cameraId: string, cameraName: string, message: string, eventId?: string) {
 		if (!this.enabled) return;
 
 		// State-based alerts: upsert by type + cameraId
 		if (UPSERT_TYPES.has(type)) {
 			const idx = this.alerts.findIndex((a) => a.type === type && a.cameraId === cameraId);
 			if (idx >= 0) {
-				// Bump to top with fresh timestamp, mark unread
 				const existing = this.alerts[idx];
 				existing.timestamp = Date.now();
 				existing.message = message;
 				existing.read = false;
+				if (eventId) existing.id = eventId;
 				this.alerts = [existing, ...this.alerts.filter((_, i) => i !== idx)];
 				return;
 			}
 		}
 
 		const alert: Alert = {
-			id: this.nextId++,
+			id: eventId ?? `client-${++clientIdCounter}`,
 			type,
 			cameraId,
 			cameraName,
 			message,
 			timestamp: Date.now(),
 			read: false,
+			persisted: !!eventId,
 		};
 
 		this.alerts = [alert, ...this.alerts].slice(0, MAX_ALERTS);
 	}
 
-	markRead(id: number) {
-		const idx = this.alerts.findIndex((a) => a.id === id);
-		if (idx >= 0) {
-			this.alerts[idx].read = true;
+	async markRead(id: string) {
+		const alert = this.alerts.find((a) => a.id === id);
+		if (!alert || alert.read) return;
+		alert.read = true;
+		if (alert.persisted) {
+			try { await apiMarkRead(id); } catch { /* SSE sync will handle */ }
 		}
 	}
 
-	markAllRead() {
+	async markAllRead() {
 		for (const alert of this.alerts) {
 			alert.read = true;
+		}
+		try { await apiMarkAllRead(); } catch { /* best effort */ }
+	}
+
+	async dismiss(id: string) {
+		const alert = this.alerts.find((a) => a.id === id);
+		this.alerts = this.alerts.filter((a) => a.id !== id);
+		if (alert?.persisted) {
+			try { await apiDismiss(id); } catch { /* best effort */ }
 		}
 	}
 
@@ -71,9 +105,55 @@ class AlertsStore {
 		this.alerts = [];
 	}
 
-	dismiss(id: number) {
-		this.alerts = this.alerts.filter((a) => a.id !== id);
+	// --- Cross-client sync via SSE ---
+
+	/** Apply a sync action from another client. */
+	applySync(action: string, eventId?: string) {
+		switch (action) {
+			case 'read':
+				if (eventId) {
+					const a = this.alerts.find((x) => x.id === eventId);
+					if (a) a.read = true;
+				}
+				break;
+			case 'read_all':
+				for (const a of this.alerts) a.read = true;
+				break;
+			case 'dismiss':
+				if (eventId) {
+					this.alerts = this.alerts.filter((a) => a.id !== eventId);
+				}
+				break;
+		}
 	}
+}
+
+function serverEventToAlert(e: ServerEvent): Alert {
+	let type: AlertType = 'motion';
+	if (e.type === 'storage_capped') type = 'storage_capped';
+	else if (e.type === 'disconnect') type = 'disconnect';
+	else if (e.type === 'reconnect') type = 'reconnect';
+
+	// Try to extract a readable message from the data JSON
+	let message = e.type;
+	let cameraName = e.device_id?.slice(0, 8) ?? '';
+	try {
+		const d = JSON.parse(e.data);
+		if (e.type === 'motion_detected') message = 'Motion detected';
+		if (e.type === 'storage_capped') message = `Storage limit reached`;
+		if (d.device_id) cameraName = d.device_id.slice(0, 8);
+	} catch { /* use defaults */ }
+
+	return {
+		id: e.id,
+		type,
+		cameraId: e.device_id,
+		cameraName,
+		message,
+		timestamp: e.created_at,
+		read: e.read,
+		persisted: true,
+	};
 }
 
 export const alertsStore = new AlertsStore();
