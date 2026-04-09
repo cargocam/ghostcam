@@ -5,6 +5,8 @@
 
 	let trackEl = $state<HTMLDivElement | undefined>(undefined);
 	let dragging = $state(false);
+	/** -1 = panning left, 0 = not panning, 1 = panning right */
+	let panDirection = $state(0);
 
 	const MIN_WINDOW_SECS = 5 * 60;
 	const ZOOMED_WINDOW_SECS = 600;
@@ -23,6 +25,7 @@
 	let zoomAnim: number | null = null;
 	/** When non-null, overrides the computed window for zoom animation. */
 	let zoomOverride = $state<{ start: number; end: number } | null>(null);
+	let isZoomed = $derived(zoomOverride !== null);
 
 	let margin = $derived(scrubberStore.isLive ? LIVE_MARGIN_SECS : SEEK_MARGIN_SECS);
 
@@ -99,7 +102,7 @@
 
 	// Edge panning: when dragging near the edge of the zoomed window,
 	// slowly shift the window in that direction.
-	const PAN_EDGE_ZONE = 0.15; // 15% of track width on each side
+	const PAN_EDGE_ZONE = 0.0375; // ~4% of track width on each side
 	const PAN_SPEED = 30; // seconds per second of panning
 	let panFrame: number | null = null;
 	let lastPanTime = 0;
@@ -162,13 +165,16 @@
 				const rect = trackEl.getBoundingClientRect();
 				const pct = (ev.clientX - rect.left) / rect.width;
 				if (pct < PAN_EDGE_ZONE) {
-					panRatio = -(1 - pct / PAN_EDGE_ZONE); // -1 at far left
+					panRatio = -(1 - pct / PAN_EDGE_ZONE);
+					panDirection = -1;
 					if (!panFrame) startEdgePan(getPanRatio);
 				} else if (pct > 1 - PAN_EDGE_ZONE) {
-					panRatio = (pct - (1 - PAN_EDGE_ZONE)) / PAN_EDGE_ZONE; // +1 at far right
+					panRatio = (pct - (1 - PAN_EDGE_ZONE)) / PAN_EDGE_ZONE;
+					panDirection = 1;
 					if (!panFrame) startEdgePan(getPanRatio);
 				} else {
 					panRatio = 0;
+					panDirection = 0;
 					stopEdgePan();
 				}
 			}
@@ -176,6 +182,7 @@
 		const onUp = (ev: PointerEvent) => {
 			dragging = false;
 			scrubberStore.dragging = false;
+			panDirection = 0;
 			stopZoom();
 			stopEdgePan();
 			window.removeEventListener('pointermove', onMove);
@@ -273,6 +280,24 @@
 	>
 		<!-- Track background -->
 		<div class="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-muted"></div>
+
+		<!-- Pan edge indicators (visible when zoomed) -->
+		{#if isZoomed}
+			<div
+				class="absolute left-0 top-1/2 -translate-y-1/2 text-[10px] font-bold pointer-events-none select-none z-20 transition-opacity duration-150"
+				class:opacity-100={panDirection === -1}
+				class:opacity-30={panDirection !== -1}
+			>
+				<span class="text-muted-foreground">&laquo;</span>
+			</div>
+			<div
+				class="absolute right-0 top-1/2 -translate-y-1/2 text-[10px] font-bold pointer-events-none select-none z-20 transition-opacity duration-150"
+				class:opacity-100={panDirection === 1}
+				class:opacity-30={panDirection !== 1}
+			>
+				<span class="text-muted-foreground">&raquo;</span>
+			</div>
+		{/if}
 
 		<!-- Union coverage (semi-transparent when a camera is selected) -->
 		{#each unionBars as bar}
