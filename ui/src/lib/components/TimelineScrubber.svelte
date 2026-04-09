@@ -315,7 +315,7 @@
 				? "text-emerald-400 cursor-default"
 				: "bg-emerald-500 text-black hover:bg-emerald-400 cursor-pointer",
 		)}
-		onclick={() => { zoomLevel = 0; scrubberStore.goLive(); }}
+		onclick={() => scrubberStore.goLive()}
 		disabled={scrubberStore.isLive}
 	>
 		LIVE
