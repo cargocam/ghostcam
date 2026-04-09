@@ -393,7 +393,7 @@
 			onclick={toggleSatellite}
 			class="rounded-md bg-background/90 backdrop-blur px-3 py-1.5 text-xs font-medium shadow-md border hover:bg-accent transition-colors"
 		>
-			{satellite ? 'Map' : 'Satellite'}
+			{satellite ? 'Street' : 'Satellite'}
 		</button>
 	</div>
 
