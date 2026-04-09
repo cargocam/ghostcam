@@ -6,7 +6,7 @@ import (
 	"math"
 	"time"
 
-	"github.com/cargocam/ghostcam/api"
+	"github.com/cargocam/ghostcam/common"
 )
 
 // GetDeviceSerial returns a stored or generated UUID on non-Linux platforms.
@@ -18,7 +18,7 @@ func GetDeviceSerial(dataDir string) string {
 }
 
 // ReadTelemetry returns synthetic sensor values for development.
-func ReadTelemetry() api.TelemetryDatagram {
+func ReadTelemetry() common.TelemetryDatagram {
 	uptime := uint32(time.Since(time.Unix(0, 0)).Seconds()) % 86400
 	cpu := uint32(15)
 	mem := uint32(256)
@@ -44,7 +44,7 @@ func ReadTelemetry() api.TelemetryDatagram {
 	alt := float32(50.0)
 	gpsFix := uint8(3)
 
-	return api.TelemetryDatagram{
+	return common.TelemetryDatagram{
 		TS:     nowMillis(),
 		CPU:    &cpu,
 		Mem:    &mem,

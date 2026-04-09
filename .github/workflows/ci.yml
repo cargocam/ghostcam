@@ -21,13 +21,13 @@ jobs:
           filters: |
             camera:
               - 'camera/**'
-              - 'api/**'
+              - 'common/**'
               - 'cmd/ghostcam-camera/**'
               - 'go.mod'
               - 'go.sum'
             server:
               - 'server/**'
-              - 'api/**'
+              - 'common/**'
               - 'cmd/ghostcam-server/**'
               - 'go.mod'
               - 'go.sum'

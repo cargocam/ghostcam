@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/cargocam/ghostcam/api"
+	"github.com/cargocam/ghostcam/common"
 	goredis "github.com/redis/go-redis/v9"
 )
 
@@ -34,7 +34,7 @@ type TelemetryEntry struct {
 }
 
 // WriteTelemetry writes a telemetry datagram to Redis using XADD with MINID trimming.
-func WriteTelemetry(ctx context.Context, rdb *goredis.Client, deviceID string, d *api.TelemetryDatagram) {
+func WriteTelemetry(ctx context.Context, rdb *goredis.Client, deviceID string, d *common.TelemetryDatagram) {
 	key := telemetryKeyPrefix + deviceID
 	serverTS := uint64(time.Now().UnixMilli())
 	minID := serverTS - retentionMs
@@ -57,7 +57,7 @@ func WriteTelemetry(ctx context.Context, rdb *goredis.Client, deviceID string, d
 	}
 }
 
-func datagramToFields(d *api.TelemetryDatagram, serverTS uint64) map[string]interface{} {
+func datagramToFields(d *common.TelemetryDatagram, serverTS uint64) map[string]interface{} {
 	fields := map[string]interface{}{
 		"ts":        strconv.FormatUint(d.TS, 10),
 		"server_ts": strconv.FormatUint(serverTS, 10),

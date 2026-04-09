@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/cargocam/ghostcam/api"
+	"github.com/cargocam/ghostcam/common"
 	"github.com/cargocam/ghostcam/server/billing"
 	"github.com/cargocam/ghostcam/server/ctxutil"
 	"github.com/cargocam/ghostcam/server/db"
@@ -29,7 +29,7 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body api.PresignRequest
+	var body common.PresignRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -156,7 +156,7 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 
-			writeJSON(w, http.StatusOK, api.PresignResponse{URLs: nil, StorageCapped: true})
+			writeJSON(w, http.StatusOK, common.PresignResponse{URLs: nil, StorageCapped: true})
 			return
 		}
 	}
@@ -168,7 +168,7 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := uint64(time.Now().Unix())
-	urls := make([]api.PresignedUrl, 0, count)
+	urls := make([]common.PresignedUrl, 0, count)
 	for i := uint32(0); i < count; i++ {
 		segmentID := uuid.New().String()
 		s3Key := s3.SegmentKey(deviceID, segmentID)
@@ -178,7 +178,7 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "", http.StatusInternalServerError)
 			return
 		}
-		urls = append(urls, api.PresignedUrl{
+		urls = append(urls, common.PresignedUrl{
 			SegmentID: segmentID,
 			S3Key:     s3Key,
 			PutURL:    putURL,
@@ -187,12 +187,12 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 5. Check if init segment needs uploading
-	var initURL *api.PresignedUrl
+	var initURL *common.PresignedUrl
 	latest, _ := h.DB.LatestSegment(ctx, deviceID)
 	if latest == nil {
 		initKey := s3.InitKey(deviceID)
 		if putURL, err := h.S3.PresignPut(ctx, initKey); err == nil {
-			initURL = &api.PresignedUrl{
+			initURL = &common.PresignedUrl{
 				SegmentID: "init",
 				S3Key:     initKey,
 				PutURL:    putURL,
@@ -201,7 +201,7 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, api.PresignResponse{URLs: urls, InitURL: initURL})
+	writeJSON(w, http.StatusOK, common.PresignResponse{URLs: urls, InitURL: initURL})
 }
 
 // getUserStorageCached returns the user's total segment storage in bytes.

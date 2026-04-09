@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cargocam/ghostcam/api"
+	"github.com/cargocam/ghostcam/common"
 )
 
 // Version is set at build time via -ldflags.
@@ -39,8 +39,8 @@ func NewClient(serverURL, apiKey, deviceID string) *Client {
 
 // PostTelemetry sends telemetry and returns pending commands.
 // POST /api/v1/cameras/:id/telemetry
-func (c *Client) PostTelemetry(ctx context.Context, telemetry api.TelemetryDatagram) ([]api.CameraCommand, error) {
-	body := api.TelemetryPollRequest{
+func (c *Client) PostTelemetry(ctx context.Context, telemetry common.TelemetryDatagram) ([]common.CameraCommand, error) {
+	body := common.TelemetryPollRequest{
 		Telemetry: telemetry,
 		FwVersion: Version,
 	}
@@ -51,7 +51,7 @@ func (c *Client) PostTelemetry(ctx context.Context, telemetry api.TelemetryDatag
 	}
 	defer respBody.Close()
 
-	var resp api.TelemetryPollResponse
+	var resp common.TelemetryPollResponse
 	if err := json.NewDecoder(respBody).Decode(&resp); err != nil {
 		return nil, fmt.Errorf("decoding telemetry response: %w", err)
 	}
@@ -60,8 +60,8 @@ func (c *Client) PostTelemetry(ctx context.Context, telemetry api.TelemetryDatag
 
 // RequestPresignedURLs requests presigned PUT URLs and confirms previously uploaded segments.
 // POST /api/v1/cameras/:id/presign
-func (c *Client) RequestPresignedURLs(ctx context.Context, count uint32, uploaded []api.UploadedSegment) (*api.PresignResponse, error) {
-	body := api.PresignRequest{
+func (c *Client) RequestPresignedURLs(ctx context.Context, count uint32, uploaded []common.UploadedSegment) (*common.PresignResponse, error) {
+	body := common.PresignRequest{
 		Count:    count,
 		Uploaded: uploaded,
 	}
@@ -72,7 +72,7 @@ func (c *Client) RequestPresignedURLs(ctx context.Context, count uint32, uploade
 	}
 	defer respBody.Close()
 
-	var resp api.PresignResponse
+	var resp common.PresignResponse
 	if err := json.NewDecoder(respBody).Decode(&resp); err != nil {
 		return nil, fmt.Errorf("decoding presign response: %w", err)
 	}
@@ -116,11 +116,11 @@ func (c *Client) UploadFile(ctx context.Context, presignedURL string, data []byt
 
 // Provision calls POST /api/v1/cameras/provision (no auth required).
 // This is a standalone function since the camera doesn't have an API key yet.
-func Provision(ctx context.Context, serverURL, token, deviceSerial string) (*api.ProvisionResponse, error) {
+func Provision(ctx context.Context, serverURL, token, deviceSerial string) (*common.ProvisionResponse, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	serverURL = strings.TrimRight(serverURL, "/")
 
-	body := api.ProvisionRequest{
+	body := common.ProvisionRequest{
 		Token:        token,
 		DeviceSerial: deviceSerial,
 		FwVersion:    Version,
@@ -149,7 +149,7 @@ func Provision(ctx context.Context, serverURL, token, deviceSerial string) (*api
 		return nil, fmt.Errorf("provisioning failed: %d — %s", resp.StatusCode, string(errBody))
 	}
 
-	var result api.ProvisionResponse
+	var result common.ProvisionResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decoding provision response: %w", err)
 	}

@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/cargocam/ghostcam/api"
+	"github.com/cargocam/ghostcam/common"
 )
 
 const (
@@ -21,7 +21,7 @@ const (
 // Returns nil on any error (missing file, corrupt, etc.) -- the worst case is
 // that the server never gets the confirm and the segment becomes an orphan,
 // which is exactly the state we'd be in without persistence.
-func loadPendingConfirms(dataDir string) []api.UploadedSegment {
+func loadPendingConfirms(dataDir string) []common.UploadedSegment {
 	if dataDir == "" {
 		return nil
 	}
@@ -29,7 +29,7 @@ func loadPendingConfirms(dataDir string) []api.UploadedSegment {
 	if err != nil {
 		return nil
 	}
-	var out []api.UploadedSegment
+	var out []common.UploadedSegment
 	if err := json.Unmarshal(data, &out); err != nil {
 		slog.Warn("corrupt pending_confirms.json, discarding", "err", err)
 		return nil
@@ -40,7 +40,7 @@ func loadPendingConfirms(dataDir string) []api.UploadedSegment {
 // savePendingConfirms writes the confirm queue atomically (tmp + rename).
 // Called after any mutation so a crash between PUT and confirm doesn't orphan
 // uploaded S3 objects.
-func savePendingConfirms(dataDir string, confirms []api.UploadedSegment) {
+func savePendingConfirms(dataDir string, confirms []common.UploadedSegment) {
 	if dataDir == "" {
 		return
 	}
@@ -68,7 +68,7 @@ func savePendingConfirms(dataDir string, confirms []api.UploadedSegment) {
 // crash or restart between the S3 PUT and the confirming presign request does
 // not leave orphaned objects in the bucket.
 func RunUploadLoop(ctx context.Context, client *Client, dataDir string, segments <-chan NewSegment) {
-	var availableURLs []api.PresignedUrl
+	var availableURLs []common.PresignedUrl
 	confirmations := loadPendingConfirms(dataDir)
 	if len(confirmations) > 0 {
 		slog.Info("resuming pending upload confirmations", "count", len(confirmations))
@@ -127,8 +127,8 @@ func uploadSegmentWithRetry(
 	client *Client,
 	dataDir string,
 	seg NewSegment,
-	availableURLs *[]api.PresignedUrl,
-	confirmations *[]api.UploadedSegment,
+	availableURLs *[]common.PresignedUrl,
+	confirmations *[]common.UploadedSegment,
 ) *NewSegment {
 	ok := uploadSegment(ctx, client, dataDir, seg, availableURLs, confirmations)
 	if ok {
@@ -166,8 +166,8 @@ func uploadSegment(
 	client *Client,
 	dataDir string,
 	seg NewSegment,
-	availableURLs *[]api.PresignedUrl,
-	confirmations *[]api.UploadedSegment,
+	availableURLs *[]common.PresignedUrl,
+	confirmations *[]common.UploadedSegment,
 ) bool {
 	// Get a presigned URL (request more if we're out)
 	if len(*availableURLs) == 0 {
@@ -213,7 +213,7 @@ func uploadSegment(
 
 	// Queue confirmation for next presign request and persist immediately so a
 	// crash before the next presign request doesn't orphan this S3 object.
-	*confirmations = append(*confirmations, api.UploadedSegment{
+	*confirmations = append(*confirmations, common.UploadedSegment{
 		SegmentID: presigned.SegmentID,
 		StartTS:   seg.StartTS,
 		EndTS:     seg.EndTS,
@@ -233,8 +233,8 @@ func replenishURLs(
 	ctx context.Context,
 	client *Client,
 	dataDir string,
-	availableURLs *[]api.PresignedUrl,
-	confirmations *[]api.UploadedSegment,
+	availableURLs *[]common.PresignedUrl,
+	confirmations *[]common.UploadedSegment,
 ) error {
 	pending := *confirmations
 	*confirmations = nil

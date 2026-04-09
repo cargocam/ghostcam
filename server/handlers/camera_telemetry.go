@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/cargocam/ghostcam/api"
+	"github.com/cargocam/ghostcam/common"
 	"github.com/cargocam/ghostcam/server/ctxutil"
 	"github.com/cargocam/ghostcam/server/redis"
 )
@@ -14,7 +14,7 @@ import (
 func (h *Handlers) PostTelemetry(w http.ResponseWriter, r *http.Request) {
 	deviceID := ctxutil.GetCameraDeviceID(r)
 
-	var body api.TelemetryPollRequest
+	var body common.TelemetryPollRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -37,13 +37,13 @@ func (h *Handlers) PostTelemetry(w http.ResponseWriter, r *http.Request) {
 		commands = nil
 	}
 
-	var apiCommands []api.CameraCommand
+	var apiCommands []common.CameraCommand
 	for _, raw := range commands {
-		var cmd api.CameraCommand
+		var cmd common.CameraCommand
 		if json.Unmarshal(raw, &cmd) == nil {
 			apiCommands = append(apiCommands, cmd)
 		}
 	}
 
-	writeJSON(w, http.StatusOK, api.TelemetryPollResponse{Commands: apiCommands})
+	writeJSON(w, http.StatusOK, common.TelemetryPollResponse{Commands: apiCommands})
 }

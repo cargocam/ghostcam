@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/cargocam/ghostcam/api"
+	"github.com/cargocam/ghostcam/common"
 )
 
 // GetDeviceSerial reads the Pi serial from /proc/cpuinfo, falling back to a
@@ -40,8 +40,8 @@ func GetDeviceSerial(dataDir string) string {
 
 // ReadTelemetry reads CPU, memory, temperature, uptime, and WiFi signal from
 // /proc and /sys on Linux.
-func ReadTelemetry() api.TelemetryDatagram {
-	d := api.TelemetryDatagram{
+func ReadTelemetry() common.TelemetryDatagram {
+	d := common.TelemetryDatagram{
 		TS: nowMillis(),
 	}
 

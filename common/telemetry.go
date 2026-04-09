@@ -1,4 +1,4 @@
-package api
+package common
 
 // TelemetryDatagram contains sensor readings from the camera.
 // Pointer fields implement omitempty — only non-nil fields are serialized.

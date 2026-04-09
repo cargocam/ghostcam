@@ -5,7 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/cargocam/ghostcam/api"
+	"github.com/cargocam/ghostcam/common"
 	"github.com/cargocam/ghostcam/server/auth"
 	"github.com/cargocam/ghostcam/server/db"
 	"github.com/google/uuid"
@@ -13,7 +13,7 @@ import (
 
 // Provision handles POST /api/v1/cameras/provision.
 func (h *Handlers) Provision(w http.ResponseWriter, r *http.Request) {
-	var body api.ProvisionRequest
+	var body common.ProvisionRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -77,7 +77,7 @@ func (h *Handlers) Provision(w http.ResponseWriter, r *http.Request) {
 
 	db.AuditLog("camera_provisioned", "device_id", deviceID, "user_id", *userID, "device_serial", body.DeviceSerial)
 
-	writeJSON(w, http.StatusOK, api.ProvisionResponse{
+	writeJSON(w, http.StatusOK, common.ProvisionResponse{
 		APIKey:   apiKey,
 		DeviceID: deviceID,
 	})

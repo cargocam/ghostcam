@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/cargocam/ghostcam/api"
+	"github.com/cargocam/ghostcam/common"
 )
 
 func TestPendingConfirms_SaveLoad(t *testing.T) {
@@ -17,7 +17,7 @@ func TestPendingConfirms_SaveLoad(t *testing.T) {
 	}
 
 	// Save some confirms
-	confirms := []api.UploadedSegment{
+	confirms := []common.UploadedSegment{
 		{SegmentID: "seg-1", StartTS: 1000, EndTS: 2000, SizeBytes: 500, HasMotion: false},
 		{SegmentID: "seg-2", StartTS: 2000, EndTS: 3000, SizeBytes: 600, HasMotion: true},
 	}

@@ -12,7 +12,7 @@ Ghostcam is a camera surveillance system built in Go. Cameras capture H.264 vide
 
 ```
 ghostcam/
-├── api/             Shared Go types: telemetry datagrams, presign/provision contracts
+├── common/          Shared Go types: telemetry datagrams, presign/provision contracts
 ├── camera/          Camera agent: capture pipeline, upload, telemetry, provisioning, gpsd
 ├── cmd/
 │   ├── ghostcam-server/   Server entrypoint
@@ -276,7 +276,7 @@ The `/events` endpoint delivers the following event types via per-user Redis pub
 
 SSE connections use `http.NewResponseController` to disable the write deadline for long-lived connections.
 
-## Shared API Types (`api/`)
+## Shared Types (`common/`)
 
 ```
 types.go       PresignRequest, PresignResponse, PresignedUrl, UploadedSegment, ProvisionRequest/Response
@@ -289,9 +289,9 @@ telemetry.go   TelemetryDatagram — JSON payload with optional fields (CPU, tem
 
 ```
 cmd/ghostcam-camera/
-  main.go          Entrypoint, task orchestration (WaitGroup), capture crash recovery with exponential backoff (1s→30s),
-                   crash counter with 5-minute stability threshold,
-                   telemetry poll loop with failure backoff (10s→30s→60s), graceful shutdown (WaitGroup drain, 15s timeout)
+  main.go          Entrypoint: config, signal handling, goroutine orchestration (WaitGroup),
+                   capture crash recovery with exponential backoff (1s→30s) and 5-minute stability threshold,
+                   graceful shutdown (WaitGroup drain, 15s timeout). Pure orchestration — all logic in camera/.
 
 camera/
   config.go        CameraConfig + cameraConfigFile, layered TOML/env/CLI resolution
@@ -318,7 +318,9 @@ camera/
   credentials.go   LoadCredentials / SaveCredentials — flat files (api_key, device_id, server_url) with 0600 permissions
   provisioning.go  Token-based provisioning via POST /api/v1/cameras/provision
                    Supports --provision-token CLI flag / GHOSTCAM_PROVISION_TOKEN env var for headless provisioning
-                   `unregister` command clears credentials and exits (systemd restarts)
+  commands.go      HandleCommand: processes server-issued commands (reboot, unregister, set_resolution, etc.)
+  telemetry_poll.go RunTelemetryPoll: 10s poll loop with backoff, processes piggy-backed commands
+  motion.go        ffprobe P-frame analysis with file-size fallback for motion detection
   sensors_linux.go ReadTelemetry: CPU (/proc/stat), memory (/proc/meminfo), temp (/sys/class/thermal),
                    uptime (/proc/uptime), WiFi signal (/proc/net/wireless), GPS (gpsd)
                    Build tag: //go:build linux && !synthetic

@@ -9,7 +9,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/cargocam/ghostcam/api"
 	"github.com/cargocam/ghostcam/camera"
 )
 
@@ -159,7 +158,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		runTelemetryPoll(ctx, client, cfg.DataDir)
+		camera.RunTelemetryPoll(ctx, client, cfg.DataDir)
 	}()
 
 	// Wait for shutdown signal
@@ -181,83 +180,3 @@ func main() {
 	slog.Info("goodbye")
 }
 
-func runTelemetryPoll(ctx context.Context, client *camera.Client, dataDir string) {
-	const (
-		baseInterval = 10 * time.Second
-		maxInterval  = 60 * time.Second
-	)
-	interval := baseInterval
-	consecutiveFailures := 0
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(interval):
-			telemetry := camera.ReadTelemetry()
-			commands, err := client.PostTelemetry(ctx, telemetry)
-			if err != nil {
-				consecutiveFailures++
-				slog.Debug("telemetry POST failed", "err", err, "consecutive_failures", consecutiveFailures)
-				// Backoff: 10s -> 30s -> 60s (cap)
-				switch {
-				case consecutiveFailures >= 3:
-					interval = maxInterval
-				case consecutiveFailures >= 2:
-					interval = 30 * time.Second
-				default:
-					interval = baseInterval
-				}
-				continue
-			}
-			// Reset on success
-			if consecutiveFailures > 0 {
-				consecutiveFailures = 0
-				interval = baseInterval
-			}
-			for _, cmd := range commands {
-				handleCommand(ctx, cmd, dataDir)
-			}
-		}
-	}
-}
-
-func handleCommand(ctx context.Context, cmd api.CameraCommand, dataDir string) {
-	switch cmd.Type {
-	case "reboot":
-		slog.Info("reboot command received")
-		os.Exit(0)
-	case "unregister":
-		slog.Info("unregister command received, clearing credentials")
-		camera.ClearCredentials(dataDir)
-		os.Exit(0) // systemd restarts → re-enters provisioning mode
-	case "set_recording_mode":
-		slog.Info("recording mode change requested", "mode", cmd.Mode)
-		if err := camera.WriteStoredFile(dataDir, "recording_mode", cmd.Mode); err != nil {
-			slog.Error("failed to persist recording_mode", "err", err)
-			return
-		}
-		slog.Info("recording mode updated, restarting to apply")
-		os.Exit(0) // systemd restarts us
-	case "set_resolution":
-		slog.Info("resolution change requested", "resolution", cmd.Resolution)
-		if err := camera.WriteStoredFile(dataDir, "resolution", cmd.Resolution); err != nil {
-			slog.Error("failed to persist resolution", "err", err)
-			return
-		}
-		slog.Info("resolution updated, restarting to apply")
-		os.Exit(0) // systemd restarts us with new video profile
-	case "network_config":
-		slog.Info("network config command", "ssid", cmd.SSID)
-		go func() {
-			psk := cmd.PSK
-			if err := camera.EnsureWifi(ctx, cmd.SSID, &psk); err != nil {
-				slog.Warn("WiFi config failed", "err", err)
-			}
-		}()
-	case "remove_network":
-		slog.Info("remove network command", "ssid", cmd.SSID)
-	default:
-		slog.Warn("unknown command", "type", cmd.Type)
-	}
-}

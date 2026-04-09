@@ -1,5 +1,5 @@
-// Package api defines shared request/response types for the camera-server HTTP API.
-package api
+// Package common defines shared request/response types for the camera-server HTTP API.
+package common
 
 // ProvisionRequest is sent by the camera after scanning a provisioning QR code.
 type ProvisionRequest struct {
