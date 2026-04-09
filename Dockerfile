@@ -30,14 +30,14 @@ CMD ["bun", "run", "dev"]
 FROM alpine:3.21 AS camera
 RUN apk add --no-cache ca-certificates ffmpeg wget
 COPY --from=builder /ghostcam-camera-synthetic /usr/local/bin/ghostcam-camera
-COPY camera-entrypoint.sh /usr/local/bin/camera-entrypoint.sh
+COPY docker/camera-entrypoint.sh /usr/local/bin/camera-entrypoint.sh
 ENTRYPOINT ["camera-entrypoint.sh"]
 
 # --- Camera target (production — real hardware sensors) ---
 FROM alpine:3.21 AS camera-prod
 RUN apk add --no-cache ca-certificates ffmpeg wget
 COPY --from=builder /ghostcam-camera /usr/local/bin/ghostcam-camera
-COPY camera-entrypoint.sh /usr/local/bin/camera-entrypoint.sh
+COPY docker/camera-entrypoint.sh /usr/local/bin/camera-entrypoint.sh
 ENTRYPOINT ["camera-entrypoint.sh"]
 
 # --- Server target (default for Fly.io deploy) ---
