@@ -125,7 +125,7 @@
 	});
 </script>
 
-<div class="flex items-center gap-3 px-4 py-2 bg-black/60 backdrop-blur-sm border-t border-white/10">
+<div class="flex items-center gap-3 px-4 py-2 bg-background/95 backdrop-blur-sm border-t border-border">
 	<span class="text-xs text-muted-foreground font-mono w-20 shrink-0">
 		{formatTime(scrubberStore.playheadTime)}
 	</span>
@@ -139,7 +139,7 @@
 		onpointerdown={onPointerDown}
 	>
 		<!-- Track background -->
-		<div class="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-white/10"></div>
+		<div class="absolute inset-x-0 top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-muted"></div>
 
 		<!-- Union coverage (semi-transparent when a camera is selected) -->
 		{#each unionBars as bar}
@@ -176,7 +176,7 @@
 			style="left: {playheadPercent}%"
 		>
 			{#if dragging}
-				<div class="absolute bottom-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-black/90 px-2 py-1 text-[11px] font-mono text-white shadow-lg pointer-events-none">
+				<div class="absolute bottom-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-popover px-2 py-1 text-[11px] font-mono text-popover-foreground shadow-lg pointer-events-none border border-border">
 					{formatTime(scrubberStore.playheadTime)}
 				</div>
 			{/if}
@@ -195,7 +195,7 @@
 		<div class="absolute inset-x-0 bottom-0 flex justify-between pointer-events-none">
 			{#each Array(5) as _, i}
 				{@const t = windowStart + (i / 4) * (windowEnd - windowStart)}
-				<span class="text-[9px] text-white/30 font-mono">{formatTime(t)}</span>
+				<span class="text-[9px] text-muted-foreground/50 font-mono">{formatTime(t)}</span>
 			{/each}
 		</div>
 	</div>
