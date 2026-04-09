@@ -107,6 +107,22 @@
 	});
 
 	let hasSelection = $derived(cameraStore.selectedId != null && selectedBars.length > 0);
+
+	// Motion dots: amber markers at motion event timestamps
+	let motionDots = $derived.by(() => {
+		const range = windowEnd - windowStart;
+		if (range <= 0) return [];
+		const dots: { left: number }[] = [];
+		for (const [, timestamps] of scrubberStore.motionTimestamps) {
+			for (const ts of timestamps) {
+				const pct = ((ts - windowStart) / range) * 100;
+				if (pct >= 0 && pct <= 100) {
+					dots.push({ left: pct });
+				}
+			}
+		}
+		return dots;
+	});
 </script>
 
 <div class="flex items-center gap-3 px-4 py-2 bg-black/60 backdrop-blur-sm border-t border-white/10">
@@ -144,6 +160,15 @@
 				></div>
 			{/each}
 		{/if}
+
+		<!-- Motion dots (amber) -->
+		{#each motionDots as dot}
+			<div
+				class="absolute top-1/2 -translate-y-1/2 w-1.5 h-1.5 rounded-full bg-amber-400"
+				style="left: {dot.left}%"
+				title="Motion detected"
+			></div>
+		{/each}
 
 		<!-- Playhead + tooltip -->
 		<div

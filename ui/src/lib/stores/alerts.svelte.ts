@@ -18,6 +18,8 @@ export interface Alert {
 	read: boolean;
 	/** Server-persisted events have a stream ID; client-only alerts do not. */
 	persisted: boolean;
+	/** Number of clustered events (e.g. "Motion detected +5"). Default 1. */
+	count: number;
 }
 
 const MAX_ALERTS = 200;
@@ -63,6 +65,20 @@ class AlertsStore {
 			}
 		}
 
+		// Motion alerts: cluster consecutive events for the same camera within 60s
+		if (type === 'motion') {
+			const recent = this.alerts[0];
+			if (recent && recent.type === 'motion' && recent.cameraId === cameraId && !recent.read
+				&& Date.now() - recent.timestamp < 60_000) {
+				recent.count++;
+				recent.timestamp = Date.now();
+				recent.message = `Motion detected +${recent.count - 1}`;
+				if (eventId) recent.id = eventId;
+				this.alerts = [...this.alerts]; // trigger reactivity
+				return;
+			}
+		}
+
 		const alert: Alert = {
 			id: eventId ?? `client-${++clientIdCounter}`,
 			type,
@@ -72,6 +88,7 @@ class AlertsStore {
 			timestamp: Date.now(),
 			read: false,
 			persisted: !!eventId,
+			count: 1,
 		};
 
 		this.alerts = [alert, ...this.alerts].slice(0, MAX_ALERTS);
@@ -153,6 +170,7 @@ function serverEventToAlert(e: ServerEvent): Alert {
 		timestamp: e.created_at,
 		read: e.read,
 		persisted: true,
+		count: 1,
 	};
 }
 

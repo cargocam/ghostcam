@@ -4,6 +4,8 @@ class ScrubberStore {
 	/** Committed seek time (epoch seconds). Null = live. */
 	seekTarget = $state<number | null>(null);
 	cameraCoverage = $state<Map<string, { start: number; end: number; hasMotion?: boolean }[]>>(new Map());
+	/** Timestamps (epoch seconds) of motion events per camera, for timeline dots. */
+	motionTimestamps = $state<Map<string, number[]>>(new Map());
 	availableWindow = $state<{ start: number; end: number } | null>(null);
 
 	private animationFrame: number | null = null;
@@ -50,6 +52,21 @@ class ScrubberStore {
 			}
 		}
 		this.cameraCoverage = new Map(this.cameraCoverage).set(deviceId, merged);
+
+		// Collect motion segment midpoints for timeline dots
+		const motionTs = sorted
+			.filter((s) => s.hasMotion)
+			.map((s) => (s.start + s.end) / 2);
+		const existing = this.motionTimestamps.get(deviceId) ?? [];
+		// Dedupe by rounding to nearest second
+		const seen = new Set(existing.map((t) => Math.round(t)));
+		for (const t of motionTs) {
+			if (!seen.has(Math.round(t))) {
+				existing.push(t);
+				seen.add(Math.round(t));
+			}
+		}
+		this.motionTimestamps = new Map(this.motionTimestamps).set(deviceId, existing);
 	}
 
 	private startTick() {
