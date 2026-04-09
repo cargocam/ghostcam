@@ -109,6 +109,25 @@
 		if (zoomAnim) { cancelAnimationFrame(zoomAnim); zoomAnim = null; }
 	}
 
+	function animateZoomOut() {
+		stopZoom();
+		const startTime = performance.now();
+		const startLevel = zoomLevel;
+		if (startLevel <= 0) return;
+		const animate = (now: number) => {
+			const elapsed = now - startTime;
+			const progress = Math.min(1, elapsed / ZOOM_DURATION_MS);
+			const eased = 1 - Math.pow(1 - progress, 3);
+			zoomLevel = startLevel * (1 - eased);
+			if (progress < 1) {
+				zoomAnim = requestAnimationFrame(animate);
+			} else {
+				zoomLevel = 0;
+			}
+		};
+		zoomAnim = requestAnimationFrame(animate);
+	}
+
 	function onPointerDown(e: PointerEvent) {
 		e.preventDefault();
 		dragging = true;
@@ -135,6 +154,7 @@
 			window.removeEventListener('pointermove', onMove);
 			window.removeEventListener('pointerup', onUp);
 			scrubberStore.seekTo(timeFromEvent(ev));
+			animateZoomOut();
 		};
 		window.addEventListener('pointermove', onMove);
 		window.addEventListener('pointerup', onUp);
