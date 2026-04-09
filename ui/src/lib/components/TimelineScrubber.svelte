@@ -7,7 +7,7 @@
 	let dragging = $state(false);
 
 	const MIN_WINDOW_SECS = 5 * 60;
-	const ZOOMED_WINDOW_SECS = 60;
+	const ZOOMED_WINDOW_SECS = 240;
 	const LIVE_MARGIN_SECS = 5;
 	const SEEK_MARGIN_SECS = 30;
 	const GAP_THRESHOLD = 30;
