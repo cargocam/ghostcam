@@ -284,14 +284,14 @@
 		<!-- Pan edge indicators (visible when zoomed, above the rail) -->
 		{#if isZoomed}
 			<div
-				class="absolute left-0 top-0 -translate-y-full pb-0.5 text-[10px] font-bold pointer-events-none select-none z-20 transition-opacity duration-150"
+				class="absolute left-1 -top-2 text-2 font-bold pointer-events-none select-none z-20 transition-opacity duration-150"
 				class:opacity-100={panDirection === -1}
 				class:opacity-30={panDirection !== -1}
 			>
 				<span class="text-muted-foreground">&laquo;</span>
 			</div>
 			<div
-				class="absolute right-0 top-0 -translate-y-full pb-0.5 text-[10px] font-bold pointer-events-none select-none z-20 transition-opacity duration-150"
+				class="absolute right-1 -top-2 text-2 font-bold pointer-events-none select-none z-20 transition-opacity duration-150"
 				class:opacity-100={panDirection === 1}
 				class:opacity-30={panDirection !== 1}
 			>
