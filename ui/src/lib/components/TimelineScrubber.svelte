@@ -7,25 +7,52 @@
 	let dragging = $state(false);
 
 	const MIN_WINDOW_SECS = 5 * 60;
+	const ZOOMED_WINDOW_SECS = 60; // 1 minute when fully zoomed
 	const LIVE_MARGIN_SECS = 5;
 	const SEEK_MARGIN_SECS = 30;
 	const GAP_THRESHOLD = 30;
+	const ZOOM_DELAY_MS = 300; // hold this long before zoom starts
+	const ZOOM_DURATION_MS = 600; // animation duration
 
 	let frozenEnd = $state(Date.now() / 1000);
 	$effect(() => {
 		if (scrubberStore.isLive) frozenEnd = scrubberStore.playheadTime;
 	});
 
+	// Zoom state: 0 = normal, 1 = fully zoomed
+	let zoomLevel = $state(0);
+	let zoomCenter = $state(0); // epoch seconds where the user pressed
+	let zoomTimer: ReturnType<typeof setTimeout> | null = null;
+	let zoomAnim: number | null = null;
+
+	// Compute window bounds with zoom interpolation
 	let margin = $derived(scrubberStore.isLive ? LIVE_MARGIN_SECS : SEEK_MARGIN_SECS);
-	let windowEnd = $derived((scrubberStore.isLive ? scrubberStore.playheadTime : frozenEnd) + margin);
-	let windowStart = $derived.by(() => {
+
+	let baseEnd = $derived((scrubberStore.isLive ? scrubberStore.playheadTime : frozenEnd) + margin);
+	let baseStart = $derived.by(() => {
 		const avail = scrubberStore.availableWindow;
 		if (avail) {
-			const duration = windowEnd - avail.start;
-			if (duration < MIN_WINDOW_SECS) return windowEnd - MIN_WINDOW_SECS;
+			const duration = baseEnd - avail.start;
+			if (duration < MIN_WINDOW_SECS) return baseEnd - MIN_WINDOW_SECS;
 			return avail.start - margin;
 		}
-		return windowEnd - MIN_WINDOW_SECS;
+		return baseEnd - MIN_WINDOW_SECS;
+	});
+
+	// When zoomed, narrow the window around zoomCenter
+	let windowStart = $derived.by(() => {
+		if (zoomLevel <= 0) return baseStart;
+		const halfZoomed = ZOOMED_WINDOW_SECS / 2;
+		const halfBase = (baseEnd - baseStart) / 2;
+		const half = halfBase + (halfZoomed - halfBase) * zoomLevel;
+		return zoomCenter - half;
+	});
+	let windowEnd = $derived.by(() => {
+		if (zoomLevel <= 0) return baseEnd;
+		const halfZoomed = ZOOMED_WINDOW_SECS / 2;
+		const halfBase = (baseEnd - baseStart) / 2;
+		const half = halfBase + (halfZoomed - halfBase) * zoomLevel;
+		return zoomCenter + half;
 	});
 
 	let playheadPercent = $derived.by(() => {
@@ -61,17 +88,50 @@
 		hoverTime = null;
 	}
 
+	function startZoomAnimation() {
+		const startTime = performance.now();
+		const startLevel = zoomLevel;
+		const animate = (now: number) => {
+			const elapsed = now - startTime;
+			const progress = Math.min(1, elapsed / ZOOM_DURATION_MS);
+			// Ease out cubic
+			const eased = 1 - Math.pow(1 - progress, 3);
+			zoomLevel = startLevel + (1 - startLevel) * eased;
+			if (progress < 1) {
+				zoomAnim = requestAnimationFrame(animate);
+			}
+		};
+		zoomAnim = requestAnimationFrame(animate);
+	}
+
+	function stopZoom() {
+		if (zoomTimer) { clearTimeout(zoomTimer); zoomTimer = null; }
+		if (zoomAnim) { cancelAnimationFrame(zoomAnim); zoomAnim = null; }
+	}
+
 	function onPointerDown(e: PointerEvent) {
 		e.preventDefault();
 		dragging = true;
 		scrubberStore.isLive = false;
 		scrubberStore.playheadTime = timeFromEvent(e);
+		zoomCenter = timeFromEvent(e);
+
+		// Start zoom after a short hold
+		stopZoom();
+		zoomTimer = setTimeout(() => {
+			startZoomAnimation();
+		}, ZOOM_DELAY_MS);
 
 		const onMove = (ev: PointerEvent) => {
 			scrubberStore.playheadTime = timeFromEvent(ev);
+			// Update zoom center to follow the cursor while zooming
+			if (zoomLevel > 0) {
+				zoomCenter = timeFromEvent(ev);
+			}
 		};
 		const onUp = (ev: PointerEvent) => {
 			dragging = false;
+			stopZoom();
 			window.removeEventListener('pointermove', onMove);
 			window.removeEventListener('pointerup', onUp);
 			scrubberStore.seekTo(timeFromEvent(ev));
@@ -235,7 +295,7 @@
 				? "text-emerald-400 cursor-default"
 				: "bg-emerald-500 text-black hover:bg-emerald-400 cursor-pointer",
 		)}
-		onclick={() => scrubberStore.goLive()}
+		onclick={() => { zoomLevel = 0; scrubberStore.goLive(); }}
 		disabled={scrubberStore.isLive}
 	>
 		LIVE
