@@ -19,7 +19,7 @@ class TransportStore {
 	}
 
 	private sse: EventSource | null = null;
-	/** Periodically recompute online flags (cameras go offline when telemetry stops). */
+	private staleCheckInterval: ReturnType<typeof setInterval> | null = null;
 
 	async initialize() {
 		this.authenticated = await checkSession();
@@ -36,9 +36,15 @@ class TransportStore {
 			// Load persisted events/notifications
 			await alertsStore.initialize();
 
-			// Connect SSE — delivers initial telemetry + status on connect,
-			// then realtime updates. No client-side polling needed.
+			// Connect SSE — delivers initial telemetry on connect, then realtime.
+			// Client derives online status from server_ts freshness.
 			this.connectSse();
+
+			// Recheck staleness every 10s so cameras that stop reporting
+			// transition to offline even without new events.
+			this.staleCheckInterval = setInterval(() => {
+				cameraStore.recheckOnline();
+			}, 10_000);
 
 			this.connected = true;
 			this.connectedAt = Date.now();
@@ -83,17 +89,10 @@ class TransportStore {
 					gps: t.lat != null && t.lon != null
 						? { latitude: t.lat, longitude: t.lon, alt: t.alt }
 						: undefined,
-				});
+				}, t.server_ts);
 			} catch {
 				// Ignore malformed events
 			}
-		});
-
-		es.addEventListener('camera_status', (e: MessageEvent) => {
-			try {
-				const data = JSON.parse(e.data) as { device_id: string; online: boolean };
-				cameraStore.setOnlineStatus(data.device_id, data.online);
-			} catch { /* ignore */ }
 		});
 
 		es.addEventListener('motion_detected', (e: MessageEvent) => {
@@ -204,6 +203,7 @@ class TransportStore {
 		this.connected = false;
 		this.sse?.close();
 		this.sse = null;
+		if (this.staleCheckInterval) { clearInterval(this.staleCheckInterval); this.staleCheckInterval = null; }
 		cameraStore.clear();
 		groupStore.clear();
 	}
@@ -215,6 +215,7 @@ class TransportStore {
 	destroy() {
 		this.sse?.close();
 		this.sse = null;
+		if (this.staleCheckInterval) { clearInterval(this.staleCheckInterval); this.staleCheckInterval = null; }
 	}
 }
 

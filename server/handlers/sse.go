@@ -18,9 +18,12 @@ type telemetryEvent struct {
 	Telemetry *redis.TelemetryEntry `json:"telemetry"`
 }
 
-const onlineThreshold = 30 * time.Second
-
 // SSE handles GET /events — Server-Sent Events stream for realtime telemetry.
+//
+// On connect, emits the latest telemetry for each camera so clients have
+// immediate state without waiting for the next camera poll cycle. The ts and
+// server_ts fields in each telemetry entry let the client determine freshness
+// and infer online/offline status.
 func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 	userID := ctxutil.GetUserID(r)
 
@@ -62,33 +65,16 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 		keyToDevice[key] = c.DeviceID
 	}
 
-	// --- Emit initial state: latest telemetry + online status for each camera ---
-	onlineState := make(map[string]bool, len(cameras))
+	// --- Emit initial telemetry burst for each camera ---
 	lastIDs := make(map[string]string, len(streamKeys))
-
 	for _, k := range streamKeys {
 		deviceID := keyToDevice[k]
 		entry, err := redis.QueryTelemetryLatest(ctx, rdb, deviceID)
 		if err == nil && entry != nil {
-			// Emit initial telemetry
 			payload := telemetryEvent{DeviceID: deviceID, Telemetry: entry}
 			jsonBytes, _ := json.Marshal(payload)
 			fmt.Fprintf(w, "event: telemetry\ndata: %s\n\n", jsonBytes)
-
-			// Determine initial online status from telemetry freshness
-			age := time.Since(time.UnixMilli(int64(entry.ServerTS)))
-			onlineState[deviceID] = age < onlineThreshold
-		} else {
-			onlineState[deviceID] = false
 		}
-
-		// Emit initial status event
-		statusPayload, _ := json.Marshal(map[string]any{
-			"device_id": deviceID,
-			"online":    onlineState[deviceID],
-		})
-		fmt.Fprintf(w, "event: camera_status\ndata: %s\n\n", statusPayload)
-
 		lastIDs[k] = "$"
 	}
 	flusher.Flush()
@@ -123,10 +109,6 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 	keepAliveTicker := time.NewTicker(15 * time.Second)
 	defer keepAliveTicker.Stop()
 
-	// Check staleness every 10s to detect cameras going offline
-	staleCheckTicker := time.NewTicker(10 * time.Second)
-	defer staleCheckTicker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():
@@ -134,27 +116,6 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 		case <-keepAliveTicker.C:
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flusher.Flush()
-		case <-staleCheckTicker.C:
-			// Check each camera for staleness and emit offline events
-			for _, k := range streamKeys {
-				deviceID := keyToDevice[k]
-				entry, _ := redis.QueryTelemetryLatest(ctx, rdb, deviceID)
-				wasOnline := onlineState[deviceID]
-				nowOnline := false
-				if entry != nil {
-					age := time.Since(time.UnixMilli(int64(entry.ServerTS)))
-					nowOnline = age < onlineThreshold
-				}
-				if wasOnline != nowOnline {
-					onlineState[deviceID] = nowOnline
-					statusPayload, _ := json.Marshal(map[string]any{
-						"device_id": deviceID,
-						"online":    nowOnline,
-					})
-					fmt.Fprintf(w, "event: camera_status\ndata: %s\n\n", statusPayload)
-					flusher.Flush()
-				}
-			}
 		case raw := <-eventCh:
 			parts := splitOnce(raw, "|")
 			channel, payload := parts[0], parts[1]
@@ -229,17 +190,6 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 
 				fmt.Fprintf(w, "event: telemetry\ndata: %s\n\n", jsonBytes)
 				flusher.Flush()
-
-				// Update online state — camera just sent telemetry, it's online
-				if !onlineState[deviceID] {
-					onlineState[deviceID] = true
-					statusPayload, _ := json.Marshal(map[string]any{
-						"device_id": deviceID,
-						"online":    true,
-					})
-					fmt.Fprintf(w, "event: camera_status\ndata: %s\n\n", statusPayload)
-					flusher.Flush()
-				}
 			}
 		}
 	}

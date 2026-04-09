@@ -13,6 +13,16 @@
 		onSelect?: () => void;
 	} = $props();
 
+	function formatTimeAgo(epochMs: number): string {
+		const sec = Math.floor((Date.now() - epochMs) / 1000);
+		if (sec < 60) return `${sec}s ago`;
+		const min = Math.floor(sec / 60);
+		if (min < 60) return `${min}m ago`;
+		const hr = Math.floor(min / 60);
+		if (hr < 24) return `${hr}h ago`;
+		return `${Math.floor(hr / 24)}d ago`;
+	}
+
 	let editingId = $state<string | null>(null);
 	let editingName = $state('');
 	let settingsTarget = $state<string | null>(null);
@@ -113,10 +123,14 @@
 							<div class="flex items-center gap-1.5">
 								<span class="truncate font-medium">{displayName}</span>
 							</div>
-							{#if camera.telemetry}
+							{#if camera.online && camera.telemetry}
 								<div class="text-[10px] text-muted-foreground font-mono">
 									CPU {(camera.telemetry.cpu_percent ?? 0).toFixed(0)}%
 									&middot; {(camera.telemetry.memory_mb ?? 0).toFixed(0)}MB
+								</div>
+							{:else if !camera.online && camera.lastServerTs}
+								<div class="text-[10px] text-muted-foreground">
+									Last seen {formatTimeAgo(camera.lastServerTs)}
 								</div>
 							{/if}
 						</div>
