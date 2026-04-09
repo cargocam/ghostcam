@@ -1,12 +1,9 @@
 import type { CameraInfo, TelemetryData } from '$lib/types.js';
 
-/** Camera is online if we received telemetry within this window (ms). */
-const ONLINE_THRESHOLD_MS = 30_000;
-
 export interface CameraState {
 	device_id: string;
 	device_name: string;
-	/** Derived client-side from lastTelemetryAt freshness. */
+	/** Set by server-side camera_status SSE events. */
 	online: boolean;
 	telemetry: TelemetryData | null;
 	/** Epoch ms when we last received telemetry for this camera. */
@@ -23,26 +20,16 @@ class CameraStore {
 		this.selectedId ? this.cameras.find((c) => c.device_id === this.selectedId) ?? null : null
 	);
 
-	onlineCount = $derived(this.cameras.filter((c) => this.isOnline(c.device_id)).length);
+	onlineCount = $derived(this.cameras.filter((c) => c.online).length);
 
 	getCamera(deviceId: string): CameraState | undefined {
 		return this.cameras.find((c) => c.device_id === deviceId);
 	}
 
-	/** Camera is online if telemetry was received within ONLINE_THRESHOLD_MS. */
-	isOnline(deviceId: string): boolean {
-		const cam = this.cameras.find((c) => c.device_id === deviceId);
-		if (!cam?.lastTelemetryAt) return false;
-		return Date.now() - cam.lastTelemetryAt < ONLINE_THRESHOLD_MS;
-	}
-
 	setInitialList(list: CameraInfo[]) {
-		const now = Date.now();
 		this.cameras = list.map((c) => {
-			// Seed online status + telemetry from the API response so cameras
-			// show full state immediately on page load without waiting for SSE.
-			const seenMs = c.last_seen_at ? c.last_seen_at * 1000 : null;
-			const recentlySeen = seenMs != null && now - seenMs < ONLINE_THRESHOLD_MS;
+			// Telemetry seeded from API response. Online status will be set by
+			// the server's camera_status SSE event burst on connect.
 			const t = c.telemetry;
 			const initialTelemetry: TelemetryData | null = t ? {
 				cpu_percent: t.cpu,
@@ -56,9 +43,9 @@ class CameraStore {
 			return {
 				device_id: c.device_id,
 				device_name: c.display_name,
-				online: recentlySeen,
+				online: false,
 				telemetry: initialTelemetry,
-				lastTelemetryAt: recentlySeen ? seenMs : null,
+				lastTelemetryAt: null,
 				resolution: c.resolution ?? '720p',
 				recording_mode: c.recording_mode ?? 'constant',
 			};
@@ -70,15 +57,14 @@ class CameraStore {
 		if (idx >= 0) {
 			this.cameras[idx].telemetry = data;
 			this.cameras[idx].lastTelemetryAt = Date.now();
-			this.cameras[idx].online = true;
 		}
 	}
 
-	/** Recompute online flags based on telemetry freshness. Called periodically. */
-	refreshOnlineStatus() {
-		const now = Date.now();
-		for (const cam of this.cameras) {
-			cam.online = cam.lastTelemetryAt != null && now - cam.lastTelemetryAt < ONLINE_THRESHOLD_MS;
+	/** Set online/offline status from server-side camera_status SSE event. */
+	setOnlineStatus(deviceId: string, online: boolean) {
+		const cam = this.cameras.find((c) => c.device_id === deviceId);
+		if (cam) {
+			cam.online = online;
 		}
 	}
 

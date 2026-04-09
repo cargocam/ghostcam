@@ -20,7 +20,6 @@ class TransportStore {
 
 	private sse: EventSource | null = null;
 	/** Periodically recompute online flags (cameras go offline when telemetry stops). */
-	private onlineRefreshInterval: ReturnType<typeof setInterval> | null = null;
 
 	async initialize() {
 		this.authenticated = await checkSession();
@@ -37,15 +36,9 @@ class TransportStore {
 			// Load persisted events/notifications
 			await alertsStore.initialize();
 
-			// Connect SSE for realtime telemetry
-
-			// Refresh online flags every 5s (detects cameras that stopped sending telemetry)
-			this.onlineRefreshInterval = setInterval(() => {
-				cameraStore.refreshOnlineStatus();
-			}, 5_000);
-
-			// Coverage updates arrive in realtime via SSE "coverage" events.
-			// No polling needed.
+			// Connect SSE — delivers initial telemetry + status on connect,
+			// then realtime updates. No client-side polling needed.
+			this.connectSse();
 
 			this.connected = true;
 			this.connectedAt = Date.now();
@@ -94,6 +87,13 @@ class TransportStore {
 			} catch {
 				// Ignore malformed events
 			}
+		});
+
+		es.addEventListener('camera_status', (e: MessageEvent) => {
+			try {
+				const data = JSON.parse(e.data) as { device_id: string; online: boolean };
+				cameraStore.setOnlineStatus(data.device_id, data.online);
+			} catch { /* ignore */ }
 		});
 
 		es.addEventListener('motion_detected', (e: MessageEvent) => {
@@ -204,10 +204,6 @@ class TransportStore {
 		this.connected = false;
 		this.sse?.close();
 		this.sse = null;
-		if (this.onlineRefreshInterval) {
-			clearInterval(this.onlineRefreshInterval);
-			this.onlineRefreshInterval = null;
-		}
 		cameraStore.clear();
 		groupStore.clear();
 	}
@@ -219,10 +215,6 @@ class TransportStore {
 	destroy() {
 		this.sse?.close();
 		this.sse = null;
-		if (this.onlineRefreshInterval) {
-			clearInterval(this.onlineRefreshInterval);
-			this.onlineRefreshInterval = null;
-		}
 	}
 }
 

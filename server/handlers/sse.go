@@ -18,6 +18,8 @@ type telemetryEvent struct {
 	Telemetry *redis.TelemetryEntry `json:"telemetry"`
 }
 
+const onlineThreshold = 30 * time.Second
+
 // SSE handles GET /events — Server-Sent Events stream for realtime telemetry.
 func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 	userID := ctxutil.GetUserID(r)
@@ -28,7 +30,6 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Disable write deadline for SSE — this is a long-lived connection
 	rc := http.NewResponseController(w)
 	_ = rc.SetWriteDeadline(time.Time{})
 
@@ -45,12 +46,12 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(cameras) == 0 || h.Redis == nil {
-		// Keep connection alive with keepalive comments
 		h.sseKeepAlive(r.Context(), w, flusher)
 		return
 	}
 
 	rdb := h.Redis.RDB()
+	ctx := r.Context()
 
 	// Build stream keys for telemetry
 	streamKeys := make([]string, 0, len(cameras))
@@ -61,18 +62,45 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 		keyToDevice[key] = c.DeviceID
 	}
 
-	// Start from latest
+	// --- Emit initial state: latest telemetry + online status for each camera ---
+	onlineState := make(map[string]bool, len(cameras))
 	lastIDs := make(map[string]string, len(streamKeys))
+
 	for _, k := range streamKeys {
+		deviceID := keyToDevice[k]
+		entry, err := redis.QueryTelemetryLatest(ctx, rdb, deviceID)
+		if err == nil && entry != nil {
+			// Emit initial telemetry
+			payload := telemetryEvent{DeviceID: deviceID, Telemetry: entry}
+			jsonBytes, _ := json.Marshal(payload)
+			fmt.Fprintf(w, "event: telemetry\ndata: %s\n\n", jsonBytes)
+
+			// Determine initial online status from telemetry freshness
+			age := time.Since(time.UnixMilli(int64(entry.ServerTS)))
+			onlineState[deviceID] = age < onlineThreshold
+		} else {
+			onlineState[deviceID] = false
+		}
+
+		// Emit initial status event
+		statusPayload, _ := json.Marshal(map[string]any{
+			"device_id": deviceID,
+			"online":    onlineState[deviceID],
+		})
+		fmt.Fprintf(w, "event: camera_status\ndata: %s\n\n", statusPayload)
+
 		lastIDs[k] = "$"
 	}
+	flusher.Flush()
 
-	ctx := r.Context()
-
-	// Subscribe to per-user motion + storage_capped channels.
-	// Events are already filtered to this user by the publisher.
+	// Subscribe to per-user pub/sub channels
 	eventCh := make(chan string, 32)
-	pubsub := rdb.Subscribe(ctx, fmt.Sprintf("motion:%s", userID), fmt.Sprintf("storage_capped:%s", userID), fmt.Sprintf("coverage:%s", userID), fmt.Sprintf("events_sync:%s", userID))
+	pubsub := rdb.Subscribe(ctx,
+		fmt.Sprintf("motion:%s", userID),
+		fmt.Sprintf("storage_capped:%s", userID),
+		fmt.Sprintf("coverage:%s", userID),
+		fmt.Sprintf("events_sync:%s", userID),
+	)
 	go func() {
 		defer pubsub.Close()
 		ch := pubsub.Channel()
@@ -95,6 +123,10 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 	keepAliveTicker := time.NewTicker(15 * time.Second)
 	defer keepAliveTicker.Stop()
 
+	// Check staleness every 10s to detect cameras going offline
+	staleCheckTicker := time.NewTicker(10 * time.Second)
+	defer staleCheckTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -102,20 +134,40 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 		case <-keepAliveTicker.C:
 			fmt.Fprintf(w, ": keepalive\n\n")
 			flusher.Flush()
+		case <-staleCheckTicker.C:
+			// Check each camera for staleness and emit offline events
+			for _, k := range streamKeys {
+				deviceID := keyToDevice[k]
+				entry, _ := redis.QueryTelemetryLatest(ctx, rdb, deviceID)
+				wasOnline := onlineState[deviceID]
+				nowOnline := false
+				if entry != nil {
+					age := time.Since(time.UnixMilli(int64(entry.ServerTS)))
+					nowOnline = age < onlineThreshold
+				}
+				if wasOnline != nowOnline {
+					onlineState[deviceID] = nowOnline
+					statusPayload, _ := json.Marshal(map[string]any{
+						"device_id": deviceID,
+						"online":    nowOnline,
+					})
+					fmt.Fprintf(w, "event: camera_status\ndata: %s\n\n", statusPayload)
+					flusher.Flush()
+				}
+			}
 		case raw := <-eventCh:
 			parts := splitOnce(raw, "|")
 			channel, payload := parts[0], parts[1]
-			// Per-user channels — no filtering needed, forward directly
 			var eventType string
 			if len(channel) > 0 {
 				switch channel[0] {
-				case 'm': // motion:{userID}
+				case 'm':
 					eventType = "motion_detected"
-				case 's': // storage_capped:{userID}
+				case 's':
 					eventType = "storage_capped"
-				case 'c': // coverage:{userID}
+				case 'c':
 					eventType = "coverage"
-				case 'e': // events_sync:{userID}
+				case 'e':
 					eventType = "events_sync"
 				}
 			}
@@ -126,7 +178,7 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 		default:
 		}
 
-		// Build XREAD args
+		// XREAD telemetry streams
 		args := &goredis.XReadArgs{
 			Streams: make([]string, 0, len(streamKeys)*2),
 			Block:   5 * time.Second,
@@ -177,6 +229,17 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 
 				fmt.Fprintf(w, "event: telemetry\ndata: %s\n\n", jsonBytes)
 				flusher.Flush()
+
+				// Update online state — camera just sent telemetry, it's online
+				if !onlineState[deviceID] {
+					onlineState[deviceID] = true
+					statusPayload, _ := json.Marshal(map[string]any{
+						"device_id": deviceID,
+						"online":    true,
+					})
+					fmt.Fprintf(w, "event: camera_status\ndata: %s\n\n", statusPayload)
+					flusher.Flush()
+				}
 			}
 		}
 	}
