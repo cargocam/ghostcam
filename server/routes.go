@@ -86,6 +86,10 @@ func BuildRouter(app *App) http.Handler {
 		// SSE
 		r.Get("/events", h.SSE)
 
+		// Clips / export
+		r.Post("/api/v1/clips/prepare", h.PrepareClip)
+		r.Get("/api/v1/telemetry/{deviceID}/export", h.ExportTelemetry)
+
 		// Events / notifications
 		r.Get("/api/v1/events", h.ListEvents)
 		r.Get("/api/v1/events/unread", h.GetUnreadCount)

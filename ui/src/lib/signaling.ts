@@ -231,3 +231,39 @@ export async function dismissEvent(eventId: string): Promise<void> {
 		credentials: 'include',
 	});
 }
+
+// --- Clips / Export ---
+
+export interface ClipSegment {
+	id: string;
+	url: string;
+	start_ms: number;
+	end_ms: number;
+	size_bytes: number;
+}
+
+export interface PrepareClipResponse {
+	segments: ClipSegment[];
+	total_bytes: number;
+	duration_ms: number;
+}
+
+export async function prepareClip(deviceId: string, fromMs: number, toMs: number): Promise<PrepareClipResponse> {
+	const res = await fetch(`${API_BASE}/clips/prepare`, {
+		method: 'POST',
+		headers: headers(),
+		body: JSON.stringify({ device_id: deviceId, from_ms: fromMs, to_ms: toMs }),
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`prepareClip failed: ${res.status}`);
+	return res.json();
+}
+
+export async function exportTelemetry(deviceId: string, fromMs: number, toMs: number, format: 'csv' | 'json' = 'json'): Promise<Blob> {
+	const params = new URLSearchParams({ from: String(fromMs), to: String(toMs), format });
+	const res = await fetch(`${API_BASE}/telemetry/${encodeURIComponent(deviceId)}/export?${params}`, {
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`exportTelemetry failed: ${res.status}`);
+	return res.blob();
+}

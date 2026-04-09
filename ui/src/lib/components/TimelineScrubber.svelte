@@ -1,6 +1,9 @@
 <script lang="ts">
 	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
+	import { clipStore } from '$lib/stores/clip.svelte.js';
+	import ClipDownloadBar from '$lib/components/ClipDownloadBar.svelte';
+	import { Scissors } from 'lucide-svelte';
 	import { cn } from '$lib/utils.js';
 
 	let trackEl = $state<HTMLDivElement | undefined>(undefined);
@@ -64,7 +67,6 @@
 	let hoverPercent = $state<number>(0);
 
 	function onMouseMove(e: MouseEvent) {
-		if (dragging) return;
 		if (!trackEl) return;
 		const rect = trackEl.getBoundingClientRect();
 		const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
@@ -122,8 +124,6 @@
 					start: zoomOverride.start + shift,
 					end: zoomOverride.end + shift,
 				};
-				// Update playhead to match the shifted window edge
-				scrubberStore.playheadTime += shift;
 			}
 			panFrame = requestAnimationFrame(tick);
 		};
@@ -139,26 +139,53 @@
 		dragging = true;
 		scrubberStore.dragging = true;
 		scrubberStore.isLive = false;
-		scrubberStore.playheadTime = timeFromEvent(e);
 
 		const clickTime = timeFromEvent(e);
 		let zoomed = false;
+		let hasMoved = false;
+
+		// In clip mode: click/drag sets the left cutoff
+		if (clipStore.enabled) {
+			clipStore.startTime = clickTime;
+			// Keep endTime at least MIN_CLIP_SECS away
+			if (clipStore.endTime - clickTime < 10) {
+				clipStore.endTime = clickTime + 10;
+			}
+		} else {
+			scrubberStore.playheadTime = clickTime;
+		}
 
 		const snapStart = windowStart;
 		const snapEnd = windowEnd;
 
+		// Zoom only triggers when holding still (no mouse movement)
 		stopZoom();
 		zoomTimer = setTimeout(() => {
-			zoomed = true;
-			const halfZoom = ZOOMED_WINDOW_SECS / 2;
-			animateZoom(snapStart, snapEnd, clickTime - halfZoom, clickTime + halfZoom);
+			if (!hasMoved) {
+				zoomed = true;
+				const halfZoom = ZOOMED_WINDOW_SECS / 2;
+				animateZoom(snapStart, snapEnd, clickTime - halfZoom, clickTime + halfZoom);
+			}
 		}, ZOOM_DELAY_MS);
 
 		let panRatio = 0;
 		const getPanRatio = () => panRatio;
 
 		const onMove = (ev: PointerEvent) => {
-			scrubberStore.playheadTime = timeFromEvent(ev);
+			hasMoved = true;
+			// Cancel zoom timer on movement
+			if (zoomTimer && !zoomed) {
+				clearTimeout(zoomTimer);
+				zoomTimer = null;
+			}
+
+			const t = timeFromEvent(ev);
+
+			if (clipStore.enabled) {
+				clipStore.startTime = Math.min(t, clipStore.endTime - 10);
+			} else {
+				scrubberStore.playheadTime = t;
+			}
 
 			// Edge panning when zoomed
 			if (zoomed && zoomOverride && trackEl) {
@@ -187,15 +214,20 @@
 			stopEdgePan();
 			window.removeEventListener('pointermove', onMove);
 			window.removeEventListener('pointerup', onUp);
-			scrubberStore.seekTo(timeFromEvent(ev));
-			if (zoomed && zoomOverride) {
-				const zs = zoomOverride.start;
-				const ze = zoomOverride.end;
-				animateZoom(zs, ze, naturalStart, naturalEnd, () => {
-					zoomOverride = null;
-				});
+
+			if (clipStore.enabled) {
+				// Stay zoomed in clip mode
 			} else {
-				zoomOverride = null;
+				scrubberStore.seekTo(timeFromEvent(ev));
+				if (zoomed && zoomOverride) {
+					const zs = zoomOverride.start;
+					const ze = zoomOverride.end;
+					animateZoom(zs, ze, naturalStart, naturalEnd, () => {
+						zoomOverride = null;
+					});
+				} else {
+					zoomOverride = null;
+				}
 			}
 		};
 		window.addEventListener('pointermove', onMove);
@@ -225,6 +257,19 @@
 			})
 			.filter((s) => s.width > 0);
 	}
+
+	// Zoom to playhead on clip mode enter, zoom out on exit
+	let wasClipEnabled = false;
+	$effect(() => {
+		if (clipStore.enabled && !wasClipEnabled) {
+			const c = scrubberStore.playheadTime;
+			const h = ZOOMED_WINDOW_SECS / 2;
+			animateZoom(naturalStart, naturalEnd, c - h, c + h);
+		} else if (!clipStore.enabled && wasClipEnabled && zoomOverride) {
+			animateZoom(zoomOverride.start, zoomOverride.end, naturalStart, naturalEnd, () => { zoomOverride = null; });
+		}
+		wasClipEnabled = clipStore.enabled;
+	});
 
 	// Union of all cameras
 	let unionBars = $derived.by(() => {
@@ -261,6 +306,53 @@
 		}
 		return dots;
 	});
+
+	// Clip handles
+	let clipStartPct = $derived.by(() => {
+		const range = windowEnd - windowStart;
+		if (range <= 0 || !clipStore.enabled) return 0;
+		return Math.max(0, Math.min(100, ((clipStore.startTime - windowStart) / range) * 100));
+	});
+	let clipEndPct = $derived.by(() => {
+		const range = windowEnd - windowStart;
+		if (range <= 0 || !clipStore.enabled) return 0;
+		return Math.max(0, Math.min(100, ((clipStore.endTime - windowStart) / range) * 100));
+	});
+
+	let draggingClipHandle = $state<'start' | 'end' | null>(null);
+
+	function onClipHandleDown(handle: 'start' | 'end', e: PointerEvent) {
+		e.stopPropagation();
+		e.preventDefault();
+		draggingClipHandle = handle;
+		const MIN_CLIP_SECS = 10;
+		const MAX_CLIP_SECS = 5 * 60;
+		const onMove = (ev: PointerEvent) => {
+			const t = timeFromEvent(ev);
+			if (handle === 'start') {
+				const min = clipStore.endTime - MAX_CLIP_SECS;
+				const max = clipStore.endTime - MIN_CLIP_SECS;
+				clipStore.startTime = Math.max(min, Math.min(t, max));
+			} else {
+				const min = clipStore.startTime + MIN_CLIP_SECS;
+				const max = clipStore.startTime + MAX_CLIP_SECS;
+				clipStore.endTime = Math.min(max, Math.max(t, min));
+			}
+			// Keep hover tooltip visible during handle drag
+			if (trackEl) {
+				const rect = trackEl.getBoundingClientRect();
+				hoverPercent = Math.max(0, Math.min(100, ((ev.clientX - rect.left) / rect.width) * 100));
+				hoverTime = t;
+			}
+		};
+		const onUp = () => {
+			draggingClipHandle = null;
+			window.removeEventListener('pointermove', onMove);
+			window.removeEventListener('pointerup', onUp);
+		};
+		window.addEventListener('pointermove', onMove);
+		window.addEventListener('pointerup', onUp);
+	}
 </script>
 
 <div class="flex items-center gap-3 px-4 py-2 bg-background/95 backdrop-blur-sm border-t border-border">
@@ -328,8 +420,28 @@
 			></div>
 		{/each}
 
+		<!-- Clip selection region + handles -->
+		{#if clipStore.enabled}
+			<div
+				class="absolute top-1/2 -translate-y-1/2 h-4 bg-yellow-400/20 border-y border-yellow-400/40 z-10"
+				style="left: {clipStartPct}%; width: {clipEndPct - clipStartPct}%"
+			></div>
+			<!-- Start handle -->
+			<div
+				class="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-1 h-5 bg-yellow-400 rounded-sm cursor-ew-resize z-20 hover:bg-yellow-300"
+				style="left: {clipStartPct}%"
+				onpointerdown={(e) => onClipHandleDown('start', e)}
+			></div>
+			<!-- End handle -->
+			<div
+				class="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-1 h-5 bg-yellow-400 rounded-sm cursor-ew-resize z-20 hover:bg-yellow-300"
+				style="left: {clipEndPct}%"
+				onpointerdown={(e) => onClipHandleDown('end', e)}
+			></div>
+		{/if}
+
 		<!-- Hover tooltip -->
-		{#if hoverTime !== null && !dragging}
+		{#if hoverTime !== null}
 			<div
 				class="absolute bottom-5 -translate-x-1/2 whitespace-nowrap rounded bg-popover px-2 py-1 text-[11px] font-mono text-popover-foreground shadow-lg pointer-events-none border border-border z-20"
 				style="left: {hoverPercent}%"
@@ -338,26 +450,23 @@
 			</div>
 		{/if}
 
-		<!-- Playhead + tooltip -->
-		<div
-			class="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-10"
-			style="left: {playheadPercent}%"
-		>
-			{#if dragging}
-				<div class="absolute bottom-5 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-popover px-2 py-1 text-[11px] font-mono text-popover-foreground shadow-lg pointer-events-none border border-border">
-					{formatTime(scrubberStore.playheadTime)}
-				</div>
-			{/if}
+		<!-- Playhead (hidden in clip mode) -->
+		{#if !clipStore.enabled}
 			<div
-				class={cn(
-					'w-3 h-3 rounded-full transition-transform',
-					scrubberStore.isLive
-						? 'bg-emerald-400 shadow-[0_0_8px_theme(colors.emerald.400/0.6)]'
-						: 'bg-sky-400 shadow-[0_0_8px_theme(colors.sky.400/0.6)]',
-					dragging && 'scale-150',
-				)}
-			></div>
-		</div>
+				class="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-10"
+				style="left: {playheadPercent}%"
+			>
+				<div
+					class={cn(
+						'w-3 h-3 rounded-full transition-transform',
+						scrubberStore.isLive
+							? 'bg-emerald-400 shadow-[0_0_8px_theme(colors.emerald.400/0.6)]'
+							: 'bg-sky-400 shadow-[0_0_8px_theme(colors.sky.400/0.6)]',
+						dragging && 'scale-150',
+					)}
+				></div>
+			</div>
+		{/if}
 
 		<!-- Time labels -->
 		<div class="absolute inset-x-0 bottom-0 flex justify-between pointer-events-none">
@@ -380,4 +489,18 @@
 	>
 		LIVE
 	</button>
+
+	<button
+		class={cn(
+			"shrink-0 p-1.5 rounded transition-colors",
+			clipStore.enabled
+				? "bg-yellow-400/20 text-yellow-400"
+				: "text-muted-foreground hover:text-foreground hover:bg-accent",
+		)}
+		onclick={() => clipStore.toggle(windowStart, windowEnd)}
+		title="Clip mode"
+	>
+		<Scissors class="h-3.5 w-3.5" />
+	</button>
 </div>
+<ClipDownloadBar />

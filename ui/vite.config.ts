@@ -22,6 +22,10 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
+    headers: {
+      'Cross-Origin-Embedder-Policy': 'credentialless',
+      'Cross-Origin-Opener-Policy': 'same-origin',
+    },
     proxy: {
       '/api': {
         target: process.env.VITE_API_URL ?? 'http://localhost:3000',
