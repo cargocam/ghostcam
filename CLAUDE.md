@@ -48,7 +48,23 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./cmd/ghostcam
 
 # Run tests
 go test ./...
+cd ui && bun run test    # vitest unit tests
+cd ui && bun run test:e2e  # playwright e2e tests (requires dev server)
 ```
+
+### Testing
+
+**Go** (`go test ./...`): Table-driven tests for pure functions. No mocking framework — tests cover:
+- `server/handlers/`: `effectiveTier()` billing logic, `epochMsToISO8601` formatting
+- `server/billing/`: `GetTier()` tier resolution, `StorageLimitBytes()` computation
+- `camera/`: motion detector (file-size fallback, rolling window), MPEG-TS sync byte validation, pending confirms persistence, config helpers (`coalesceStr`, `resolveVideoProfile`, `trimString`)
+
+**UI** (`bun run test`): Vitest unit tests in `ui/src/lib/__tests__/`:
+- Coverage merge logic (gap threshold, motion promotion, overlap handling)
+- Alert deduplication (upsert vs append by type+cameraId)
+- Time formatting (`formatTimeAgo`)
+
+**CI** (`.github/workflows/ci.yml`): Runs `go vet`, `go test`, `bun run check`, `bun run test`, `bun run build`, Docker build on every push/PR.
 
 ### Local dev
 

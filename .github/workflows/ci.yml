@@ -25,6 +25,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
       - run: cd ui && bun install --frozen-lockfile
       - run: cd ui && bun run check
+      - run: cd ui && bun run test
       - run: cd ui && bun run build
 
   docker:
