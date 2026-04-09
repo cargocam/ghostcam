@@ -100,6 +100,7 @@
 	function onPointerDown(e: PointerEvent) {
 		e.preventDefault();
 		dragging = true;
+		scrubberStore.dragging = true;
 		scrubberStore.isLive = false;
 		scrubberStore.playheadTime = timeFromEvent(e);
 
@@ -122,6 +123,7 @@
 		};
 		const onUp = (ev: PointerEvent) => {
 			dragging = false;
+			scrubberStore.dragging = false;
 			stopZoom();
 			window.removeEventListener('pointermove', onMove);
 			window.removeEventListener('pointerup', onUp);

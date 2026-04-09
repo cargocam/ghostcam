@@ -12,6 +12,8 @@ class ScrubberStore {
 	/** Wall-clock time when playback started (for VOD tick offset). */
 	private playbackStartWall: number = 0;
 	private playbackStartTime: number = 0;
+	/** When true, the tick doesn't override playheadTime (user is dragging). */
+	dragging = $state(false);
 
 	initialize() { this.startTick(); }
 	destroy() { this.stopTick(); }
@@ -72,12 +74,13 @@ class ScrubberStore {
 	private startTick() {
 		this.stopTick();
 		const tick = () => {
-			if (this.isLive) {
-				this.playheadTime = Date.now() / 1000;
-			} else if (this.seekTarget !== null) {
-				// VOD playback: advance in real time from the seek point
-				const elapsed = Date.now() / 1000 - this.playbackStartWall;
-				this.playheadTime = this.playbackStartTime + elapsed;
+			if (!this.dragging) {
+				if (this.isLive) {
+					this.playheadTime = Date.now() / 1000;
+				} else if (this.seekTarget !== null) {
+					const elapsed = Date.now() / 1000 - this.playbackStartWall;
+					this.playheadTime = this.playbackStartTime + elapsed;
+				}
 			}
 			this.animationFrame = requestAnimationFrame(tick);
 		};
