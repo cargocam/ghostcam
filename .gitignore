@@ -15,5 +15,5 @@ ui/.svelte-kit/
 /ghostcam-camera-*
 
 # Test fixtures (generated on demand)
-test-loop.mp4
+docker/test-loop.mp4
 .pi.env
