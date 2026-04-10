@@ -90,9 +90,103 @@ jobs:
             --cache-to type=gha,mode=max,scope=camera \
             --load .
 
-  deploy:
+  # Real end-to-end tests against a live compose stack. Covers seams that
+  # no other job can (SSE delivery, HLS manifest generation from real
+  # segments, JWT round-trip). See e2e/README.md for what this covers
+  # and what it deliberately does not.
+  e2e:
     needs: [go, ui, docker]
-    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.go.result == 'success' && (needs.ui.result == 'success' || needs.ui.result == 'skipped') && needs.docker.result == 'success'
+    if: always() && needs.go.result == 'success' && (needs.ui.result == 'success' || needs.ui.result == 'skipped') && needs.docker.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('e2e/package.json') }}
+
+      - name: Install e2e deps
+        working-directory: e2e
+        run: bun install
+
+      - name: Install Chromium (cache miss only)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: e2e
+        run: bunx playwright install --with-deps chromium
+
+      - name: Install Chromium system deps (cache hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        working-directory: e2e
+        run: bunx playwright install-deps chromium
+
+      - name: Start the live stack
+        env:
+          # GITHUB_ACTIONS runners don't have a meaningful LAN IP. Use
+          # loopback — presigned URLs written against 127.0.0.1:9000 are
+          # reachable from the same host because MinIO binds to
+          # 0.0.0.0:9000 via the compose port mapping.
+          GHOSTCAM_PUBLIC_IP: 127.0.0.1
+          # Explicit empty so the `-` default doesn't kick in. This
+          # keeps effectiveTier's dev-mode fallback active, which means
+          # the admin is unlimited and all 3 test cameras provision.
+          STRIPE_SECRET_KEY: ""
+        run: |
+          docker compose --profile test up -d
+          docker compose ps
+
+      - name: Wait for server healthy
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:3000/readyz > /dev/null 2>&1; then
+              echo "server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "server did not become ready in 60s"
+          docker compose ps
+          docker compose logs server
+          exit 1
+
+      - name: Run e2e
+        working-directory: e2e
+        run: bun run test
+
+      - name: Collect compose logs on failure
+        if: failure()
+        run: |
+          mkdir -p e2e-artifacts
+          docker compose logs --no-color > e2e-artifacts/compose.log
+          docker compose ps > e2e-artifacts/compose-ps.txt
+
+      - name: Upload compose logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-compose-logs
+          path: e2e-artifacts/
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-playwright-report
+          path: e2e/playwright-report/
+
+      - name: Tear down
+        if: always()
+        env:
+          GHOSTCAM_PUBLIC_IP: 127.0.0.1
+          STRIPE_SECRET_KEY: ""
+        run: docker compose --profile test down -v
+
+  deploy:
+    needs: [go, ui, docker, e2e]
+    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.go.result == 'success' && (needs.ui.result == 'success' || needs.ui.result == 'skipped') && needs.docker.result == 'success' && needs.e2e.result == 'success'
     runs-on: ubuntu-latest
     concurrency: deploy-production
     steps:

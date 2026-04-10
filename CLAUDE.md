@@ -25,11 +25,12 @@ ghostcam/
 │   ├── db/          PostgreSQL (pgx), migrations, record types (concrete *DB, no interface)
 │   ├── redis/       Telemetry streams (XADD/XREAD), pub/sub for SSE, event storage
 │   └── s3/          S3/Tigris presigned URL generation, Upload, Delete
-├── tools/           Go build-time tool pins (tygo)
 ├── tygo.yaml        Codegen config: common/ + server/apitypes/ → ui/src/lib/api-types/
 ├── Makefile         `make generate-types` / `make check-types` (CI drift check)
 ├── ui/              Svelte 5 SPA: HLS playback (hls.js), timeline scrubber, GPS map
 │   └── src/lib/api-types/  Generated TypeScript types — DO NOT EDIT (see tygo.yaml)
+├── e2e/             Real end-to-end Playwright specs that drive the live
+│                    docker-compose stack (not mocked). Run via CI e2e job.
 ├── pi/              Pi system files: systemd services, GPS, NetworkManager configs
 │   └── image/       rpi-image-gen build system: device configs, layer, files for flashable .img
 ├── scripts/         Developer tools: pi.sh (camera manager CLI)
@@ -97,12 +98,22 @@ that run in real Chromium against the Vite dev server. **Every** backend call
 (`/api/v1/**`, `/hls/**`, `/events`) is intercepted via `page.route()` and
 answered from hand-written fixtures in `browser-tests/helpers.ts` — the Go
 server, DB, Redis, and S3 are not exercised. These are frontend smoke tests,
-not end-to-end tests. Fixtures can drift from the server's real response
-shapes; anything that depends on the actual camera-server contract (auth,
-tier enforcement, SSE delivery, HLS playback) needs a live backend and does
-not belong here.
+not end-to-end tests. Fixture shapes are typed against the tygo-generated
+`$lib/api-types/` file, so drift from the server structs is a compile error,
+but runtime behavior downstream of the HTTP boundary is untested.
 
-**CI** (`.github/workflows/ci.yml`): Runs `go vet`, `go test`, `bun run check`, `bun run test`, `bun run build`, Docker build on every push/PR. The browser tests are not run in CI yet (they would need Playwright browser install; tracked as follow-up).
+**Real e2e tests** (`cd e2e && bun run test`): Playwright specs in `e2e/`
+that drive the live `docker compose --profile test` stack — real Go server,
+Postgres, Redis, MinIO, and three synthetic test cameras. Covers the seams
+between layers that nothing else can: JWT round-trip, SSE telemetry delivery,
+HLS manifest generation from real segment rows. See `e2e/README.md` for
+what is and isn't covered and how to run locally. Takes ~1–2 minutes per
+run; gated behind `go` + `ui` + `docker` jobs in CI.
+
+**CI** (`.github/workflows/ci.yml`): Runs `go vet`, `go test`, `make check-types`,
+`bun run check`, `bun run test`, `bun run build`, Docker build, and the
+`e2e` job (compose up, Playwright, compose down) on every push/PR. The
+`ui/browser-tests/` suite is not run in CI — it's a local smoke test only.
 
 ### Local dev
 

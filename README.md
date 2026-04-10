@@ -49,10 +49,12 @@ server/                  Server binary (package main): chi router + HTTP handler
   db/                    PostgreSQL (pgx), migrations
   redis/                 Telemetry streams (XADD/XREAD), pub/sub
   s3/                    Presigned URL generation, Upload, Delete
-tools/                   Go build-time tool pins (tygo)
 tygo.yaml                Codegen: common/ + server/apitypes/ -> ui/src/lib/api-types/
+Makefile                 `make generate-types` / `make check-types` (CI drift check)
 ui/                      Svelte 5 SPA (hls.js, Leaflet, Tailwind)
   src/lib/api-types/     Generated TypeScript types — DO NOT EDIT (tygo output)
+  browser-tests/         Playwright frontend smoke tests (backend mocked)
+e2e/                     Playwright tests that drive the live docker-compose stack
 pi/                      Pi system files (systemd, GPS, NetworkManager)
 scripts/                 Developer tools (pi.sh)
 ```
