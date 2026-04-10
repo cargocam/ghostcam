@@ -86,7 +86,10 @@ func (a *App) adminAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		user, err := a.DB.GetUserByEmail(r.Context(), a.Config.AdminEmail)
+		if getUserEmail(r) != a.Config.AdminEmail {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
 		if err != nil || user == nil || user.UserID != userID {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
