@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/cargocam/ghostcam/server/auth"
-	"github.com/cargocam/ghostcam/server/db"
 )
 
 type qrRequest struct {
@@ -70,7 +69,7 @@ func (a *App) EnrollmentQR(w http.ResponseWriter, r *http.Request) {
 
 	payloadBytes, _ := json.Marshal(payload)
 
-	db.AuditLog("enrollment_started", "user_id", userID)
+	slog.Info("audit", "event_type", "enrollment_started", "user_id", userID)
 
 	writeJSON(w, http.StatusOK, qrResponse{
 		Payload:   string(payloadBytes),

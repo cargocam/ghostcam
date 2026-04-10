@@ -13,11 +13,6 @@ import (
 
 const maxFirmwareSize = 50 * 1024 * 1024 // 50MB
 
-// ReloadConfig handles POST /api/v1/admin/reload.
-func (a *App) ReloadConfig(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "reload not implemented"})
-}
-
 // FirmwareLatest handles GET /api/v1/firmware/latest (public, no auth).
 // Returns the latest firmware version and a presigned download URL from Tigris.
 func (a *App) FirmwareLatest(w http.ResponseWriter, r *http.Request) {
@@ -127,26 +122,4 @@ func (a *App) FirmwareUpload(w http.ResponseWriter, r *http.Request) {
 // GithubWebhook handles POST /api/v1/webhooks/github.
 func (a *App) GithubWebhook(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
-}
-
-// QueryAudit handles GET /api/v1/audit.
-func (a *App) QueryAudit(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-
-	eventType := r.URL.Query().Get("type")
-	since := r.URL.Query().Get("since")
-	until := r.URL.Query().Get("until")
-	limit := parseQueryUint64(r, "limit", 50)
-	offset := parseQueryUint64(r, "offset", 0)
-
-	entries, total, err := a.DB.QueryAuditLog(ctx, eventType, since, until, int64(limit), int64(offset))
-	if err != nil {
-		http.Error(w, "", http.StatusInternalServerError)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]any{
-		"entries": entries,
-		"total":   total,
-	})
 }

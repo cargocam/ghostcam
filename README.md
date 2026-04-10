@@ -96,7 +96,7 @@ Key features:
 - **QR codes** use configured `GHOSTCAM_PUBLIC_URL` instead of `r.Host`
 - **Storage limits**: Redis `INCRBY` atomic reservation prevents TOCTOU race
 - **Storage capped events** deduplicated (5 min cooldown per device via Redis `SETNX`)
-- **Admin auth** required for `/api/v1/audit` and `/api/v1/admin/reload`
+- **Admin auth** required for `/api/v1/admin/firmware`
 - **HTTP timeouts**: Read 30s, Write 60s, Idle 120s
 - **SSE**: write deadline disabled for long-lived connections
 - **ListSegments**: LIMIT 2000, max 24hr range validation

@@ -3,7 +3,6 @@ package db
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -202,11 +201,21 @@ type SubscriptionUpdate struct {
 	StripeSubscriptionID *string
 }
 
-// AuditLogRecord is an audit log entry from the database.
-type AuditLogRecord struct {
-	ID        int64           `json:"id"`
-	Timestamp string          `json:"timestamp"`
-	EventType string          `json:"event_type"`
-	EventData json.RawMessage `json:"event_data"`
-	HMAC      string          `json:"hmac"`
+// GetHMACSecret loads the server's HMAC secret from the config table.
+// The secret is generated on first run by Initialize and is used to sign
+// JWT cookies and hash API tokens.
+func (db *DB) GetHMACSecret(ctx context.Context) ([]byte, error) {
+	var secret []byte
+	err := db.pool.QueryRow(ctx, "SELECT value FROM config WHERE key = 'hmac_secret'").Scan(&secret)
+	if err != nil {
+		return nil, fmt.Errorf("get HMAC secret: %w", err)
+	}
+	return secret, nil
+}
+
+// HealthCheck runs a trivial query to confirm the pool can reach the DB.
+// Used by the /readyz endpoint.
+func (db *DB) HealthCheck(ctx context.Context) error {
+	_, err := db.pool.Exec(ctx, "SELECT 1")
+	return err
 }

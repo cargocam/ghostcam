@@ -100,7 +100,7 @@ server/            (package main — binary builds from this directory)
   sse.go            SSE via Redis XREAD + pub/sub, write deadline disabled
   billing.go        GetSubscription, ListTiers, CreateCheckout, CreatePortal, GetUsage,
                     StripeWebhook (idempotency via stripe_events table)
-  admin.go          ReloadConfig, FirmwareLatest, FirmwareUpload, GithubWebhook, QueryAudit
+  admin.go          FirmwareLatest (public), FirmwareUpload (admin), GithubWebhook
   qr.go             EnrollmentQR — returns JSON {payload, token, expires_at}
   provision.go      Provision — camera claims a one-time token and receives an API key.
                     ClaimCommands is atomic DELETE ... RETURNING so commands do not accumulate.
@@ -127,7 +127,7 @@ server/            (package main — binary builds from this directory)
 |-----------|-------------|
 | `001_initial.sql` | Users, cameras, sessions, API tokens, segments |
 | `002_multi_user.sql` | Multi-user support |
-| `003_audit_log.sql` | Audit log table |
+| `003_audit_log.sql` | Audit log table (dropped in 011; see below) |
 | `004_billing.sql` | Subscriptions table |
 | `005_fk_cascade.sql` | Foreign key cascades |
 | `006_ownership.sql` | Camera ownership |
@@ -135,6 +135,7 @@ server/            (package main — binary builds from this directory)
 | `008_motion.sql` | Adds `has_motion` boolean column to `segments` table |
 | `009_indexes.sql` | Adds `idx_segments_created_at` index for scalability |
 | `010_cleanup.sql` | Drops dead tables/columns: sessions, owner, enrollment_tokens, cameras.cert_fingerprint |
+| `011_drop_audit_log.sql` | Drops the `audit_log` table — nothing ever wrote to it; slog is the audit trail |
 
 ## Viewer Structure
 

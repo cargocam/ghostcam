@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/cargocam/ghostcam/server/auth"
-	"github.com/cargocam/ghostcam/server/db"
 )
 
 const jwtTTL = 30 * 24 * time.Hour // 30 days
@@ -78,7 +77,7 @@ func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db.AuditLog("auth_success", "user_id", user.UserID)
+	slog.Info("audit", "event_type", "auth_success", "user_id", user.UserID)
 
 	a.setAuthCookie(w, user.UserID, user.Email)
 	writeJSON(w, http.StatusOK, loginResponse{UserID: user.UserID})

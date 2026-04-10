@@ -24,9 +24,7 @@ Both server and camera support TOML config files with layered resolution. Enviro
 
 `database_url` and `admin_password` are **env-var only**. They cannot be set in the TOML config file.
 
-## Runtime Reload
-
-- **API**: `POST /api/v1/admin/reload` (requires admin auth) -- reloads config from disk
+Config is loaded once at startup — there is no runtime reload endpoint. To apply a config change, restart the server.
 
 ## Environment Variables
 
@@ -47,7 +45,6 @@ Both server and camera support TOML config files with layered resolution. Enviro
 | `GHOSTCAM_S3_REGION` | `auto` | S3 region |
 | `GHOSTCAM_S3_ENDPOINT` | _(none)_ | S3 endpoint URL (Tigris, MinIO, etc.) |
 | `GHOSTCAM_S3_PRESIGN_TTL_SECS` | `3600` | Presigned URL TTL in seconds |
-| `GHOSTCAM_HMAC_KEY` | `dev-hmac-key` | HMAC key for audit log signing |
 | `GHOSTCAM_SEGMENT_RETENTION_DAYS` | `30` | Segment retention in days. Used as the cutoff for opportunistic prune in the presign handler and as the read cutoff for manifest / coverage queries. |
 | `STRIPE_SECRET_KEY` | _(none)_ | Stripe API key |
 | `STRIPE_WEBHOOK_SECRET` | _(none)_ | Stripe webhook signing secret |

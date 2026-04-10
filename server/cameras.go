@@ -101,7 +101,7 @@ func (a *App) Enroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db.AuditLog("enrollment_started", "user_id", userID)
+	slog.Info("audit", "event_type", "enrollment_started", "user_id", userID)
 	writeJSON(w, http.StatusOK, enrollResponse{Token: rawToken, ExpiresAt: expiresAt})
 }
 
@@ -228,6 +228,6 @@ func (a *App) DeleteCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db.AuditLog("camera_unregistered", "device_id", deviceID, "initiated_by", getUserID(r))
+	slog.Info("audit", "event_type", "camera_unregistered", "device_id", deviceID, "initiated_by", getUserID(r))
 	w.WriteHeader(http.StatusOK)
 }

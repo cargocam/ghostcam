@@ -233,8 +233,6 @@ func (a *App) router() http.Handler {
 	// Admin
 	r.Group(func(r chi.Router) {
 		r.Use(a.adminAuth)
-		r.Get("/api/v1/audit", a.QueryAudit)
-		r.Post("/api/v1/admin/reload", a.ReloadConfig)
 		r.Post("/api/v1/admin/firmware", a.FirmwareUpload)
 	})
 

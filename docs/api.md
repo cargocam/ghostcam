@@ -87,8 +87,6 @@ POST   /api/v1/webhooks/stripe             Stripe webhook: checkout.session.comp
 ```
 GET    /api/v1/firmware/latest             Latest firmware version + presigned download URL (public, no auth)
 POST   /api/v1/admin/firmware              Upload firmware binary to Tigris — admin only
-POST   /api/v1/admin/reload                Reload config from disk — admin only
-GET    /api/v1/audit                       Audit log query — admin only (?type=&since=&until=&limit=&offset=)
 ```
 
 ## Health
