@@ -117,9 +117,25 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 3. Check storage limits
+	// 3. Check tier limits
 	sub, _ := h.DB.GetSubscription(ctx, userID)
 	tier := billing.GetTier(effectiveTier(sub, h.Stripe.SecretKey != ""))
+
+	// Camera limit: only the N oldest cameras (by enrolled_at) may upload.
+	if tier.CameraLimit != nil {
+		cameras, err := h.DB.ListCameras(ctx, userID) // ordered by enrolled_at
+		if err == nil && len(cameras) > *tier.CameraLimit {
+			allowed := make(map[string]bool, *tier.CameraLimit)
+			for i := 0; i < *tier.CameraLimit && i < len(cameras); i++ {
+				allowed[cameras[i].DeviceID] = true
+			}
+			if !allowed[deviceID] {
+				slog.Info("camera over tier limit", "device_id", deviceID, "user_id", userID, "limit", *tier.CameraLimit, "count", len(cameras))
+				writeJSON(w, http.StatusOK, common.PresignResponse{URLs: nil, StorageCapped: true})
+				return
+			}
+		}
+	}
 
 	storageLimitBytes := tier.StorageLimitBytes()
 	if storageLimitBytes > 0 {

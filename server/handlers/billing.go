@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -10,6 +11,7 @@ import (
 	"github.com/cargocam/ghostcam/server/billing"
 	"github.com/cargocam/ghostcam/server/ctxutil"
 	"github.com/cargocam/ghostcam/server/db"
+	"github.com/cargocam/ghostcam/server/redis"
 	"github.com/stripe/stripe-go/v82"
 	portalsession "github.com/stripe/stripe-go/v82/billingportal/session"
 	checkoutsession "github.com/stripe/stripe-go/v82/checkout/session"
@@ -295,6 +297,8 @@ func (h *Handlers) handleSubscriptionUpdated(ctx context.Context, event *stripe.
 	}); err != nil {
 		slog.Error("stripe: failed to update subscription", "user_id", existing.UserID, "error", err)
 	}
+
+	h.notifyCameraLimitExceeded(ctx, existing.UserID, tier)
 }
 
 func (h *Handlers) handleSubscriptionDeleted(ctx context.Context, event *stripe.Event) {
@@ -322,6 +326,8 @@ func (h *Handlers) handleSubscriptionDeleted(ctx context.Context, event *stripe.
 	}
 
 	slog.Info("stripe: subscription deleted, downgraded to free", "user_id", existing.UserID)
+
+	h.notifyCameraLimitExceeded(ctx, existing.UserID, freeTier)
 }
 
 func (h *Handlers) tierToPriceID(tier string) string {
@@ -356,6 +362,38 @@ func (h *Handlers) stripeTierFromSubscription(sub *stripe.Subscription) string {
 		return h.priceIDToTier(priceID)
 	}
 	return "starter"
+}
+
+// notifyCameraLimitExceeded checks if the user's camera count exceeds the new
+// tier limit and emits a camera_limit_exceeded SSE event if so.
+func (h *Handlers) notifyCameraLimitExceeded(ctx context.Context, userID, tierID string) {
+	tier := billing.GetTier(tierID)
+	if tier.CameraLimit == nil {
+		return
+	}
+	count, err := h.DB.GetCameraCount(ctx, userID)
+	if err != nil || count <= int64(*tier.CameraLimit) {
+		return
+	}
+	if h.Redis == nil {
+		return
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"user_id":      userID,
+		"camera_count": count,
+		"camera_limit": *tier.CameraLimit,
+		"tier":         tierID,
+	})
+	eventID, _ := redis.WriteEvent(ctx, h.Redis.RDB(), userID, "", "camera_limit_exceeded", string(payload))
+	withID, _ := json.Marshal(map[string]any{
+		"event_id":     eventID,
+		"user_id":      userID,
+		"camera_count": count,
+		"camera_limit": *tier.CameraLimit,
+		"tier":         tierID,
+	})
+	h.Redis.RDB().Publish(ctx, fmt.Sprintf("storage_capped:%s", userID), withID)
+	slog.Info("camera limit exceeded after tier change", "user_id", userID, "count", count, "limit", *tier.CameraLimit, "tier", tierID)
 }
 
 func strPtr(s string) *string { return &s }
