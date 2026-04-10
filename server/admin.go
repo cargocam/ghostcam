@@ -27,7 +27,7 @@ func (a *App) FirmwareLatest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	version, err := a.Redis.RDB().Get(ctx, "firmware:latest:version").Result()
+	version, err := a.Redis.Get(ctx, "firmware:latest:version").Result()
 	if err != nil || version == "" {
 		writeJSON(w, http.StatusOK, map[string]any{"release": nil})
 		return
@@ -41,7 +41,7 @@ func (a *App) FirmwareLatest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sha256hex, _ := a.Redis.RDB().Get(ctx, "firmware:latest:sha256").Result()
+	sha256hex, _ := a.Redis.Get(ctx, "firmware:latest:sha256").Result()
 
 	release := map[string]any{
 		"version":      version,
@@ -99,7 +99,7 @@ func (a *App) FirmwareUpload(w http.ResponseWriter, r *http.Request) {
 	hash := sha256.Sum256(data)
 	sha256hex := hex.EncodeToString(hash[:])
 
-	pipe := a.Redis.RDB().Pipeline()
+	pipe := a.Redis.Pipeline()
 	pipe.Set(ctx, "firmware:latest:version", version, 0)
 	pipe.Set(ctx, "firmware:latest:sha256", sha256hex, 0)
 	if _, err := pipe.Exec(ctx); err != nil {
@@ -114,7 +114,7 @@ func (a *App) FirmwareUpload(w http.ResponseWriter, r *http.Request) {
 		"size_bytes": len(data),
 		"sha256":     sha256hex,
 	})
-	a.Redis.RDB().Set(ctx, "firmware:latest:meta", meta, 0)
+	a.Redis.Set(ctx, "firmware:latest:meta", meta, 0)
 
 	slog.Info("firmware published", "version", version, "size_bytes", len(data), "sha256", sha256hex)
 	writeJSON(w, http.StatusOK, map[string]any{

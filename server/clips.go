@@ -34,8 +34,6 @@ type prepareClipResponse struct {
 // PrepareClip handles POST /api/v1/clips/prepare.
 // Returns presigned GET URLs for all segments in the requested time range.
 func (a *App) PrepareClip(w http.ResponseWriter, r *http.Request) {
-	userID := getUserID(r)
-
 	var body prepareClipRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -47,9 +45,7 @@ func (a *App) PrepareClip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	camera, err := a.DB.GetCamera(r.Context(), body.DeviceID)
-	if err != nil || camera == nil || camera.UserID == nil || *camera.UserID != userID {
-		http.Error(w, "", http.StatusNotFound)
+	if _, ok := a.ownedCamera(w, r, body.DeviceID); !ok {
 		return
 	}
 
@@ -100,12 +96,8 @@ func (a *App) PrepareClip(w http.ResponseWriter, r *http.Request) {
 
 // ExportTelemetry handles GET /api/v1/telemetry/{deviceID}/export?from=&to=&format=csv|json.
 func (a *App) ExportTelemetry(w http.ResponseWriter, r *http.Request) {
-	userID := getUserID(r)
 	deviceID := chi.URLParam(r, "deviceID")
-
-	camera, err := a.DB.GetCamera(r.Context(), deviceID)
-	if err != nil || camera == nil || camera.UserID == nil || *camera.UserID != userID {
-		http.Error(w, "", http.StatusNotFound)
+	if _, ok := a.ownedCamera(w, r, deviceID); !ok {
 		return
 	}
 
@@ -126,7 +118,7 @@ func (a *App) ExportTelemetry(w http.ResponseWriter, r *http.Request) {
 		format = "json"
 	}
 
-	entries, err := redis.QueryTelemetryRange(r.Context(), a.Redis.RDB(), deviceID, fromMs, toMs, 10000)
+	entries, err := redis.QueryTelemetryRange(r.Context(), a.Redis, deviceID, fromMs, toMs, 10000)
 	if err != nil {
 		slog.Error("export telemetry failed", "error", err)
 		http.Error(w, "", http.StatusInternalServerError)

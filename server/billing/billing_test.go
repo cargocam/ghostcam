@@ -9,11 +9,11 @@ func TestGetTier(t *testing.T) {
 		wantCamLim *int
 		wantGB     *int
 	}{
-		{"free", "Free", testIntPtr(1), testIntPtr(5)},
-		{"starter", "Starter", testIntPtr(4), testIntPtr(50)},
-		{"pro", "Pro", testIntPtr(16), testIntPtr(500)},
+		{"free", "Free", intPtr(1), intPtr(5)},
+		{"starter", "Starter", intPtr(4), intPtr(50)},
+		{"pro", "Pro", intPtr(16), intPtr(500)},
 		{"enterprise", "Enterprise", nil, nil},
-		{"nonexistent", "Unlimited", nil, nil}, // fallback to unlimited
+		{"nonexistent", "Enterprise", nil, nil}, // fallback to enterprise (unlimited)
 	}
 
 	for _, tt := range tests {
@@ -43,5 +43,3 @@ func TestStorageLimitBytes(t *testing.T) {
 		t.Errorf("enterprise storage should be 0 (unlimited), got %d", enterprise.StorageLimitBytes())
 	}
 }
-
-func testIntPtr(i int) *int { return &i }

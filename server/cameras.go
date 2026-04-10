@@ -57,7 +57,7 @@ func (a *App) ListCameras(w http.ResponseWriter, r *http.Request) {
 			RecordingMode: c.RecordingMode,
 		}
 		if a.Redis != nil {
-			entry, _ := redis.QueryTelemetryLatest(ctx, a.Redis.RDB(), c.DeviceID)
+			entry, _ := redis.QueryTelemetryLatest(ctx, a.Redis, c.DeviceID)
 			cr.Telemetry = entry
 		}
 		resp = append(resp, cr)
@@ -72,7 +72,7 @@ func (a *App) Enroll(w http.ResponseWriter, r *http.Request) {
 
 	// Enforce camera limit based on tier.
 	sub, _ := a.DB.GetSubscription(ctx, userID)
-	tier := billing.GetTier(effectiveTier(sub, a.Stripe.SecretKey != ""))
+	tier := billing.GetTier(effectiveTier(sub, a.stripeConfigured()))
 	if tier.CameraLimit != nil {
 		count, err := a.DB.GetCameraCount(ctx, userID)
 		if err != nil {
@@ -106,19 +106,24 @@ func (a *App) Enroll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, enrollResponse{Token: rawToken, ExpiresAt: expiresAt})
 }
 
+// ownedCamera looks up `deviceID` and verifies the authenticated viewer owns
+// it. On any failure — DB error, missing row, wrong owner — it writes a 404
+// and returns (nil, false). Callers use `if !ok { return }`. Presign uses a
+// different check (camera auth, not viewer auth) and does not go through here.
+func (a *App) ownedCamera(w http.ResponseWriter, r *http.Request, deviceID string) (*db.CameraRecord, bool) {
+	userID := getUserID(r)
+	camera, err := a.DB.GetCamera(r.Context(), deviceID)
+	if err != nil || camera == nil || camera.UserID == nil || *camera.UserID != userID {
+		http.Error(w, "", http.StatusNotFound)
+		return nil, false
+	}
+	return camera, true
+}
+
 // GetCamera handles GET /api/v1/cameras/{deviceID}.
 func (a *App) GetCamera(w http.ResponseWriter, r *http.Request) {
-	userID := getUserID(r)
-	deviceID := chi.URLParam(r, "deviceID")
-
-	camera, err := a.DB.GetCamera(r.Context(), deviceID)
-	if err != nil {
-		slog.Error("get camera failed", "error", err)
-		http.Error(w, "", http.StatusInternalServerError)
-		return
-	}
-	if camera == nil || camera.UserID == nil || *camera.UserID != userID {
-		http.Error(w, "", http.StatusNotFound)
+	camera, ok := a.ownedCamera(w, r, chi.URLParam(r, "deviceID"))
+	if !ok {
 		return
 	}
 
@@ -143,12 +148,9 @@ type updateCameraRequest struct {
 
 // UpdateCamera handles PATCH /api/v1/cameras/{deviceID}.
 func (a *App) UpdateCamera(w http.ResponseWriter, r *http.Request) {
-	userID := getUserID(r)
 	deviceID := chi.URLParam(r, "deviceID")
-
-	camera, err := a.DB.GetCamera(r.Context(), deviceID)
-	if err != nil || camera == nil || camera.UserID == nil || *camera.UserID != userID {
-		http.Error(w, "", http.StatusNotFound)
+	camera, ok := a.ownedCamera(w, r, deviceID)
+	if !ok {
 		return
 	}
 
@@ -208,12 +210,8 @@ func (a *App) UpdateCamera(w http.ResponseWriter, r *http.Request) {
 
 // DeleteCamera handles DELETE /api/v1/cameras/{deviceID}.
 func (a *App) DeleteCamera(w http.ResponseWriter, r *http.Request) {
-	userID := getUserID(r)
 	deviceID := chi.URLParam(r, "deviceID")
-
-	camera, err := a.DB.GetCamera(r.Context(), deviceID)
-	if err != nil || camera == nil || camera.UserID == nil || *camera.UserID != userID {
-		http.Error(w, "", http.StatusNotFound)
+	if _, ok := a.ownedCamera(w, r, deviceID); !ok {
 		return
 	}
 
@@ -223,6 +221,6 @@ func (a *App) DeleteCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	db.AuditLog("camera_unregistered", "device_id", deviceID, "initiated_by", userID)
+	db.AuditLog("camera_unregistered", "device_id", deviceID, "initiated_by", getUserID(r))
 	w.WriteHeader(http.StatusOK)
 }

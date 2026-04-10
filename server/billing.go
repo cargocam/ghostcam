@@ -21,10 +21,10 @@ import (
 func (a *App) GetSubscription(w http.ResponseWriter, r *http.Request) {
 	userID := getUserID(r)
 	sub, _ := a.DB.GetSubscription(r.Context(), userID)
-	tierID := effectiveTier(sub, a.Stripe.SecretKey != "")
+	tierID := effectiveTier(sub, a.stripeConfigured())
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"billing_enabled": a.Stripe.SecretKey != "",
+		"billing_enabled": a.stripeConfigured(),
 		"tier":            tierID,
 	})
 }
@@ -55,7 +55,7 @@ type checkoutRequest struct {
 // CreateCheckout handles POST /api/v1/billing/checkout.
 // Creates a Stripe Checkout Session and returns the redirect URL.
 func (a *App) CreateCheckout(w http.ResponseWriter, r *http.Request) {
-	if a.Stripe.SecretKey == "" {
+	if !a.stripeConfigured() {
 		writeError(w, http.StatusNotImplemented, "billing_not_configured")
 		return
 	}
@@ -74,7 +74,7 @@ func (a *App) CreateCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stripe.Key = a.Stripe.SecretKey
+	stripe.Key = a.Config.StripeSecretKey
 
 	params := &stripe.CheckoutSessionParams{
 		Mode: stripe.String(string(stripe.CheckoutSessionModeSubscription)),
@@ -110,7 +110,7 @@ type portalRequest struct {
 
 // CreatePortal handles POST /api/v1/billing/portal.
 func (a *App) CreatePortal(w http.ResponseWriter, r *http.Request) {
-	if a.Stripe.SecretKey == "" {
+	if !a.stripeConfigured() {
 		writeError(w, http.StatusNotImplemented, "billing_not_configured")
 		return
 	}
@@ -129,14 +129,14 @@ func (a *App) CreatePortal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stripe.Key = a.Stripe.SecretKey
+	stripe.Key = a.Config.StripeSecretKey
 
 	params := &stripe.BillingPortalSessionParams{
 		Customer:  sub.StripeCustomerID,
 		ReturnURL: stripe.String(body.ReturnURL),
 	}
-	if a.Stripe.PortalConfigID != "" {
-		params.Configuration = stripe.String(a.Stripe.PortalConfigID)
+	if a.Config.StripePortalConfigID != "" {
+		params.Configuration = stripe.String(a.Config.StripePortalConfigID)
 	}
 
 	session, err := portalsession.New(params)
@@ -167,7 +167,7 @@ func (a *App) GetUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sub, _ := a.DB.GetSubscription(ctx, userID)
-	tier := billing.GetTier(effectiveTier(sub, a.Stripe.SecretKey != ""))
+	tier := billing.GetTier(effectiveTier(sub, a.stripeConfigured()))
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cameras_count":    cameraCount,
@@ -179,7 +179,7 @@ func (a *App) GetUsage(w http.ResponseWriter, r *http.Request) {
 
 // StripeWebhook handles POST /api/v1/webhooks/stripe.
 func (a *App) StripeWebhook(w http.ResponseWriter, r *http.Request) {
-	if a.Stripe.SecretKey == "" {
+	if !a.stripeConfigured() {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -191,8 +191,8 @@ func (a *App) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var event stripe.Event
-	if a.Stripe.WebhookSecret != "" {
-		event, err = webhook.ConstructEvent(body, r.Header.Get("Stripe-Signature"), a.Stripe.WebhookSecret)
+	if a.Config.StripeWebhookSecret != "" {
+		event, err = webhook.ConstructEvent(body, r.Header.Get("Stripe-Signature"), a.Config.StripeWebhookSecret)
 		if err != nil {
 			slog.Warn("stripe webhook signature verification failed", "error", err)
 			http.Error(w, "", http.StatusBadRequest)
@@ -329,11 +329,11 @@ func (a *App) handleSubscriptionDeleted(ctx context.Context, event *stripe.Event
 func (a *App) tierToPriceID(tier string) string {
 	switch tier {
 	case "starter":
-		return a.Stripe.PriceIDStarter
+		return a.Config.StripePriceIDStarter
 	case "pro":
-		return a.Stripe.PriceIDPro
+		return a.Config.StripePriceIDPro
 	case "enterprise":
-		return a.Stripe.PriceIDEnterprise
+		return a.Config.StripePriceIDEnterprise
 	default:
 		return ""
 	}
@@ -341,11 +341,11 @@ func (a *App) tierToPriceID(tier string) string {
 
 func (a *App) priceIDToTier(priceID string) string {
 	switch priceID {
-	case a.Stripe.PriceIDStarter:
+	case a.Config.StripePriceIDStarter:
 		return "starter"
-	case a.Stripe.PriceIDPro:
+	case a.Config.StripePriceIDPro:
 		return "pro"
-	case a.Stripe.PriceIDEnterprise:
+	case a.Config.StripePriceIDEnterprise:
 		return "enterprise"
 	default:
 		return "starter"
@@ -380,7 +380,7 @@ func (a *App) notifyCameraLimitExceeded(ctx context.Context, userID, tierID stri
 		"camera_limit": *tier.CameraLimit,
 		"tier":         tierID,
 	})
-	eventID, _ := redis.WriteEvent(ctx, a.Redis.RDB(), userID, "", "camera_limit_exceeded", string(payload))
+	eventID, _ := redis.WriteEvent(ctx, a.Redis, userID, "", "camera_limit_exceeded", string(payload))
 	withID, _ := json.Marshal(map[string]any{
 		"event_id":     eventID,
 		"user_id":      userID,
@@ -388,7 +388,7 @@ func (a *App) notifyCameraLimitExceeded(ctx context.Context, userID, tierID stri
 		"camera_limit": *tier.CameraLimit,
 		"tier":         tierID,
 	})
-	a.Redis.RDB().Publish(ctx, fmt.Sprintf("storage_capped:%s", userID), withID)
+	a.Redis.Publish(ctx, fmt.Sprintf("storage_capped:%s", userID), withID)
 	slog.Info("camera limit exceeded after tier change", "user_id", userID, "count", count, "limit", *tier.CameraLimit, "tier", tierID)
 }
 

@@ -23,7 +23,7 @@ func (a *App) PostTelemetry(w http.ResponseWriter, r *http.Request) {
 
 	// Write telemetry to Redis.
 	if a.Redis != nil {
-		redis.WriteTelemetry(r.Context(), a.Redis.RDB(), deviceID, &body.Telemetry)
+		redis.WriteTelemetry(r.Context(), a.Redis, deviceID, &body.Telemetry)
 	}
 
 	// Mark camera as seen (non-fatal).
@@ -50,12 +50,8 @@ func (a *App) PostTelemetry(w http.ResponseWriter, r *http.Request) {
 
 // GetTelemetryLatest handles GET /api/v1/telemetry/{deviceID}/latest
 func (a *App) GetTelemetryLatest(w http.ResponseWriter, r *http.Request) {
-	userID := getUserID(r)
 	deviceID := chi.URLParam(r, "deviceID")
-
-	camera, err := a.DB.GetCamera(r.Context(), deviceID)
-	if err != nil || camera == nil || camera.UserID == nil || *camera.UserID != userID {
-		http.Error(w, "", http.StatusNotFound)
+	if _, ok := a.ownedCamera(w, r, deviceID); !ok {
 		return
 	}
 
@@ -64,7 +60,7 @@ func (a *App) GetTelemetryLatest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	entry, err := redis.QueryTelemetryLatest(r.Context(), a.Redis.RDB(), deviceID)
+	entry, err := redis.QueryTelemetryLatest(r.Context(), a.Redis, deviceID)
 	if err != nil {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
@@ -79,12 +75,8 @@ func (a *App) GetTelemetryLatest(w http.ResponseWriter, r *http.Request) {
 
 // GetTelemetryRange handles GET /api/v1/telemetry/{deviceID}?from=&to=&limit=
 func (a *App) GetTelemetryRange(w http.ResponseWriter, r *http.Request) {
-	userID := getUserID(r)
 	deviceID := chi.URLParam(r, "deviceID")
-
-	camera, err := a.DB.GetCamera(r.Context(), deviceID)
-	if err != nil || camera == nil || camera.UserID == nil || *camera.UserID != userID {
-		http.Error(w, "", http.StatusNotFound)
+	if _, ok := a.ownedCamera(w, r, deviceID); !ok {
 		return
 	}
 
@@ -100,7 +92,7 @@ func (a *App) GetTelemetryRange(w http.ResponseWriter, r *http.Request) {
 		limit = 600
 	}
 
-	entries, err := redis.QueryTelemetryRange(r.Context(), a.Redis.RDB(), deviceID, fromMs, toMs, limit)
+	entries, err := redis.QueryTelemetryRange(r.Context(), a.Redis, deviceID, fromMs, toMs, limit)
 	if err != nil {
 		http.Error(w, "", http.StatusInternalServerError)
 		return

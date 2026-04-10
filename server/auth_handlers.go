@@ -59,21 +59,21 @@ func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 		// Dummy password verification to equalize timing and prevent user
 		// enumeration via response latency differences.
 		auth.DummyVerify(body.Password)
-		slog.Warn("login failed: unknown email", "email", body.Email, "ip", loginIP(r))
+		slog.Warn("login failed: unknown email", "email", body.Email, "ip", clientIP(r))
 		http.Error(w, "", http.StatusUnauthorized)
 		return
 	}
 
 	if user.DisabledAt != nil {
 		auth.DummyVerify(body.Password)
-		slog.Warn("login failed: account disabled", "email", body.Email, "ip", loginIP(r))
+		slog.Warn("login failed: account disabled", "email", body.Email, "ip", clientIP(r))
 		http.Error(w, "", http.StatusUnauthorized)
 		return
 	}
 
 	ok, err := a.DB.VerifyPassword(r.Context(), user.UserID, body.Password)
 	if err != nil || !ok {
-		slog.Warn("login failed: invalid password", "email", body.Email, "ip", loginIP(r))
+		slog.Warn("login failed: invalid password", "email", body.Email, "ip", clientIP(r))
 		http.Error(w, "", http.StatusUnauthorized)
 		return
 	}
@@ -149,21 +149,4 @@ func (a *App) ChangePassword(w http.ResponseWriter, r *http.Request) {
 
 	a.setAuthCookie(w, userID, getUserEmail(r))
 	w.WriteHeader(http.StatusOK)
-}
-
-// loginIP extracts the client IP for login logging. Prefers Fly-Client-IP
-// (trusted, set by Fly.io proxy) over X-Forwarded-For.
-func loginIP(r *http.Request) string {
-	if fci := r.Header.Get("Fly-Client-IP"); fci != "" {
-		return fci
-	}
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		for i := 0; i < len(xff); i++ {
-			if xff[i] == ',' {
-				return xff[:i]
-			}
-		}
-		return xff
-	}
-	return r.RemoteAddr
 }

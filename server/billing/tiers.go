@@ -5,27 +5,29 @@ package billing
 type Tier struct {
 	ID             string
 	Name           string
-	CameraLimit    *int
-	StorageLimitGB *int
+	CameraLimit    *int // nil = unlimited
+	StorageLimitGB *int // nil = unlimited
 }
 
 func intPtr(v int) *int { return &v }
 
-// Tiers maps tier IDs to their limits.
+// Tiers maps tier IDs to their limits. Enterprise doubles as the fallback
+// returned by GetTier for unknown IDs (dev mode, bad input) — nil limits
+// mean "no restriction", which is the safe default.
 var Tiers = map[string]Tier{
 	"free":       {ID: "free", Name: "Free", CameraLimit: intPtr(1), StorageLimitGB: intPtr(5)},
 	"starter":    {ID: "starter", Name: "Starter", CameraLimit: intPtr(4), StorageLimitGB: intPtr(50)},
 	"pro":        {ID: "pro", Name: "Pro", CameraLimit: intPtr(16), StorageLimitGB: intPtr(500)},
 	"enterprise": {ID: "enterprise", Name: "Enterprise", CameraLimit: nil, StorageLimitGB: nil},
-	"unlimited":  {ID: "unlimited", Name: "Unlimited", CameraLimit: nil, StorageLimitGB: nil},
 }
 
-// GetTier returns the tier for the given ID, defaulting to "unlimited" if not found.
+// GetTier returns the tier for the given ID, defaulting to "enterprise"
+// (unlimited) if not found.
 func GetTier(tierID string) Tier {
 	if t, ok := Tiers[tierID]; ok {
 		return t
 	}
-	return Tiers["unlimited"]
+	return Tiers["enterprise"]
 }
 
 // StorageLimitBytes returns the storage limit in bytes for a tier, or 0 for unlimited.

@@ -23,8 +23,6 @@ type ServerConfig struct {
 	S3Region         string
 	S3Endpoint       string // empty = AWS default
 	S3PresignTTLSecs uint64
-	// HMAC key for audit (env only)
-	HMACKey string
 	// Public URL for QR codes (e.g. "https://cam.example.com")
 	PublicURL string
 	// Stripe (optional — billing disabled if StripeSecretKey is empty)
@@ -74,7 +72,6 @@ func LoadConfig() (*ServerConfig, error) {
 		S3Region:         envOrFileOrDefault("GHOSTCAM_S3_REGION", file.S3Region, "auto"),
 		S3Endpoint:       envOrFileOrDefault("GHOSTCAM_S3_ENDPOINT", file.S3Endpoint, ""),
 		S3PresignTTLSecs: envOrDefaultUint64("GHOSTCAM_S3_PRESIGN_TTL_SECS", 3600),
-		HMACKey:          envOrDefault("GHOSTCAM_HMAC_KEY", "dev-hmac-key"),
 	}
 
 	// Sensitive: env only
@@ -123,13 +120,6 @@ func loadConfigFile() serverConfigFile {
 		}
 	}
 	return file
-}
-
-func envOrDefault(key, def string) string {
-	if v := os.Getenv(key); v != "" {
-		return v
-	}
-	return def
 }
 
 func envOrFileOrDefault(key string, fileVal *string, def string) string {

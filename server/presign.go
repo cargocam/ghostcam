@@ -96,8 +96,8 @@ func (a *App) Presign(w http.ResponseWriter, r *http.Request) {
 		if a.Redis != nil {
 			if confirmedBytes > 0 {
 				storageKey := "storage_bytes:" + userID
-				a.Redis.RDB().IncrBy(ctx, storageKey, confirmedBytes)
-				a.Redis.RDB().Expire(ctx, storageKey, 5*time.Minute)
+				a.Redis.IncrBy(ctx, storageKey, confirmedBytes)
+				a.Redis.Expire(ctx, storageKey, 5*time.Minute)
 			}
 
 			covSegments := make([]map[string]any, 0, len(body.Uploaded))
@@ -115,7 +115,7 @@ func (a *App) Presign(w http.ResponseWriter, r *http.Request) {
 						"start_ts":   u.StartTS,
 						"end_ts":     u.EndTS,
 					})
-					eventID, _ := redis.WriteEvent(ctx, a.Redis.RDB(), userID, deviceID, "motion_detected", string(motionPayload))
+					eventID, _ := redis.WriteEvent(ctx, a.Redis, userID, deviceID, "motion_detected", string(motionPayload))
 					motionWithID, _ := json.Marshal(map[string]any{
 						"event_id":   eventID,
 						"device_id":  deviceID,
@@ -123,7 +123,7 @@ func (a *App) Presign(w http.ResponseWriter, r *http.Request) {
 						"start_ts":   u.StartTS,
 						"end_ts":     u.EndTS,
 					})
-					if err := a.Redis.RDB().Publish(ctx, fmt.Sprintf("motion:%s", userID), motionWithID).Err(); err != nil {
+					if err := a.Redis.Publish(ctx, fmt.Sprintf("motion:%s", userID), motionWithID).Err(); err != nil {
 						slog.Debug("failed to publish motion event", "error", err)
 					}
 				}
@@ -132,7 +132,7 @@ func (a *App) Presign(w http.ResponseWriter, r *http.Request) {
 				"device_id": deviceID,
 				"segments":  covSegments,
 			})
-			a.Redis.RDB().Publish(ctx, fmt.Sprintf("coverage:%s", userID), covPayload)
+			a.Redis.Publish(ctx, fmt.Sprintf("coverage:%s", userID), covPayload)
 		}
 
 		// Opportunistically prune expired segment rows for this device.
@@ -144,13 +144,13 @@ func (a *App) Presign(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			slog.Warn("presign: segment prune failed", "device_id", deviceID, "error", err)
 		} else if prunedBytes > 0 && a.Redis != nil {
-			a.Redis.RDB().DecrBy(ctx, "storage_bytes:"+userID, prunedBytes)
+			a.Redis.DecrBy(ctx, "storage_bytes:"+userID, prunedBytes)
 		}
 	}
 
 	// 3. Check tier limits.
 	sub, _ := a.DB.GetSubscription(ctx, userID)
-	tier := billing.GetTier(effectiveTier(sub, a.Stripe.SecretKey != ""))
+	tier := billing.GetTier(effectiveTier(sub, a.stripeConfigured()))
 
 	// Camera limit: only the N oldest cameras (by enrolled_at) may upload.
 	if tier.CameraLimit != nil {
@@ -185,7 +185,7 @@ func (a *App) Presign(w http.ResponseWriter, r *http.Request) {
 
 			if a.Redis != nil {
 				dedupeKey := "storage_capped_notified:" + deviceID
-				set, _ := a.Redis.RDB().SetNX(ctx, dedupeKey, "1", 5*time.Minute).Result()
+				set, _ := a.Redis.SetNX(ctx, dedupeKey, "1", 5*time.Minute).Result()
 				if set {
 					capPayload, _ := json.Marshal(map[string]any{
 						"user_id":       userID,
@@ -193,7 +193,7 @@ func (a *App) Presign(w http.ResponseWriter, r *http.Request) {
 						"storage_bytes": storageLimitBytes,
 						"limit_gb":      *tier.StorageLimitGB,
 					})
-					eventID, _ := redis.WriteEvent(ctx, a.Redis.RDB(), userID, deviceID, "storage_capped", string(capPayload))
+					eventID, _ := redis.WriteEvent(ctx, a.Redis, userID, deviceID, "storage_capped", string(capPayload))
 					capWithID, _ := json.Marshal(map[string]any{
 						"event_id":      eventID,
 						"user_id":       userID,
@@ -201,7 +201,7 @@ func (a *App) Presign(w http.ResponseWriter, r *http.Request) {
 						"storage_bytes": storageLimitBytes,
 						"limit_gb":      *tier.StorageLimitGB,
 					})
-					a.Redis.RDB().Publish(ctx, fmt.Sprintf("storage_capped:%s", userID), capWithID)
+					a.Redis.Publish(ctx, fmt.Sprintf("storage_capped:%s", userID), capWithID)
 				}
 			}
 
@@ -259,7 +259,7 @@ func (a *App) Presign(w http.ResponseWriter, r *http.Request) {
 func (a *App) getUserStorageCached(ctx context.Context, userID string) (uint64, error) {
 	if a.Redis != nil {
 		storageKey := "storage_bytes:" + userID
-		val, err := a.Redis.RDB().Get(ctx, storageKey).Int64()
+		val, err := a.Redis.Get(ctx, storageKey).Int64()
 		if err == nil && val >= 0 {
 			return uint64(val), nil
 		}
@@ -271,7 +271,7 @@ func (a *App) getUserStorageCached(ctx context.Context, userID string) (uint64, 
 		if dbErr != nil {
 			return 0, dbErr
 		}
-		a.Redis.RDB().Set(ctx, storageKey, int64(dbVal), 5*time.Minute)
+		a.Redis.Set(ctx, storageKey, int64(dbVal), 5*time.Minute)
 		return dbVal, nil
 	}
 	return a.DB.GetUserStorageBytes(ctx, userID)

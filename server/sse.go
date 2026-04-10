@@ -52,7 +52,7 @@ func (a *App) SSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rdb := a.Redis.RDB()
+	rdb := a.Redis
 	ctx := r.Context()
 
 	streamKeys := make([]string, 0, len(cameras))

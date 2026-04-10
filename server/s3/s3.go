@@ -124,11 +124,6 @@ func FirmwareKey(version string) string {
 	return fmt.Sprintf("firmware/%s/ghostcam-camera", version)
 }
 
-// PresignTTLSecs returns the presign TTL in seconds.
-func (c *Client) PresignTTLSecs() uint64 {
-	return uint64(c.presignTTL.Seconds())
-}
-
 // InitKey returns the S3 key for a camera's init segment.
 func InitKey(deviceID string) string {
 	return fmt.Sprintf("%s/init.mp4", deviceID)

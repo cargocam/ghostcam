@@ -35,14 +35,6 @@ type CameraCommand struct {
 	PSK        string `json:"psk,omitempty"`        // network_config
 }
 
-// RecordingMode represents the camera's recording mode.
-type RecordingMode string
-
-const (
-	RecordingModeConstant RecordingMode = "constant"
-	RecordingModeMotion   RecordingMode = "motion"
-)
-
 // PresignRequest requests presigned PUT URLs and confirms previously uploaded segments.
 type PresignRequest struct {
 	Count    uint32           `json:"count"`
@@ -71,12 +63,4 @@ type PresignResponse struct {
 	URLs          []PresignedUrl `json:"urls"`
 	InitURL       *PresignedUrl  `json:"init_url,omitempty"`
 	StorageCapped bool           `json:"storage_capped,omitempty"`
-}
-
-// QrPayload is the JSON payload encoded in provisioning QR codes.
-type QrPayload struct {
-	Server   string `json:"s"`
-	Token    string `json:"t"`
-	WifiSSID string `json:"w,omitempty"`
-	WifiPSK  string `json:"p,omitempty"`
 }

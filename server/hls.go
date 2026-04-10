@@ -17,16 +17,6 @@ const segmentDurationSecs = 6
 // liveWindowMs is the sliding window for live manifests (~15 segments).
 const liveWindowMs = 90 * 1000
 
-func (a *App) verifyHLSAccess(r *http.Request) (string, bool) {
-	userID := getUserID(r)
-	deviceID := chi.URLParam(r, "deviceID")
-	camera, err := a.DB.GetCamera(r.Context(), deviceID)
-	if err != nil || camera == nil || camera.UserID == nil || *camera.UserID != userID {
-		return "", false
-	}
-	return deviceID, true
-}
-
 // retentionMs returns the retention window in milliseconds.
 func (a *App) retentionMs() uint64 {
 	return uint64(a.Config.retentionDays()) * 24 * 60 * 60 * 1000
@@ -35,9 +25,8 @@ func (a *App) retentionMs() uint64 {
 // GetLiveManifest handles GET /hls/{deviceID}/live.m3u8
 // Returns a small sliding window (~90s) with no EXT-X-ENDLIST so hls.js polls for new segments.
 func (a *App) GetLiveManifest(w http.ResponseWriter, r *http.Request) {
-	deviceID, ok := a.verifyHLSAccess(r)
-	if !ok {
-		http.Error(w, "", http.StatusNotFound)
+	deviceID := chi.URLParam(r, "deviceID")
+	if _, ok := a.ownedCamera(w, r, deviceID); !ok {
 		return
 	}
 	if a.S3 == nil {
@@ -88,9 +77,8 @@ func (a *App) GetLiveManifest(w http.ResponseWriter, r *http.Request) {
 // GetVodManifest handles GET /hls/{deviceID}/vod.m3u8?from=&to=
 // Returns the full segment range with EXT-X-ENDLIST (finite playlist).
 func (a *App) GetVodManifest(w http.ResponseWriter, r *http.Request) {
-	deviceID, ok := a.verifyHLSAccess(r)
-	if !ok {
-		http.Error(w, "", http.StatusNotFound)
+	deviceID := chi.URLParam(r, "deviceID")
+	if _, ok := a.ownedCamera(w, r, deviceID); !ok {
 		return
 	}
 	if a.S3 == nil {
@@ -146,9 +134,8 @@ func (a *App) GetVodManifest(w http.ResponseWriter, r *http.Request) {
 
 // GetInit handles GET /hls/{deviceID}/init.mp4.
 func (a *App) GetInit(w http.ResponseWriter, r *http.Request) {
-	deviceID, ok := a.verifyHLSAccess(r)
-	if !ok {
-		http.Error(w, "", http.StatusNotFound)
+	deviceID := chi.URLParam(r, "deviceID")
+	if _, ok := a.ownedCamera(w, r, deviceID); !ok {
 		return
 	}
 	if a.S3 == nil {
@@ -169,9 +156,8 @@ func (a *App) GetInit(w http.ResponseWriter, r *http.Request) {
 
 // GetSegment handles GET /hls/{deviceID}/{segmentID}.ts — re-presigns and redirects to S3.
 func (a *App) GetSegment(w http.ResponseWriter, r *http.Request) {
-	deviceID, ok := a.verifyHLSAccess(r)
-	if !ok {
-		http.Error(w, "", http.StatusNotFound)
+	deviceID := chi.URLParam(r, "deviceID")
+	if _, ok := a.ownedCamera(w, r, deviceID); !ok {
 		return
 	}
 	if a.S3 == nil {
@@ -205,9 +191,8 @@ type coverageResponse struct {
 
 // GetCoverage handles GET /hls/{deviceID}/coverage.
 func (a *App) GetCoverage(w http.ResponseWriter, r *http.Request) {
-	deviceID, ok := a.verifyHLSAccess(r)
-	if !ok {
-		http.Error(w, "", http.StatusNotFound)
+	deviceID := chi.URLParam(r, "deviceID")
+	if _, ok := a.ownedCamera(w, r, deviceID); !ok {
 		return
 	}
 

@@ -19,29 +19,24 @@ import (
 	"github.com/cargocam/ghostcam/server/s3"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	goredis "github.com/redis/go-redis/v9"
 )
 
 // App holds all shared server dependencies. Every handler is a method on
-// *App so routes.go can wire handlers directly without an intermediate
-// Handlers struct.
+// *App so main.go can wire routes directly without any intermediate struct.
+// Stripe configuration lives on Config — there is no separate copy here.
 type App struct {
 	Config     *ServerConfig
 	DB         *db.DB
-	Redis      *redis.Client // nil if Redis not configured
-	S3         *s3.Client    // nil if S3 not configured
+	Redis      *goredis.Client // nil if Redis not configured
+	S3         *s3.Client      // nil if S3 not configured
 	HMACSecret []byte
-	Stripe     StripeConfig
 }
 
-// StripeConfig holds Stripe-specific configuration. All fields are empty when
-// billing is disabled (STRIPE_SECRET_KEY not set).
-type StripeConfig struct {
-	SecretKey         string
-	WebhookSecret     string
-	PriceIDStarter    string
-	PriceIDPro        string
-	PriceIDEnterprise string
-	PortalConfigID    string
+// stripeConfigured reports whether a Stripe secret key is set. Paid tier
+// enforcement is skipped entirely when this is false (dev/local).
+func (a *App) stripeConfigured() bool {
+	return a.Config.StripeSecretKey != ""
 }
 
 func main() {
@@ -94,9 +89,9 @@ func run() error {
 		return fmt.Errorf("get HMAC secret: %w", err)
 	}
 
-	var redisClient *redis.Client
+	var redisClient *goredis.Client
 	if cfg.RedisURL != "" {
-		redisClient, err = redis.NewClient(cfg.RedisURL)
+		redisClient, err = redis.Connect(cfg.RedisURL)
 		if err != nil {
 			slog.Warn("redis connection failed (telemetry disabled)", "error", err)
 		} else {
@@ -130,14 +125,6 @@ func run() error {
 		Redis:      redisClient,
 		S3:         s3Client,
 		HMACSecret: hmacSecret,
-		Stripe: StripeConfig{
-			SecretKey:         cfg.StripeSecretKey,
-			WebhookSecret:     cfg.StripeWebhookSecret,
-			PriceIDStarter:    cfg.StripePriceIDStarter,
-			PriceIDPro:        cfg.StripePriceIDPro,
-			PriceIDEnterprise: cfg.StripePriceIDEnterprise,
-			PortalConfigID:    cfg.StripePortalConfigID,
-		},
 	}
 
 	srv := &http.Server{

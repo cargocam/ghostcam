@@ -24,7 +24,7 @@ func (a *App) ListEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	beforeID := r.URL.Query().Get("before")
 
-	events, err := redis.ListEvents(r.Context(), a.Redis.RDB(), userID, count, beforeID)
+	events, err := redis.ListEvents(r.Context(), a.Redis, userID, count, beforeID)
 	if err != nil {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
@@ -41,7 +41,7 @@ func (a *App) GetUnreadCount(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	count, _ := redis.UnreadCount(r.Context(), a.Redis.RDB(), userID)
+	count, _ := redis.UnreadCount(r.Context(), a.Redis, userID)
 	writeJSON(w, http.StatusOK, map[string]any{"count": count})
 }
 
@@ -55,14 +55,14 @@ func (a *App) MarkEventRead(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	_, err := redis.MarkEventRead(ctx, a.Redis.RDB(), userID, eventID)
+	_, err := redis.MarkEventRead(ctx, a.Redis, userID, eventID)
 	if err != nil {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 
 	syncPayload, _ := json.Marshal(map[string]string{"action": "read", "event_id": eventID})
-	a.Redis.RDB().Publish(ctx, fmt.Sprintf("events_sync:%s", userID), syncPayload)
+	a.Redis.Publish(ctx, fmt.Sprintf("events_sync:%s", userID), syncPayload)
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -76,10 +76,10 @@ func (a *App) MarkAllEventsRead(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	redis.MarkAllRead(ctx, a.Redis.RDB(), userID)
+	redis.MarkAllRead(ctx, a.Redis, userID)
 
 	syncPayload, _ := json.Marshal(map[string]string{"action": "read_all"})
-	a.Redis.RDB().Publish(ctx, fmt.Sprintf("events_sync:%s", userID), syncPayload)
+	a.Redis.Publish(ctx, fmt.Sprintf("events_sync:%s", userID), syncPayload)
 
 	w.WriteHeader(http.StatusOK)
 }
@@ -94,10 +94,10 @@ func (a *App) DismissEvent(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	redis.DismissEvent(ctx, a.Redis.RDB(), userID, eventID)
+	redis.DismissEvent(ctx, a.Redis, userID, eventID)
 
 	syncPayload, _ := json.Marshal(map[string]string{"action": "dismiss", "event_id": eventID})
-	a.Redis.RDB().Publish(ctx, fmt.Sprintf("events_sync:%s", userID), syncPayload)
+	a.Redis.Publish(ctx, fmt.Sprintf("events_sync:%s", userID), syncPayload)
 
 	w.WriteHeader(http.StatusOK)
 }
