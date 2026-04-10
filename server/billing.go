@@ -426,7 +426,7 @@ func (a *App) notifyCameraLimitExceeded(ctx context.Context, userID, tierID stri
 	live := stored
 	live.EventID = eventID
 	withID, _ := json.Marshal(live)
-	a.Redis.Publish(ctx, fmt.Sprintf("storage_capped:%s", userID), withID)
+	a.Redis.Publish(ctx, fmt.Sprintf("camera_limit_exceeded:%s", userID), withID)
 	slog.Info("camera limit exceeded after tier change", "user_id", userID, "count", count, "limit", *tier.CameraLimit, "tier", tierID)
 }
 
