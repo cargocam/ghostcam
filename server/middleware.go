@@ -1,4 +1,4 @@
-package server
+package main
 
 import (
 	"context"
@@ -7,99 +7,116 @@ import (
 	"time"
 
 	"github.com/cargocam/ghostcam/server/auth"
-	"github.com/cargocam/ghostcam/server/ctxutil"
 )
 
-// ViewerAuth is middleware that authenticates viewers via JWT cookie or Bearer API token.
-func ViewerAuth(app *App) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := r.Context()
+// Context keys for values populated by middleware.
+type contextKey string
 
-			// 1. Check Authorization: Bearer <api-token>
-			if authHeader := r.Header.Get("Authorization"); authHeader != "" {
-				if token, ok := strings.CutPrefix(authHeader, "Bearer "); ok {
-					tokenHash := auth.HMACToken(token, app.HMACSecret)
-					record, err := app.DB.VerifyAPIToken(ctx, tokenHash)
-					if err == nil && record != nil {
-						now := time.Now().Unix()
-						if record.ExpiresAt == nil || *record.ExpiresAt > now {
-							ctx = context.WithValue(ctx, ctxutil.KeyUserID, record.UserID)
-							next.ServeHTTP(w, r.WithContext(ctx))
-							return
-						}
+const (
+	keyUserID         contextKey = "user_id"
+	keyUserEmail      contextKey = "user_email"
+	keyCameraDeviceID contextKey = "camera_device_id"
+)
+
+func getUserID(r *http.Request) string {
+	if v, ok := r.Context().Value(keyUserID).(string); ok {
+		return v
+	}
+	return ""
+}
+
+func getUserEmail(r *http.Request) string {
+	if v, ok := r.Context().Value(keyUserEmail).(string); ok {
+		return v
+	}
+	return ""
+}
+
+func getCameraDeviceID(r *http.Request) string {
+	if v, ok := r.Context().Value(keyCameraDeviceID).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// viewerAuth authenticates viewers via JWT cookie or Bearer API token.
+func (a *App) viewerAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := r.Context()
+
+		// 1. Authorization: Bearer <api-token>
+		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+			if token, ok := strings.CutPrefix(authHeader, "Bearer "); ok {
+				tokenHash := auth.HMACToken(token, a.HMACSecret)
+				record, err := a.DB.VerifyAPIToken(ctx, tokenHash)
+				if err == nil && record != nil {
+					now := time.Now().Unix()
+					if record.ExpiresAt == nil || *record.ExpiresAt > now {
+						ctx = context.WithValue(ctx, keyUserID, record.UserID)
+						next.ServeHTTP(w, r.WithContext(ctx))
+						return
 					}
 				}
 			}
+		}
 
-			// 2. Check JWT cookie (stateless — no DB lookup)
-			if cookie, err := r.Cookie("ghostcam-token"); err == nil {
-				claims := auth.VerifyJWT(cookie.Value, app.HMACSecret)
-				if claims != nil {
-					ctx = context.WithValue(ctx, ctxutil.KeyUserID, claims.UserID)
-					ctx = context.WithValue(ctx, ctxutil.KeyUserEmail, claims.Email)
-					next.ServeHTTP(w, r.WithContext(ctx))
-					return
-				}
+		// 2. JWT cookie (stateless — no DB lookup)
+		if cookie, err := r.Cookie("ghostcam-token"); err == nil {
+			claims := auth.VerifyJWT(cookie.Value, a.HMACSecret)
+			if claims != nil {
+				ctx = context.WithValue(ctx, keyUserID, claims.UserID)
+				ctx = context.WithValue(ctx, keyUserEmail, claims.Email)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
 			}
+		}
 
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+	})
+}
+
+// adminAuth wraps viewerAuth and enforces that the user matches AdminEmail.
+func (a *App) adminAuth(next http.Handler) http.Handler {
+	return a.viewerAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		userID := getUserID(r)
+		if userID == "" {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-		})
-	}
+			return
+		}
+
+		user, err := a.DB.GetUserByEmail(r.Context(), a.Config.AdminEmail)
+		if err != nil || user == nil || user.UserID != userID {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	}))
 }
 
-// AdminAuth is middleware that wraps ViewerAuth and additionally checks that
-// the authenticated user is an admin (identified by matching the admin email from config).
-func AdminAuth(app *App) func(http.Handler) http.Handler {
-	viewerAuth := ViewerAuth(app)
-	return func(next http.Handler) http.Handler {
-		return viewerAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			userID := r.Context().Value(ctxutil.KeyUserID)
-			if userID == nil || userID == "" {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
+// cameraAuth authenticates cameras via Bearer API key.
+func (a *App) cameraAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 
-			// Look up user email and compare to admin email
-			user, err := app.DB.GetUserByEmail(r.Context(), app.Config.AdminEmail)
-			if err != nil || user == nil || user.UserID != userID.(string) {
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
-			}
+		token, ok := strings.CutPrefix(authHeader, "Bearer ")
+		if !ok {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 
-			next.ServeHTTP(w, r)
-		}))
-	}
-}
+		tokenHash := auth.HMACToken(token, a.HMACSecret)
+		camera, err := a.DB.GetCameraByAPIKey(r.Context(), tokenHash)
+		if err != nil || camera == nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 
-// CameraAuth is middleware that authenticates cameras via Bearer API key.
-func CameraAuth(app *App) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-
-			token, ok := strings.CutPrefix(authHeader, "Bearer ")
-			if !ok {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-
-			tokenHash := auth.HMACToken(token, app.HMACSecret)
-			camera, err := app.DB.GetCameraByAPIKey(r.Context(), tokenHash)
-			if err != nil || camera == nil {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-
-			ctx := context.WithValue(r.Context(), ctxutil.KeyCameraDeviceID, camera.DeviceID)
-			if camera.UserID != nil {
-				ctx = context.WithValue(ctx, ctxutil.KeyCameraUserID, *camera.UserID)
-			}
-			next.ServeHTTP(w, r.WithContext(ctx))
-		})
-	}
+		ctx := context.WithValue(r.Context(), keyCameraDeviceID, camera.DeviceID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }

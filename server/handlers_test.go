@@ -1,4 +1,4 @@
-package handlers
+package main
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 )
 
 func TestCameraLimitAllowed(t *testing.T) {
-	// Simulates the presign handler's camera limit check logic:
+	// Mirrors the presign handler's camera limit check logic:
 	// Given a list of cameras ordered by enrolled_at and a tier limit,
 	// only the N oldest cameras are allowed to upload.
 	tests := []struct {
@@ -96,7 +96,7 @@ func isCameraAllowed(tier billing.Tier, cameraIDs []string, deviceID string) boo
 	if len(cameraIDs) <= *tier.CameraLimit {
 		return true // under limit
 	}
-	// Only the N oldest cameras are allowed
+	// Only the N oldest cameras are allowed.
 	allowed := make(map[string]bool, *tier.CameraLimit)
 	for i := 0; i < *tier.CameraLimit && i < len(cameraIDs); i++ {
 		allowed[cameraIDs[i]] = true
@@ -106,10 +106,6 @@ func isCameraAllowed(tier billing.Tier, cameraIDs []string, deviceID string) boo
 
 func make16Cameras() []string {
 	cams := make([]string, 16)
-	for i := range cams {
-		cams[i] = "cam-" + string(rune('0'+i/10)) + string(rune('0'+i%10))
-	}
-	// Use readable names
 	for i := range cams {
 		cams[i] = fmt.Sprintf("cam-%d", i+1)
 	}
@@ -180,5 +176,23 @@ func TestEffectiveTier(t *testing.T) {
 				t.Errorf("effectiveTier() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEpochMsToISO8601(t *testing.T) {
+	tests := []struct {
+		epochMs uint64
+		want    string
+	}{
+		{0, "1970-01-01T00:00:00.000Z"},
+		{1775401947875, "2026-04-05T15:12:27.875Z"},
+		{1775538068000, "2026-04-07T05:01:08.000Z"},
+	}
+
+	for _, tt := range tests {
+		got := epochMsToISO8601(tt.epochMs)
+		if got != tt.want {
+			t.Errorf("epochMsToISO8601(%d) = %q, want %q", tt.epochMs, got, tt.want)
+		}
 	}
 }

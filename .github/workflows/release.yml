@@ -31,7 +31,7 @@ jobs:
       - name: Build camera binary
         run: |
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-            go build -o ${{ matrix.name }} ./cmd/ghostcam-camera
+            go build -o ${{ matrix.name }} ./camera
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}

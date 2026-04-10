@@ -1,4 +1,5 @@
-// Package auth provides password hashing, HMAC token signing, and session ID generation.
+// Package auth provides password hashing, HMAC token signing, random
+// credential generation, and JWT sign/verify for stateless session cookies.
 package auth
 
 import (
@@ -103,15 +104,6 @@ func HMACToken(rawToken string, secret []byte) string {
 	mac := hmac.New(sha256.New, secret)
 	mac.Write([]byte(rawToken))
 	return hex.EncodeToString(mac.Sum(nil))
-}
-
-// GenerateSessionID returns a cryptographically random session ID (32 bytes, URL-safe base64).
-func GenerateSessionID() string {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		panic("crypto/rand failed: " + err.Error())
-	}
-	return base64.RawURLEncoding.EncodeToString(b)
 }
 
 // GenerateRandomPassword returns a 16-character alphanumeric random password.

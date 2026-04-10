@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func (db *PostgresDB) GetCamera(ctx context.Context, deviceID string) (*CameraRecord, error) {
+func (db *DB) GetCamera(ctx context.Context, deviceID string) (*CameraRecord, error) {
 	row := db.pool.QueryRow(ctx,
 		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes, resolution, recording_mode
 		 FROM cameras WHERE device_id = $1`, deviceID)
@@ -23,7 +23,7 @@ func (db *PostgresDB) GetCamera(ctx context.Context, deviceID string) (*CameraRe
 	return &c, nil
 }
 
-func (db *PostgresDB) ListCameras(ctx context.Context, userID string) ([]CameraRecord, error) {
+func (db *DB) ListCameras(ctx context.Context, userID string) ([]CameraRecord, error) {
 	rows, err := db.pool.Query(ctx,
 		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes, resolution, recording_mode
 		 FROM cameras WHERE user_id = $1 ORDER BY enrolled_at`, userID)
@@ -43,7 +43,7 @@ func (db *PostgresDB) ListCameras(ctx context.Context, userID string) ([]CameraR
 	return cameras, rows.Err()
 }
 
-func (db *PostgresDB) UpdateCamera(ctx context.Context, deviceID string, update *CameraUpdate) error {
+func (db *DB) UpdateCamera(ctx context.Context, deviceID string, update *CameraUpdate) error {
 	if update.DisplayName == nil && update.Notes == nil && update.Resolution == nil && update.RecordingMode == nil {
 		return nil
 	}
@@ -62,7 +62,7 @@ func (db *PostgresDB) UpdateCamera(ctx context.Context, deviceID string, update 
 }
 
 // TouchCameraLastSeen updates last_seen_at to the current unix timestamp (seconds).
-func (db *PostgresDB) TouchCameraLastSeen(ctx context.Context, deviceID string) error {
+func (db *DB) TouchCameraLastSeen(ctx context.Context, deviceID string) error {
 	_, err := db.pool.Exec(ctx,
 		`UPDATE cameras SET last_seen_at = $1 WHERE device_id = $2`,
 		nowUnix(), deviceID)
@@ -72,7 +72,7 @@ func (db *PostgresDB) TouchCameraLastSeen(ctx context.Context, deviceID string) 
 	return nil
 }
 
-func (db *PostgresDB) DeleteCamera(ctx context.Context, deviceID string) error {
+func (db *DB) DeleteCamera(ctx context.Context, deviceID string) error {
 	_, err := db.pool.Exec(ctx, "DELETE FROM cameras WHERE device_id = $1", deviceID)
 	if err != nil {
 		return fmt.Errorf("delete camera: %w", err)
@@ -80,11 +80,11 @@ func (db *PostgresDB) DeleteCamera(ctx context.Context, deviceID string) error {
 	return nil
 }
 
-func (db *PostgresDB) CreateProvisionedCamera(ctx context.Context, deviceID, userID, deviceSerial string) error {
+func (db *DB) CreateProvisionedCamera(ctx context.Context, deviceID, userID, deviceSerial string) error {
 	now := nowUnix()
 	_, err := db.pool.Exec(ctx,
-		`INSERT INTO cameras (device_id, user_id, cert_fingerprint, display_name, enrolled_at, device_serial)
-		 VALUES ($1, $2, $1, 'New Camera', $3, $4)`,
+		`INSERT INTO cameras (device_id, user_id, display_name, enrolled_at, device_serial)
+		 VALUES ($1, $2, 'New Camera', $3, $4)`,
 		deviceID, userID, now, deviceSerial)
 	if err != nil {
 		return fmt.Errorf("create provisioned camera: %w", err)
@@ -92,7 +92,7 @@ func (db *PostgresDB) CreateProvisionedCamera(ctx context.Context, deviceID, use
 	return nil
 }
 
-func (db *PostgresDB) GetCameraByAPIKey(ctx context.Context, apiKeyHash string) (*CameraRecord, error) {
+func (db *DB) GetCameraByAPIKey(ctx context.Context, apiKeyHash string) (*CameraRecord, error) {
 	row := db.pool.QueryRow(ctx,
 		`SELECT c.device_id, c.user_id, c.display_name, c.enrolled_at, c.last_seen_at, c.notes, c.resolution, c.recording_mode
 		 FROM camera_api_keys k JOIN cameras c ON k.device_id = c.device_id
@@ -109,7 +109,7 @@ func (db *PostgresDB) GetCameraByAPIKey(ctx context.Context, apiKeyHash string) 
 	return &c, nil
 }
 
-func (db *PostgresDB) GetCameraBySerial(ctx context.Context, deviceSerial string) (*CameraRecord, error) {
+func (db *DB) GetCameraBySerial(ctx context.Context, deviceSerial string) (*CameraRecord, error) {
 	row := db.pool.QueryRow(ctx,
 		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes, resolution, recording_mode
 		 FROM cameras WHERE device_serial = $1`, deviceSerial)
@@ -125,7 +125,7 @@ func (db *PostgresDB) GetCameraBySerial(ctx context.Context, deviceSerial string
 	return &c, nil
 }
 
-func (db *PostgresDB) DeleteCameraAPIKey(ctx context.Context, deviceID string) error {
+func (db *DB) DeleteCameraAPIKey(ctx context.Context, deviceID string) error {
 	_, err := db.pool.Exec(ctx, "DELETE FROM camera_api_keys WHERE device_id = $1", deviceID)
 	if err != nil {
 		return fmt.Errorf("delete camera api key: %w", err)
@@ -133,28 +133,7 @@ func (db *PostgresDB) DeleteCameraAPIKey(ctx context.Context, deviceID string) e
 	return nil
 }
 
-// DeleteStaleUnclaimedCameras deletes cameras with no owner that were enrolled before olderThanUnix.
-func (db *PostgresDB) DeleteStaleUnclaimedCameras(ctx context.Context, olderThanUnix int64) (int64, error) {
-	tag, err := db.pool.Exec(ctx,
-		"DELETE FROM cameras WHERE user_id IS NULL AND enrolled_at < $1", olderThanUnix)
-	if err != nil {
-		return 0, fmt.Errorf("delete stale unclaimed cameras: %w", err)
-	}
-	return tag.RowsAffected(), nil
-}
-
-// DeleteExpiredProvisionTokens deletes provision tokens that have expired and were never claimed.
-func (db *PostgresDB) DeleteExpiredProvisionTokens(ctx context.Context) (int64, error) {
-	now := nowUnix()
-	tag, err := db.pool.Exec(ctx,
-		"DELETE FROM provision_tokens WHERE expires_at < $1 AND claimed_at IS NULL", now)
-	if err != nil {
-		return 0, fmt.Errorf("delete expired provision tokens: %w", err)
-	}
-	return tag.RowsAffected(), nil
-}
-
-func (db *PostgresDB) CreateCameraAPIKey(ctx context.Context, deviceID, apiKeyHash string) error {
+func (db *DB) CreateCameraAPIKey(ctx context.Context, deviceID, apiKeyHash string) error {
 	now := nowUnix()
 	_, err := db.pool.Exec(ctx,
 		`INSERT INTO camera_api_keys (device_id, api_key_hash, created_at) VALUES ($1, $2, $3)`,

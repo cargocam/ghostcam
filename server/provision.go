@@ -1,4 +1,4 @@
-package handlers
+package main
 
 import (
 	"encoding/json"
@@ -12,7 +12,7 @@ import (
 )
 
 // Provision handles POST /api/v1/cameras/provision.
-func (h *Handlers) Provision(w http.ResponseWriter, r *http.Request) {
+func (a *App) Provision(w http.ResponseWriter, r *http.Request) {
 	var body common.ProvisionRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -24,9 +24,9 @@ func (h *Handlers) Provision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tokenHash := auth.HMACToken(body.Token, h.HMACSecret)
+	tokenHash := auth.HMACToken(body.Token, a.HMACSecret)
 
-	userID, err := h.DB.ClaimProvisionToken(r.Context(), tokenHash, "")
+	userID, err := a.DB.ClaimProvisionToken(r.Context(), tokenHash)
 	if err != nil {
 		slog.Error("provision: claim token failed", "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
@@ -37,8 +37,8 @@ func (h *Handlers) Provision(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check if this device serial is already provisioned (re-provisioning)
-	existing, err := h.DB.GetCameraBySerial(r.Context(), body.DeviceSerial)
+	// Check if this device serial is already provisioned (re-provisioning).
+	existing, err := a.DB.GetCameraBySerial(r.Context(), body.DeviceSerial)
 	if err != nil {
 		slog.Error("provision: check existing failed", "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
@@ -47,29 +47,26 @@ func (h *Handlers) Provision(w http.ResponseWriter, r *http.Request) {
 
 	var deviceID string
 	if existing != nil {
-		// Re-provisioning: reuse existing camera, just issue new API key
 		deviceID = existing.DeviceID
 		slog.Info("re-provisioning existing camera", "device_id", deviceID, "serial", body.DeviceSerial)
 	} else {
-		// New camera
 		deviceID = uuid.New().String()
-		if err := h.DB.CreateProvisionedCamera(r.Context(), deviceID, *userID, body.DeviceSerial); err != nil {
+		if err := a.DB.CreateProvisionedCamera(r.Context(), deviceID, *userID, body.DeviceSerial); err != nil {
 			slog.Error("provision: create camera failed", "error", err)
 			http.Error(w, "", http.StatusInternalServerError)
 			return
 		}
 	}
 
-	// Generate and store new API key (replaces any existing key)
 	apiKey := auth.GenerateRandomPassword()
-	apiKeyHash := auth.HMACToken(apiKey, h.HMACSecret)
+	apiKeyHash := auth.HMACToken(apiKey, a.HMACSecret)
 
-	// Delete old API key if re-provisioning, then create new
-	_ = h.DB.DeleteCameraAPIKey(r.Context(), deviceID)
-	if err := h.DB.CreateCameraAPIKey(r.Context(), deviceID, apiKeyHash); err != nil {
+	// Delete old API key if re-provisioning, then create new.
+	_ = a.DB.DeleteCameraAPIKey(r.Context(), deviceID)
+	if err := a.DB.CreateCameraAPIKey(r.Context(), deviceID, apiKeyHash); err != nil {
 		slog.Error("provision: create api key failed", "error", err)
 		if existing == nil {
-			_ = h.DB.DeleteCamera(r.Context(), deviceID)
+			_ = a.DB.DeleteCamera(r.Context(), deviceID)
 		}
 		http.Error(w, "", http.StatusInternalServerError)
 		return

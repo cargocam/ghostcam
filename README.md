@@ -38,21 +38,24 @@ For camera setup and a full walkthrough of the viewer, see **[docs/usage.md](doc
 ## Project Structure
 
 ```
-cmd/ghostcam-server/     Server entrypoint
-cmd/ghostcam-camera/     Camera entrypoint
 common/                  Shared Go types (camera <-> server contract)
-camera/                  Camera: capture pipeline, S3 upload, telemetry, provisioning, gpsd
-server/                  Server: HTTP handlers, DB, Redis, S3, auth, billing
+camera/                  Camera binary (package main): capture pipeline, S3 upload,
+                         telemetry, provisioning, gpsd
+server/                  Server binary (package main): chi router + HTTP handlers
+                         (methods on *App), plus subpackages:
   auth/                  Argon2id passwords, JWT, HMAC
   billing/               Tier definitions (free/starter/pro/enterprise)
   db/                    PostgreSQL (pgx), migrations
-  handlers/              HTTP handlers (chi)
   redis/                 Telemetry streams (XADD/XREAD), pub/sub
-  s3/                    Presigned URL generation (GET + PUT)
+  s3/                    Presigned URL generation + bucket lifecycle setup
 ui/                      Svelte 5 SPA (hls.js, Leaflet, Tailwind)
 pi/                      Pi system files (systemd, GPS, NetworkManager)
 scripts/                 Developer tools (pi.sh)
 ```
+
+Both `camera/` and `server/` are top-level `package main` directories — no
+`cmd/` wrapper. `go build ./camera` and `go build ./server` produce the two
+binaries.
 
 ## Camera
 
@@ -73,7 +76,7 @@ Key features:
 
 ```bash
 # Cross-compile for Pi (3 seconds, no sysroot needed)
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./cmd/ghostcam-camera
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./camera
 
 # Deploy to Pi
 scp ghostcam-camera pi@10.0.0.229:/usr/local/bin/
@@ -101,10 +104,12 @@ Key features:
 - **Failed login logging** with email + IP
 - **HLS manifest**: `#EXT-X-INDEPENDENT-SEGMENTS` tag; segments via 302 redirect to S3
 - **Auto-create** "free" subscription on user creation
-- **Background jobs**: hourly segment retention (30 days default), 6-hourly stale camera cleanup
+- **No cleanup daemons**: segment retention is enforced by an S3 bucket
+  lifecycle rule (applied on startup) plus opportunistic DB row pruning in
+  the presign handler — no hourly retention / session / stale-camera loops
 
 ```bash
-go build -o ghostcam-server ./cmd/ghostcam-server
+go build -o ghostcam-server ./server
 ```
 
 ### Key Endpoints
@@ -138,7 +143,7 @@ go build -o ghostcam-server ./cmd/ghostcam-server
 | `GHOSTCAM_S3_ENDPOINT` | S3 endpoint URL (Tigris, MinIO) |
 | `GHOSTCAM_ADMIN_EMAIL` | Admin user email |
 | `GHOSTCAM_ADMIN_PASSWORD` | Preset admin password |
-| `GHOSTCAM_SEGMENT_RETENTION_DAYS` | Segment retention (default 30); hourly cleanup |
+| `GHOSTCAM_SEGMENT_RETENTION_DAYS` | Segment retention (default 30); applied to S3 bucket lifecycle on startup and used as the read cutoff for manifest/coverage queries |
 
 ## Infrastructure
 

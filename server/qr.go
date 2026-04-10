@@ -1,4 +1,4 @@
-package handlers
+package main
 
 import (
 	"encoding/json"
@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/cargocam/ghostcam/server/auth"
-	"github.com/cargocam/ghostcam/server/ctxutil"
 	"github.com/cargocam/ghostcam/server/db"
 )
 
@@ -26,8 +25,8 @@ type qrResponse struct {
 
 // EnrollmentQR handles GET/POST /api/v1/cameras/enroll/qr.
 // Returns JSON with the QR payload string for client-side QR rendering.
-func (h *Handlers) EnrollmentQR(w http.ResponseWriter, r *http.Request) {
-	userID := ctxutil.GetUserID(r)
+func (a *App) EnrollmentQR(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r)
 
 	var body qrRequest
 	if r.Method == http.MethodPost && r.Body != nil {
@@ -43,19 +42,18 @@ func (h *Handlers) EnrollmentQR(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rawToken := auth.GenerateRandomPassword()
-	tokenHash := auth.HMACToken(rawToken, h.HMACSecret)
+	tokenHash := auth.HMACToken(rawToken, a.HMACSecret)
 
 	now := time.Now().Unix()
 	expiresAt := now + int64(ttlHours*3600)
 
-	if err := h.DB.CreateProvisionToken(r.Context(), tokenHash, userID, expiresAt); err != nil {
+	if err := a.DB.CreateProvisionToken(r.Context(), tokenHash, userID, expiresAt); err != nil {
 		slog.Error("enrollment qr: create provision token failed", "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 
-	// Build QR payload — use configured public URL, fall back to request Host
-	serverURL := h.PublicURL
+	serverURL := a.Config.PublicURL
 	if serverURL == "" {
 		serverURL = fmt.Sprintf("https://%s", r.Host)
 	}

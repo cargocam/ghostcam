@@ -1,4 +1,4 @@
-package handlers
+package main
 
 import (
 	"crypto/sha256"
@@ -14,34 +14,34 @@ import (
 const maxFirmwareSize = 50 * 1024 * 1024 // 50MB
 
 // ReloadConfig handles POST /api/v1/admin/reload.
-func (h *Handlers) ReloadConfig(w http.ResponseWriter, _ *http.Request) {
+func (a *App) ReloadConfig(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "reload not implemented"})
 }
 
 // FirmwareLatest handles GET /api/v1/firmware/latest (public, no auth).
 // Returns the latest firmware version and a presigned download URL from Tigris.
-func (h *Handlers) FirmwareLatest(w http.ResponseWriter, r *http.Request) {
-	if h.Redis == nil {
+func (a *App) FirmwareLatest(w http.ResponseWriter, r *http.Request) {
+	if a.Redis == nil {
 		writeJSON(w, http.StatusOK, map[string]any{"release": nil})
 		return
 	}
 
 	ctx := r.Context()
-	version, err := h.Redis.RDB().Get(ctx, "firmware:latest:version").Result()
+	version, err := a.Redis.RDB().Get(ctx, "firmware:latest:version").Result()
 	if err != nil || version == "" {
 		writeJSON(w, http.StatusOK, map[string]any{"release": nil})
 		return
 	}
 
 	key := s3.FirmwareKey(version)
-	downloadURL, err := h.S3.PresignGet(ctx, key)
+	downloadURL, err := a.S3.PresignGet(ctx, key)
 	if err != nil {
 		slog.Warn("firmware: presign GET failed", "version", version, "error", err)
 		writeJSON(w, http.StatusOK, map[string]any{"release": nil})
 		return
 	}
 
-	sha256hex, _ := h.Redis.RDB().Get(ctx, "firmware:latest:sha256").Result()
+	sha256hex, _ := a.Redis.RDB().Get(ctx, "firmware:latest:sha256").Result()
 
 	release := map[string]any{
 		"version":      version,
@@ -56,8 +56,8 @@ func (h *Handlers) FirmwareLatest(w http.ResponseWriter, r *http.Request) {
 // FirmwareUpload handles POST /api/v1/admin/firmware (admin only).
 // Accepts multipart form: version (string) + binary (file).
 // Uploads to Tigris and sets the latest version in Redis.
-func (h *Handlers) FirmwareUpload(w http.ResponseWriter, r *http.Request) {
-	if h.S3 == nil || h.Redis == nil {
+func (a *App) FirmwareUpload(w http.ResponseWriter, r *http.Request) {
+	if a.S3 == nil || a.Redis == nil {
 		writeError(w, http.StatusServiceUnavailable, "S3 or Redis not configured")
 		return
 	}
@@ -90,18 +90,16 @@ func (h *Handlers) FirmwareUpload(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	key := s3.FirmwareKey(version)
 
-	if err := h.S3.Upload(ctx, key, data, "application/octet-stream"); err != nil {
+	if err := a.S3.Upload(ctx, key, data, "application/octet-stream"); err != nil {
 		slog.Error("firmware upload failed", "version", version, "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 
-	// Compute SHA256 for integrity verification on camera side
 	hash := sha256.Sum256(data)
 	sha256hex := hex.EncodeToString(hash[:])
 
-	// Set latest version + hash in Redis
-	pipe := h.Redis.RDB().Pipeline()
+	pipe := a.Redis.RDB().Pipeline()
 	pipe.Set(ctx, "firmware:latest:version", version, 0)
 	pipe.Set(ctx, "firmware:latest:sha256", sha256hex, 0)
 	if _, err := pipe.Exec(ctx); err != nil {
@@ -110,14 +108,13 @@ func (h *Handlers) FirmwareUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Store metadata as JSON for convenience
 	meta, _ := json.Marshal(map[string]any{
 		"version":    version,
 		"s3_key":     key,
 		"size_bytes": len(data),
 		"sha256":     sha256hex,
 	})
-	h.Redis.RDB().Set(ctx, "firmware:latest:meta", meta, 0)
+	a.Redis.RDB().Set(ctx, "firmware:latest:meta", meta, 0)
 
 	slog.Info("firmware published", "version", version, "size_bytes", len(data), "sha256", sha256hex)
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -128,12 +125,12 @@ func (h *Handlers) FirmwareUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 // GithubWebhook handles POST /api/v1/webhooks/github.
-func (h *Handlers) GithubWebhook(w http.ResponseWriter, _ *http.Request) {
+func (a *App) GithubWebhook(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
 // QueryAudit handles GET /api/v1/audit.
-func (h *Handlers) QueryAudit(w http.ResponseWriter, r *http.Request) {
+func (a *App) QueryAudit(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	eventType := r.URL.Query().Get("type")
@@ -142,7 +139,7 @@ func (h *Handlers) QueryAudit(w http.ResponseWriter, r *http.Request) {
 	limit := parseQueryUint64(r, "limit", 50)
 	offset := parseQueryUint64(r, "offset", 0)
 
-	entries, total, err := h.DB.QueryAuditLog(ctx, eventType, since, until, int64(limit), int64(offset))
+	entries, total, err := a.DB.QueryAuditLog(ctx, eventType, since, until, int64(limit), int64(offset))
 	if err != nil {
 		http.Error(w, "", http.StatusInternalServerError)
 		return

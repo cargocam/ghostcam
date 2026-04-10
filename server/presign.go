@@ -1,4 +1,4 @@
-package handlers
+package main
 
 import (
 	"context"
@@ -10,7 +10,6 @@ import (
 
 	"github.com/cargocam/ghostcam/common"
 	"github.com/cargocam/ghostcam/server/billing"
-	"github.com/cargocam/ghostcam/server/ctxutil"
 	"github.com/cargocam/ghostcam/server/db"
 	"github.com/cargocam/ghostcam/server/redis"
 	"github.com/cargocam/ghostcam/server/s3"
@@ -20,11 +19,35 @@ import (
 
 const presignBatchMax = 10
 
-// Presign handles POST /api/v1/cameras/{deviceID}/presign.
-func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
-	deviceID := ctxutil.GetCameraDeviceID(r)
+// pruneBatchSize caps the number of segment rows deleted per presign call.
+// Prune is tied to normal upload activity instead of a background loop.
+const pruneBatchSize = 100
 
-	if h.S3 == nil {
+// defaultTierID is the tier assigned to users without a paid Stripe subscription.
+const defaultTierID = "free"
+
+// effectiveTier returns the user's billing tier. Paid tiers require an active
+// Stripe subscription — a tier column alone is not enough. When Stripe is not
+// configured (dev/local), returns "enterprise" (unlimited) so testing works
+// without payment infrastructure.
+func effectiveTier(sub *db.SubscriptionRecord, stripeConfigured bool) string {
+	if !stripeConfigured {
+		return "enterprise" // dev mode: unlimited
+	}
+	if sub == nil {
+		return defaultTierID
+	}
+	if sub.Tier != defaultTierID && (sub.StripeSubscriptionID == nil || sub.Status != "active") {
+		return defaultTierID
+	}
+	return sub.Tier
+}
+
+// Presign handles POST /api/v1/cameras/{deviceID}/presign.
+func (a *App) Presign(w http.ResponseWriter, r *http.Request) {
+	deviceID := getCameraDeviceID(r)
+
+	if a.S3 == nil {
 		writeError(w, http.StatusServiceUnavailable, "S3 not configured")
 		return
 	}
@@ -37,15 +60,15 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// 1. Look up camera (needed for storage check and event publishing)
-	camera, err := h.DB.GetCamera(ctx, deviceID)
+	// 1. Look up camera (needed for storage check and event publishing).
+	camera, err := a.DB.GetCamera(ctx, deviceID)
 	if err != nil || camera == nil || camera.UserID == nil {
 		writeError(w, http.StatusNotFound, "camera not found")
 		return
 	}
 	userID := *camera.UserID
 
-	// 2. Confirm uploaded segments
+	// 2. Confirm uploaded segments.
 	var confirmedBytes int64
 	if len(body.Uploaded) > 0 {
 		records := make([]db.SegmentRecord, 0, len(body.Uploaded))
@@ -64,22 +87,19 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 			})
 			confirmedBytes += int64(u.SizeBytes)
 		}
-		if err := h.DB.InsertSegments(ctx, records); err != nil {
+		if err := a.DB.InsertSegments(ctx, records); err != nil {
 			slog.Error("presign: insert segments failed", "device_id", deviceID, "error", err)
 			http.Error(w, "", http.StatusInternalServerError)
 			return
 		}
 
-		// Update cached storage counter and publish motion events
-		if h.Redis != nil {
-			// Increment storage counter with confirmed bytes
+		if a.Redis != nil {
 			if confirmedBytes > 0 {
 				storageKey := "storage_bytes:" + userID
-				h.Redis.RDB().IncrBy(ctx, storageKey, confirmedBytes)
-				h.Redis.RDB().Expire(ctx, storageKey, 5*time.Minute)
+				a.Redis.RDB().IncrBy(ctx, storageKey, confirmedBytes)
+				a.Redis.RDB().Expire(ctx, storageKey, 5*time.Minute)
 			}
 
-			// Publish coverage + motion events to per-user channel
 			covSegments := make([]map[string]any, 0, len(body.Uploaded))
 			for _, u := range body.Uploaded {
 				covSegments = append(covSegments, map[string]any{
@@ -95,8 +115,7 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 						"start_ts":   u.StartTS,
 						"end_ts":     u.EndTS,
 					})
-					// Persist to event stream + include event_id in SSE payload
-					eventID, _ := redis.WriteEvent(ctx, h.Redis.RDB(), userID, deviceID, "motion_detected", string(motionPayload))
+					eventID, _ := redis.WriteEvent(ctx, a.Redis.RDB(), userID, deviceID, "motion_detected", string(motionPayload))
 					motionWithID, _ := json.Marshal(map[string]any{
 						"event_id":   eventID,
 						"device_id":  deviceID,
@@ -104,7 +123,7 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 						"start_ts":   u.StartTS,
 						"end_ts":     u.EndTS,
 					})
-					if err := h.Redis.RDB().Publish(ctx, fmt.Sprintf("motion:%s", userID), motionWithID).Err(); err != nil {
+					if err := a.Redis.RDB().Publish(ctx, fmt.Sprintf("motion:%s", userID), motionWithID).Err(); err != nil {
 						slog.Debug("failed to publish motion event", "error", err)
 					}
 				}
@@ -113,20 +132,31 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 				"device_id": deviceID,
 				"segments":  covSegments,
 			})
-			h.Redis.RDB().Publish(ctx, fmt.Sprintf("coverage:%s", userID), covPayload)
+			a.Redis.RDB().Publish(ctx, fmt.Sprintf("coverage:%s", userID), covPayload)
+		}
+
+		// Opportunistically prune expired segment rows for this device.
+		// Tied to upload activity so no background loop is needed; the S3
+		// lifecycle rule handles the corresponding object expiry on the
+		// bucket side, so we only need to drop the DB rows here.
+		cutoff := uint64(time.Now().Add(-time.Duration(a.Config.retentionDays())*24*time.Hour).UnixMilli())
+		prunedBytes, err := a.DB.PruneSegments(ctx, deviceID, cutoff, pruneBatchSize)
+		if err != nil {
+			slog.Warn("presign: segment prune failed", "device_id", deviceID, "error", err)
+		} else if prunedBytes > 0 && a.Redis != nil {
+			a.Redis.RDB().DecrBy(ctx, "storage_bytes:"+userID, prunedBytes)
 		}
 	}
 
-	// 3. Check tier limits
-	sub, _ := h.DB.GetSubscription(ctx, userID)
-	tier := billing.GetTier(effectiveTier(sub, h.Stripe.SecretKey != ""))
+	// 3. Check tier limits.
+	sub, _ := a.DB.GetSubscription(ctx, userID)
+	tier := billing.GetTier(effectiveTier(sub, a.Stripe.SecretKey != ""))
 
 	// Camera limit: only the N oldest cameras (by enrolled_at) may upload.
-	// Fast path: skip the expensive ListCameras if count is within limit.
 	if tier.CameraLimit != nil {
-		count, err := h.DB.GetCameraCount(ctx, userID)
+		count, err := a.DB.GetCameraCount(ctx, userID)
 		if err == nil && count > int64(*tier.CameraLimit) {
-			cameras, err := h.DB.ListCameras(ctx, userID) // ordered by enrolled_at
+			cameras, err := a.DB.ListCameras(ctx, userID)
 			if err == nil {
 				allowed := make(map[string]bool, *tier.CameraLimit)
 				for i := 0; i < *tier.CameraLimit && i < len(cameras); i++ {
@@ -145,7 +175,7 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 	if storageLimitBytes > 0 {
 		estimatedBatchBytes := int64(body.Count) * 2 * 1024 * 1024
 
-		currentUsage, err := h.getUserStorageCached(ctx, userID)
+		currentUsage, err := a.getUserStorageCached(ctx, userID)
 		if err != nil {
 			slog.Warn("presign: failed to get storage usage", "error", err)
 		}
@@ -153,10 +183,9 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 		if currentUsage+uint64(estimatedBatchBytes) >= storageLimitBytes {
 			slog.Info("storage capped", "device_id", deviceID, "user_id", userID, "limit", storageLimitBytes)
 
-			// Publish storage_capped event (deduplicated per device, 5 min cooldown)
-			if h.Redis != nil {
+			if a.Redis != nil {
 				dedupeKey := "storage_capped_notified:" + deviceID
-				set, _ := h.Redis.RDB().SetNX(ctx, dedupeKey, "1", 5*time.Minute).Result()
+				set, _ := a.Redis.RDB().SetNX(ctx, dedupeKey, "1", 5*time.Minute).Result()
 				if set {
 					capPayload, _ := json.Marshal(map[string]any{
 						"user_id":       userID,
@@ -164,7 +193,7 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 						"storage_bytes": storageLimitBytes,
 						"limit_gb":      *tier.StorageLimitGB,
 					})
-					eventID, _ := redis.WriteEvent(ctx, h.Redis.RDB(), userID, deviceID, "storage_capped", string(capPayload))
+					eventID, _ := redis.WriteEvent(ctx, a.Redis.RDB(), userID, deviceID, "storage_capped", string(capPayload))
 					capWithID, _ := json.Marshal(map[string]any{
 						"event_id":      eventID,
 						"user_id":       userID,
@@ -172,7 +201,7 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 						"storage_bytes": storageLimitBytes,
 						"limit_gb":      *tier.StorageLimitGB,
 					})
-					h.Redis.RDB().Publish(ctx, fmt.Sprintf("storage_capped:%s", userID), capWithID)
+					a.Redis.RDB().Publish(ctx, fmt.Sprintf("storage_capped:%s", userID), capWithID)
 				}
 			}
 
@@ -181,7 +210,7 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 4. Generate presigned PUT URLs
+	// 4. Generate presigned PUT URLs.
 	count := body.Count
 	if count > presignBatchMax {
 		count = presignBatchMax
@@ -192,7 +221,7 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 	for i := uint32(0); i < count; i++ {
 		segmentID := uuid.New().String()
 		s3Key := s3.SegmentKey(deviceID, segmentID)
-		putURL, err := h.S3.PresignPut(ctx, s3Key)
+		putURL, err := a.S3.PresignPut(ctx, s3Key)
 		if err != nil {
 			slog.Error("presign PUT failed", "device_id", deviceID, "error", err)
 			http.Error(w, "", http.StatusInternalServerError)
@@ -202,21 +231,21 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 			SegmentID: segmentID,
 			S3Key:     s3Key,
 			PutURL:    putURL,
-			ExpiresAt: now + h.PresignTTLSecs,
+			ExpiresAt: now + a.Config.S3PresignTTLSecs,
 		})
 	}
 
-	// 5. Check if init segment needs uploading
+	// 5. Check if init segment needs uploading.
 	var initURL *common.PresignedUrl
-	latest, _ := h.DB.LatestSegment(ctx, deviceID)
+	latest, _ := a.DB.LatestSegment(ctx, deviceID)
 	if latest == nil {
 		initKey := s3.InitKey(deviceID)
-		if putURL, err := h.S3.PresignPut(ctx, initKey); err == nil {
+		if putURL, err := a.S3.PresignPut(ctx, initKey); err == nil {
 			initURL = &common.PresignedUrl{
 				SegmentID: "init",
 				S3Key:     initKey,
 				PutURL:    putURL,
-				ExpiresAt: now + h.PresignTTLSecs,
+				ExpiresAt: now + a.Config.S3PresignTTLSecs,
 			}
 		}
 	}
@@ -227,10 +256,10 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 // getUserStorageCached returns the user's total segment storage in bytes.
 // Uses a Redis counter (TTL 5 min) to avoid the expensive SUM+JOIN on every call.
 // Falls back to DB on Redis miss or unavailability.
-func (h *Handlers) getUserStorageCached(ctx context.Context, userID string) (uint64, error) {
-	if h.Redis != nil {
+func (a *App) getUserStorageCached(ctx context.Context, userID string) (uint64, error) {
+	if a.Redis != nil {
 		storageKey := "storage_bytes:" + userID
-		val, err := h.Redis.RDB().Get(ctx, storageKey).Int64()
+		val, err := a.Redis.RDB().Get(ctx, storageKey).Int64()
 		if err == nil && val >= 0 {
 			return uint64(val), nil
 		}
@@ -238,13 +267,12 @@ func (h *Handlers) getUserStorageCached(ctx context.Context, userID string) (uin
 			slog.Debug("presign: redis storage cache miss", "error", err)
 		}
 
-		// Cache miss — compute from DB and populate Redis
-		dbVal, dbErr := h.DB.GetUserStorageBytes(ctx, userID)
+		dbVal, dbErr := a.DB.GetUserStorageBytes(ctx, userID)
 		if dbErr != nil {
 			return 0, dbErr
 		}
-		h.Redis.RDB().Set(ctx, storageKey, int64(dbVal), 5*time.Minute)
+		a.Redis.RDB().Set(ctx, storageKey, int64(dbVal), 5*time.Minute)
 		return dbVal, nil
 	}
-	return h.DB.GetUserStorageBytes(ctx, userID)
+	return a.DB.GetUserStorageBytes(ctx, userID)
 }

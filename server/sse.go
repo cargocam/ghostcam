@@ -1,4 +1,4 @@
-package handlers
+package main
 
 import (
 	"context"
@@ -8,13 +8,12 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/cargocam/ghostcam/server/ctxutil"
 	"github.com/cargocam/ghostcam/server/redis"
 	goredis "github.com/redis/go-redis/v9"
 )
 
 type telemetryEvent struct {
-	DeviceID  string               `json:"device_id"`
+	DeviceID  string                `json:"device_id"`
 	Telemetry *redis.TelemetryEntry `json:"telemetry"`
 }
 
@@ -24,8 +23,8 @@ type telemetryEvent struct {
 // immediate state without waiting for the next camera poll cycle. The ts and
 // server_ts fields in each telemetry entry let the client determine freshness
 // and infer online/offline status.
-func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
-	userID := ctxutil.GetUserID(r)
+func (a *App) SSE(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -42,21 +41,20 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Accel-Buffering", "no")
 	flusher.Flush()
 
-	cameras, err := h.DB.ListCameras(r.Context(), userID)
+	cameras, err := a.DB.ListCameras(r.Context(), userID)
 	if err != nil {
 		slog.Warn("SSE: failed to list cameras", "user_id", userID, "error", err)
 		return
 	}
 
-	if len(cameras) == 0 || h.Redis == nil {
-		h.sseKeepAlive(r.Context(), w, flusher)
+	if len(cameras) == 0 || a.Redis == nil {
+		sseKeepAlive(r.Context(), w, flusher)
 		return
 	}
 
-	rdb := h.Redis.RDB()
+	rdb := a.Redis.RDB()
 	ctx := r.Context()
 
-	// Build stream keys for telemetry
 	streamKeys := make([]string, 0, len(cameras))
 	keyToDevice := make(map[string]string, len(cameras))
 	for _, c := range cameras {
@@ -65,7 +63,7 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 		keyToDevice[key] = c.DeviceID
 	}
 
-	// --- Emit initial telemetry burst for each camera ---
+	// Emit initial telemetry burst for each camera.
 	lastIDs := make(map[string]string, len(streamKeys))
 	for _, k := range streamKeys {
 		deviceID := keyToDevice[k]
@@ -79,7 +77,7 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 	}
 	flusher.Flush()
 
-	// Subscribe to per-user pub/sub channels
+	// Subscribe to per-user pub/sub channels.
 	eventCh := make(chan string, 32)
 	pubsub := rdb.Subscribe(ctx,
 		fmt.Sprintf("motion:%s", userID),
@@ -139,7 +137,7 @@ func (h *Handlers) SSE(w http.ResponseWriter, r *http.Request) {
 		default:
 		}
 
-		// XREAD telemetry streams
+		// XREAD telemetry streams.
 		args := &goredis.XReadArgs{
 			Streams: make([]string, 0, len(streamKeys)*2),
 			Block:   5 * time.Second,
@@ -204,7 +202,7 @@ func splitOnce(s, sep string) [2]string {
 	return [2]string{s, ""}
 }
 
-func (h *Handlers) sseKeepAlive(ctx context.Context, w http.ResponseWriter, flusher http.Flusher) {
+func sseKeepAlive(ctx context.Context, w http.ResponseWriter, flusher http.Flusher) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	for {

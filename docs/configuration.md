@@ -48,7 +48,7 @@ Both server and camera support TOML config files with layered resolution. Enviro
 | `GHOSTCAM_S3_ENDPOINT` | _(none)_ | S3 endpoint URL (Tigris, MinIO, etc.) |
 | `GHOSTCAM_S3_PRESIGN_TTL_SECS` | `3600` | Presigned URL TTL in seconds |
 | `GHOSTCAM_HMAC_KEY` | `dev-hmac-key` | HMAC key for audit log signing |
-| `GHOSTCAM_SEGMENT_RETENTION_DAYS` | `30` | Segment retention in days |
+| `GHOSTCAM_SEGMENT_RETENTION_DAYS` | `30` | Segment retention in days. Applied to the S3 bucket lifecycle on startup and used as the read cutoff for manifest / coverage queries. |
 | `STRIPE_SECRET_KEY` | _(none)_ | Stripe API key |
 | `STRIPE_WEBHOOK_SECRET` | _(none)_ | Stripe webhook signing secret |
 | `STRIPE_PRICE_ID_STARTER` | _(none)_ | Stripe Price ID for starter tier |
@@ -85,10 +85,19 @@ Billing is always enabled. Every user defaults to **free**. `effectiveTier()` de
 | Pro | 500 GB | 16 |
 | Enterprise | unlimited | unlimited |
 
-## Background Jobs
+## Retention & Cleanup
 
-| Job | Interval | Description |
-|-----|----------|-------------|
-| Session cleanup | 1 hour | Deletes expired sessions |
-| Segment retention | 1 hour | Deletes segments older than `GHOSTCAM_SEGMENT_RETENTION_DAYS` from S3 and Postgres, 100 at a time |
-| Stale camera cleanup | 6 hours | Deletes unclaimed cameras older than 24h and expired provision tokens |
+The server has **no background cleanup goroutines**. All cleanup is driven by
+normal request activity or by the storage layer itself:
+
+| Concern | Mechanism |
+|---------|-----------|
+| Sessions | Removed — auth is stateless (JWT cookies + API tokens). |
+| S3 segment objects | An S3 bucket lifecycle rule (`ghostcam-segments-expiry`) is pushed on server startup that expires objects after `GHOSTCAM_SEGMENT_RETENTION_DAYS`. Object expiry is a property of the bucket, not a cron task. |
+| DB segment rows | Pruned opportunistically inside the presign handler whenever a camera confirms uploads (LIMIT 100 per call). |
+| HLS / coverage reads | `ListSegments` / `ListSegmentCoverage` clamp their `from` parameter to `now - retentionMs`, so rows that haven't been pruned yet never surface through the API. |
+| Expired provision tokens | Deleted in the same transaction that creates a new token for the same user. |
+| Camera commands | `ClaimCommands` uses `DELETE ... RETURNING`, so the queue can't grow past what's claimed on the next telemetry poll. |
+| Expired API tokens | Dropped on the next verify attempt by `VerifyAPIToken`. |
+| Rate-limit entries | Evicted opportunistically when the in-memory map grows past a threshold. |
+| Stale unclaimed cameras | Not possible — `CreateProvisionedCamera` always requires a `user_id`, so an unclaimed camera row can never be created. |

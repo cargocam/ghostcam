@@ -12,12 +12,11 @@ telemetry.go   TelemetryDatagram — JSON payload with optional fields (CPU, tem
 ## Camera Structure
 
 ```
-cmd/ghostcam-camera/
+camera/            (package main — binary builds from this directory)
   main.go          Entrypoint: config, signal handling, goroutine orchestration (WaitGroup),
                    capture crash recovery with exponential backoff (1s→30s) and 5-minute stability threshold,
-                   graceful shutdown (WaitGroup drain, 15s timeout). Pure orchestration — all logic in camera/.
-
-camera/
+                   graceful shutdown (WaitGroup drain, 15s timeout). Pure orchestration — all logic in the
+                   other camera/ files.
   config.go        CameraConfig + cameraConfigFile, layered TOML/env/CLI resolution
                    RecordingMode ("constant"/"motion") — runtime override via {dataDir}/recording_mode
                    LocalStorageCapBytes — configurable via GHOSTCAM_LOCAL_STORAGE_CAP_MB (default 4096 MB)
@@ -64,55 +63,59 @@ Runtime override files (`{dataDir}/resolution`, `{dataDir}/recording_mode`) are 
 ## Server Structure
 
 ```
-cmd/ghostcam-server/
-  main.go         Entrypoint: config load, DB connect, Redis/S3 init, HTTP server with timeouts
+server/            (package main — binary builds from this directory)
+  main.go         Entrypoint: config load, DB connect, Redis/S3 init (including the
+                  S3 bucket lifecycle rule that handles retention), App wiring,
+                  chi router construction, HTTP server with timeouts + graceful
+                  shutdown. No background cleanup goroutines.
                   HTTP timeouts: Read 30s, Write 60s, Idle 120s
                   Graceful shutdown with 10s timeout
-                  Hourly expired session cleanup
-
-server/
-  app.go          App struct: DB, Redis, S3, HMACSecret, Config
   config.go       ServerConfig + serverConfigFile, layered TOML/env resolution
-                  PublicURL for QR codes and CORS origin
-  routes.go       Chi router: route groups, rate limiting, CORS middleware
-                  Rate limits: login 10/min, register 5/min, provision 10/min per IP
-                  CORS: allows PublicURL + localhost:5173
-                  Secure cookies: conditional on PublicURL being HTTPS
-  middleware.go   ViewerAuth (JWT cookie + Bearer API token), CameraAuth (Bearer API key),
-                  AdminAuth (viewer auth + admin email check for /api/v1/audit and /api/v1/admin/reload)
+                  PublicURL for QR codes and CORS origin, retentionDays() helper,
+                  secureCookies() derived from the PublicURL scheme
+  middleware.go   Context key helpers, viewerAuth (JWT cookie + Bearer API token),
+                  cameraAuth (Bearer API key), adminAuth (viewerAuth + admin email check)
+  ratelimit.go    Per-IP token bucket rate limiter with opportunistic eviction
+                  (no dedicated cleanup goroutine)
+
+  auth_handlers.go  Login (with DummyVerify timing equalization), Logout, Register (403),
+                    ChangePassword. setAuthCookie uses Config.secureCookies().
+  cameras.go        ListCameras / Enroll / GetCamera / UpdateCamera / DeleteCamera.
+                    Enroll enforces tier camera limit (402 on exceed), UpdateCamera
+                    enqueues commands for resolution/recording_mode changes.
+  presign.go        effectiveTier() + Presign handler. After confirming uploads,
+                    opportunistically prunes expired segment rows for this device
+                    (PruneSegments LIMIT 100) so there is no retention sweeper goroutine.
+                    Storage counter cached in Redis (INCRBY/DECRBY).
+  hls.go            GetLiveManifest (90s sliding window, no ENDLIST),
+                    GetVodManifest (max 24h range with ENDLIST),
+                    GetSegment (302 redirect to S3), GetInit, GetCoverage.
+                    All reads clamp to the retention window.
+  telemetry.go      PostTelemetry (camera telemetry POST),
+                    GetTelemetryLatest, GetTelemetryRange
+  clips.go          PrepareClip (presigned segment URLs), ExportTelemetry (CSV/JSON)
+  events.go         ListEvents, GetUnreadCount, MarkEventRead, MarkAllEventsRead, DismissEvent
+  sse.go            SSE via Redis XREAD + pub/sub, write deadline disabled
+  billing.go        GetSubscription, ListTiers, CreateCheckout, CreatePortal, GetUsage,
+                    StripeWebhook (idempotency via stripe_events table)
+  admin.go          ReloadConfig, FirmwareLatest, FirmwareUpload, GithubWebhook, QueryAudit
+  qr.go             EnrollmentQR — returns JSON {payload, token, expires_at}
+  provision.go      Provision — camera claims a one-time token and receives an API key.
+                    ClaimCommands is atomic DELETE ... RETURNING so commands do not accumulate.
+  tokens.go         ListTokens, CreateToken, RevokeToken
+  health.go         Healthz (always 200), Readyz (DB ping)
 
   auth/           Argon2id password hashing, JWT sign/verify, HMAC token hashing, random password generation
   billing/        Tier definitions: Free (5 GB / 1 camera), Starter (50 GB / 4 cameras),
                   Pro (500 GB / 16 cameras), Enterprise (unlimited)
-  db/             PostgreSQL via pgx v5 — connection pool, migrations, record types
-                  Database interface for testability
-  handlers/       HTTP handlers for all API endpoints
-                  handlers.go: defaultTierID = "free" (billing always on)
-                  admin.go: FirmwareUpload (POST /api/v1/admin/firmware), FirmwareLatest (GET /api/v1/firmware/latest)
-                  auth.go: Login (failed login logging with email + IP), Register (returns 403 — disabled)
-                  camera_telemetry.go: PostTelemetry — writes telemetry to Redis, updates cameras.last_seen_at
-                  cameras.go: Enroll (camera limit 402), UpdateCamera (enqueues commands for resolution/recording_mode)
-                              ListCameras/GetCamera responses include last_seen_at (unix seconds, nullable),
-                              provisioned (bool, derived from last_seen_at != nil), telemetry (latest from Redis, omitted if null)
-                  events.go: ListEvents, UnreadCount, MarkRead, MarkAllRead, DismissEvent
-                  hls.go: GetLiveManifest (live.m3u8: 90s sliding window, no ENDLIST),
-                          GetVODManifest (vod.m3u8: full range with ENDLIST),
-                          GetSegment (302 redirect to S3), GetInit (302 redirect),
-                          GetCoverage (segment list with motion flags)
-                  clips.go: PrepareClip (presigned segment URLs for clip download),
-                            ExportTelemetry (CSV/JSON telemetry export with Content-Disposition)
-                  presign.go: Confirms uploaded segments (created_at in unix milliseconds, matching
-                              retention's cutoffMs comparison), storage limit check with Redis INCRBY
-                              atomic reservation, storage_capped event deduplication (5 min cooldown via Redis SETNX),
-                              camera limit enforcement (oldest N cameras by enrolled_at may upload)
-                  sse.go: SSE via Redis XREAD + pub/sub, write deadline disabled for long-lived connections
-                  qr.go: Returns JSON {payload, token, expires_at} — UI generates QR SVG client-side
-                  provision.go: Camera provisioning with one-time token
-  redis/          Telemetry write (XADD) and query (XREAD), per-user pub/sub channels for motion, storage_capped, and coverage events
-                  Redis-cached storage counter storage_bytes:{user_id} (5-min TTL)
-                  Event storage and management (events.go)
-  s3/             S3/Tigris client, presigned GET/PUT URL generation, key helpers
-  ctxutil/        Context key helpers (UserID, CameraDeviceID, CameraUserID)
+  db/             PostgreSQL via pgx v5 — connection pool, migrations, record types,
+                  concrete *DB type (no Database interface; tests cover pure functions)
+  redis/          Telemetry write (XADD) and query (XREAD), per-user pub/sub channels
+                  for motion, storage_capped, and coverage events. Redis-cached storage
+                  counter storage_bytes:{user_id} (5-min TTL). Event storage (events.go).
+  s3/             S3/Tigris client, presigned GET/PUT, bucket lifecycle setup
+                  (EnsureRetentionLifecycle — applied on startup so object expiry is
+                  a bucket property, not a Go cron)
 ```
 
 ### Database Migrations
@@ -128,6 +131,7 @@ server/
 | `007_hls_rewrite.sql` | HLS rewrite: provision tokens, commands queue, camera API keys, segment has_motion |
 | `008_motion.sql` | Adds `has_motion` boolean column to `segments` table |
 | `009_indexes.sql` | Adds `idx_segments_created_at` index for scalability |
+| `010_cleanup.sql` | Drops dead tables/columns: sessions, owner, enrollment_tokens, cameras.cert_fingerprint |
 
 ## Viewer Structure
 

@@ -6,7 +6,7 @@ import (
 	"fmt"
 )
 
-func (db *PostgresDB) EnqueueCommand(ctx context.Context, deviceID string, command json.RawMessage) error {
+func (db *DB) EnqueueCommand(ctx context.Context, deviceID string, command json.RawMessage) error {
 	now := nowUnix()
 	_, err := db.pool.Exec(ctx,
 		`INSERT INTO camera_commands (device_id, command, created_at) VALUES ($1, $2, $3)`,
@@ -17,13 +17,15 @@ func (db *PostgresDB) EnqueueCommand(ctx context.Context, deviceID string, comma
 	return nil
 }
 
-func (db *PostgresDB) ClaimCommands(ctx context.Context, deviceID string) ([]json.RawMessage, error) {
-	now := nowUnix()
+// ClaimCommands atomically marks unclaimed commands for the device as claimed
+// and returns them. Claimed rows are deleted in the same statement so the
+// commands table cannot grow without bound.
+func (db *DB) ClaimCommands(ctx context.Context, deviceID string) ([]json.RawMessage, error) {
 	rows, err := db.pool.Query(ctx,
-		`UPDATE camera_commands SET claimed_at = $1
-		 WHERE device_id = $2 AND claimed_at IS NULL
+		`DELETE FROM camera_commands
+		 WHERE device_id = $1 AND claimed_at IS NULL
 		 RETURNING command`,
-		now, deviceID)
+		deviceID)
 	if err != nil {
 		return nil, fmt.Errorf("claim commands: %w", err)
 	}

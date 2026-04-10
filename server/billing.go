@@ -1,4 +1,4 @@
-package handlers
+package main
 
 import (
 	"context"
@@ -9,7 +9,6 @@ import (
 	"net/http"
 
 	"github.com/cargocam/ghostcam/server/billing"
-	"github.com/cargocam/ghostcam/server/ctxutil"
 	"github.com/cargocam/ghostcam/server/db"
 	"github.com/cargocam/ghostcam/server/redis"
 	"github.com/stripe/stripe-go/v82"
@@ -19,19 +18,19 @@ import (
 )
 
 // GetSubscription handles GET /api/v1/billing/subscription.
-func (h *Handlers) GetSubscription(w http.ResponseWriter, r *http.Request) {
-	userID := ctxutil.GetUserID(r)
-	sub, _ := h.DB.GetSubscription(r.Context(), userID)
-	tierID := effectiveTier(sub, h.Stripe.SecretKey != "")
+func (a *App) GetSubscription(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r)
+	sub, _ := a.DB.GetSubscription(r.Context(), userID)
+	tierID := effectiveTier(sub, a.Stripe.SecretKey != "")
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"billing_enabled": h.Stripe.SecretKey != "",
+		"billing_enabled": a.Stripe.SecretKey != "",
 		"tier":            tierID,
 	})
 }
 
 // ListTiers handles GET /api/v1/billing/tiers.
-func (h *Handlers) ListTiers(w http.ResponseWriter, _ *http.Request) {
+func (a *App) ListTiers(w http.ResponseWriter, _ *http.Request) {
 	tiers := billing.AllTiers()
 	result := make([]map[string]any, 0, len(tiers))
 	for _, t := range tiers {
@@ -55,13 +54,13 @@ type checkoutRequest struct {
 
 // CreateCheckout handles POST /api/v1/billing/checkout.
 // Creates a Stripe Checkout Session and returns the redirect URL.
-func (h *Handlers) CreateCheckout(w http.ResponseWriter, r *http.Request) {
-	if h.Stripe.SecretKey == "" {
+func (a *App) CreateCheckout(w http.ResponseWriter, r *http.Request) {
+	if a.Stripe.SecretKey == "" {
 		writeError(w, http.StatusNotImplemented, "billing_not_configured")
 		return
 	}
 
-	userID := ctxutil.GetUserID(r)
+	userID := getUserID(r)
 
 	var body checkoutRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -69,14 +68,13 @@ func (h *Handlers) CreateCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Map tier to Stripe price ID
-	priceID := h.tierToPriceID(body.Tier)
+	priceID := a.tierToPriceID(body.Tier)
 	if priceID == "" {
 		writeError(w, http.StatusBadRequest, "invalid tier")
 		return
 	}
 
-	stripe.Key = h.Stripe.SecretKey
+	stripe.Key = a.Stripe.SecretKey
 
 	params := &stripe.CheckoutSessionParams{
 		Mode: stripe.String(string(stripe.CheckoutSessionModeSubscription)),
@@ -86,13 +84,12 @@ func (h *Handlers) CreateCheckout(w http.ResponseWriter, r *http.Request) {
 				Quantity: stripe.Int64(1),
 			},
 		},
-		SuccessURL: stripe.String(body.SuccessURL),
-		CancelURL:  stripe.String(body.CancelURL),
+		SuccessURL:        stripe.String(body.SuccessURL),
+		CancelURL:         stripe.String(body.CancelURL),
 		ClientReferenceID: stripe.String(userID),
 	}
 
-	// If user already has a Stripe customer ID, reuse it
-	sub, _ := h.DB.GetSubscription(r.Context(), userID)
+	sub, _ := a.DB.GetSubscription(r.Context(), userID)
 	if sub != nil && sub.StripeCustomerID != nil {
 		params.Customer = sub.StripeCustomerID
 	}
@@ -112,14 +109,13 @@ type portalRequest struct {
 }
 
 // CreatePortal handles POST /api/v1/billing/portal.
-// Creates a Stripe Customer Portal session for subscription management.
-func (h *Handlers) CreatePortal(w http.ResponseWriter, r *http.Request) {
-	if h.Stripe.SecretKey == "" {
+func (a *App) CreatePortal(w http.ResponseWriter, r *http.Request) {
+	if a.Stripe.SecretKey == "" {
 		writeError(w, http.StatusNotImplemented, "billing_not_configured")
 		return
 	}
 
-	userID := ctxutil.GetUserID(r)
+	userID := getUserID(r)
 
 	var body portalRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -127,20 +123,20 @@ func (h *Handlers) CreatePortal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	sub, _ := h.DB.GetSubscription(r.Context(), userID)
+	sub, _ := a.DB.GetSubscription(r.Context(), userID)
 	if sub == nil || sub.StripeCustomerID == nil {
 		writeError(w, http.StatusBadRequest, "no_stripe_customer")
 		return
 	}
 
-	stripe.Key = h.Stripe.SecretKey
+	stripe.Key = a.Stripe.SecretKey
 
 	params := &stripe.BillingPortalSessionParams{
 		Customer:  sub.StripeCustomerID,
 		ReturnURL: stripe.String(body.ReturnURL),
 	}
-	if h.Stripe.PortalConfigID != "" {
-		params.Configuration = stripe.String(h.Stripe.PortalConfigID)
+	if a.Stripe.PortalConfigID != "" {
+		params.Configuration = stripe.String(a.Stripe.PortalConfigID)
 	}
 
 	session, err := portalsession.New(params)
@@ -154,24 +150,24 @@ func (h *Handlers) CreatePortal(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetUsage handles GET /api/v1/billing/usage.
-func (h *Handlers) GetUsage(w http.ResponseWriter, r *http.Request) {
-	userID := ctxutil.GetUserID(r)
+func (a *App) GetUsage(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r)
 	ctx := r.Context()
 
-	storageBytes, err := h.DB.GetUserStorageBytes(ctx, userID)
+	storageBytes, err := a.DB.GetUserStorageBytes(ctx, userID)
 	if err != nil {
 		slog.Error("get user storage failed", "error", err)
 		storageBytes = 0
 	}
 
-	cameraCount, err := h.DB.GetCameraCount(ctx, userID)
+	cameraCount, err := a.DB.GetCameraCount(ctx, userID)
 	if err != nil {
 		slog.Error("get camera count failed", "error", err)
 		cameraCount = 0
 	}
 
-	sub, _ := h.DB.GetSubscription(ctx, userID)
-	tier := billing.GetTier(effectiveTier(sub, h.Stripe.SecretKey != ""))
+	sub, _ := a.DB.GetSubscription(ctx, userID)
+	tier := billing.GetTier(effectiveTier(sub, a.Stripe.SecretKey != ""))
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cameras_count":    cameraCount,
@@ -182,8 +178,8 @@ func (h *Handlers) GetUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 // StripeWebhook handles POST /api/v1/webhooks/stripe.
-func (h *Handlers) StripeWebhook(w http.ResponseWriter, r *http.Request) {
-	if h.Stripe.SecretKey == "" {
+func (a *App) StripeWebhook(w http.ResponseWriter, r *http.Request) {
+	if a.Stripe.SecretKey == "" {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
@@ -194,25 +190,21 @@ func (h *Handlers) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify webhook signature. In production, STRIPE_WEBHOOK_SECRET must be set.
-	// In dev, the stripe-webhooks Docker container forwards events without a shared
-	// secret, so we accept unsigned payloads only when running locally (no PublicURL).
 	var event stripe.Event
-	if h.Stripe.WebhookSecret != "" {
-		event, err = webhook.ConstructEvent(body, r.Header.Get("Stripe-Signature"), h.Stripe.WebhookSecret)
+	if a.Stripe.WebhookSecret != "" {
+		event, err = webhook.ConstructEvent(body, r.Header.Get("Stripe-Signature"), a.Stripe.WebhookSecret)
 		if err != nil {
 			slog.Warn("stripe webhook signature verification failed", "error", err)
 			http.Error(w, "", http.StatusBadRequest)
 			return
 		}
-	} else if h.PublicURL == "" {
-		// Local dev only — no signature verification
+	} else if a.Config.PublicURL == "" {
+		// Local dev only — no signature verification.
 		if err := json.Unmarshal(body, &event); err != nil {
 			http.Error(w, "", http.StatusBadRequest)
 			return
 		}
 	} else {
-		// Production with no webhook secret — reject
 		slog.Error("stripe webhook rejected: STRIPE_WEBHOOK_SECRET not configured")
 		http.Error(w, "", http.StatusForbidden)
 		return
@@ -220,8 +212,7 @@ func (h *Handlers) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// Idempotency check
-	seen, err := h.DB.CheckStripeEvent(ctx, event.ID)
+	seen, err := a.DB.CheckStripeEvent(ctx, event.ID)
 	if err != nil {
 		slog.Error("stripe event idempotency check failed", "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
@@ -234,24 +225,23 @@ func (h *Handlers) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 
 	switch event.Type {
 	case "checkout.session.completed":
-		h.handleCheckoutCompleted(ctx, &event)
+		a.handleCheckoutCompleted(ctx, &event)
 	case "customer.subscription.updated":
-		h.handleSubscriptionUpdated(ctx, &event)
+		a.handleSubscriptionUpdated(ctx, &event)
 	case "customer.subscription.deleted":
-		h.handleSubscriptionDeleted(ctx, &event)
+		a.handleSubscriptionDeleted(ctx, &event)
 	default:
 		slog.Debug("unhandled stripe event type", "type", event.Type)
 	}
 
-	// Record event as processed
-	if err := h.DB.RecordStripeEvent(ctx, event.ID); err != nil {
+	if err := a.DB.RecordStripeEvent(ctx, event.ID); err != nil {
 		slog.Error("failed to record stripe event", "error", err)
 	}
 
 	w.WriteHeader(http.StatusOK)
 }
 
-func (h *Handlers) handleCheckoutCompleted(ctx context.Context, event *stripe.Event) {
+func (a *App) handleCheckoutCompleted(ctx context.Context, event *stripe.Event) {
 	var session stripe.CheckoutSession
 	if err := json.Unmarshal(event.Data.Raw, &session); err != nil {
 		slog.Error("stripe: failed to unmarshal checkout session", "error", err)
@@ -264,13 +254,12 @@ func (h *Handlers) handleCheckoutCompleted(ctx context.Context, event *stripe.Ev
 		return
 	}
 
-	// Determine tier from the price
-	tier := h.priceIDToTier(session.Subscription.ID)
+	tier := a.priceIDToTier(session.Subscription.ID)
 
 	customerID := session.Customer.ID
 	subID := session.Subscription.ID
 
-	if err := h.DB.UpdateSubscription(ctx, userID, &db.SubscriptionUpdate{
+	if err := a.DB.UpdateSubscription(ctx, userID, &db.SubscriptionUpdate{
 		Tier:                 &tier,
 		Status:               strPtr("active"),
 		StripeCustomerID:     &customerID,
@@ -282,7 +271,7 @@ func (h *Handlers) handleCheckoutCompleted(ctx context.Context, event *stripe.Ev
 	slog.Info("stripe: checkout completed", "user_id", userID, "tier", tier)
 }
 
-func (h *Handlers) handleSubscriptionUpdated(ctx context.Context, event *stripe.Event) {
+func (a *App) handleSubscriptionUpdated(ctx context.Context, event *stripe.Event) {
 	var sub stripe.Subscription
 	if err := json.Unmarshal(event.Data.Raw, &sub); err != nil {
 		slog.Error("stripe: failed to unmarshal subscription", "error", err)
@@ -290,26 +279,26 @@ func (h *Handlers) handleSubscriptionUpdated(ctx context.Context, event *stripe.
 	}
 
 	customerID := sub.Customer.ID
-	existing, err := h.DB.GetSubscriptionByStripeCustomer(ctx, customerID)
+	existing, err := a.DB.GetSubscriptionByStripeCustomer(ctx, customerID)
 	if err != nil || existing == nil {
 		slog.Warn("stripe: subscription.updated for unknown customer", "customer_id", customerID)
 		return
 	}
 
-	tier := h.stripeTierFromSubscription(&sub)
+	tier := a.stripeTierFromSubscription(&sub)
 	status := string(sub.Status)
 
-	if err := h.DB.UpdateSubscription(ctx, existing.UserID, &db.SubscriptionUpdate{
+	if err := a.DB.UpdateSubscription(ctx, existing.UserID, &db.SubscriptionUpdate{
 		Tier:   &tier,
 		Status: &status,
 	}); err != nil {
 		slog.Error("stripe: failed to update subscription", "user_id", existing.UserID, "error", err)
 	}
 
-	h.notifyCameraLimitExceeded(ctx, existing.UserID, tier)
+	a.notifyCameraLimitExceeded(ctx, existing.UserID, tier)
 }
 
-func (h *Handlers) handleSubscriptionDeleted(ctx context.Context, event *stripe.Event) {
+func (a *App) handleSubscriptionDeleted(ctx context.Context, event *stripe.Event) {
 	var sub stripe.Subscription
 	if err := json.Unmarshal(event.Data.Raw, &sub); err != nil {
 		slog.Error("stripe: failed to unmarshal subscription", "error", err)
@@ -317,16 +306,15 @@ func (h *Handlers) handleSubscriptionDeleted(ctx context.Context, event *stripe.
 	}
 
 	customerID := sub.Customer.ID
-	existing, err := h.DB.GetSubscriptionByStripeCustomer(ctx, customerID)
+	existing, err := a.DB.GetSubscriptionByStripeCustomer(ctx, customerID)
 	if err != nil || existing == nil {
 		slog.Warn("stripe: subscription.deleted for unknown customer", "customer_id", customerID)
 		return
 	}
 
-	// Downgrade to free tier
 	freeTier := "free"
 	canceledStatus := "canceled"
-	if err := h.DB.UpdateSubscription(ctx, existing.UserID, &db.SubscriptionUpdate{
+	if err := a.DB.UpdateSubscription(ctx, existing.UserID, &db.SubscriptionUpdate{
 		Tier:   &freeTier,
 		Status: &canceledStatus,
 	}); err != nil {
@@ -335,55 +323,55 @@ func (h *Handlers) handleSubscriptionDeleted(ctx context.Context, event *stripe.
 
 	slog.Info("stripe: subscription deleted, downgraded to free", "user_id", existing.UserID)
 
-	h.notifyCameraLimitExceeded(ctx, existing.UserID, freeTier)
+	a.notifyCameraLimitExceeded(ctx, existing.UserID, freeTier)
 }
 
-func (h *Handlers) tierToPriceID(tier string) string {
+func (a *App) tierToPriceID(tier string) string {
 	switch tier {
 	case "starter":
-		return h.Stripe.PriceIDStarter
+		return a.Stripe.PriceIDStarter
 	case "pro":
-		return h.Stripe.PriceIDPro
+		return a.Stripe.PriceIDPro
 	case "enterprise":
-		return h.Stripe.PriceIDEnterprise
+		return a.Stripe.PriceIDEnterprise
 	default:
 		return ""
 	}
 }
 
-func (h *Handlers) priceIDToTier(priceID string) string {
+func (a *App) priceIDToTier(priceID string) string {
 	switch priceID {
-	case h.Stripe.PriceIDStarter:
+	case a.Stripe.PriceIDStarter:
 		return "starter"
-	case h.Stripe.PriceIDPro:
+	case a.Stripe.PriceIDPro:
 		return "pro"
-	case h.Stripe.PriceIDEnterprise:
+	case a.Stripe.PriceIDEnterprise:
 		return "enterprise"
 	default:
-		return "starter" // default if unknown
+		return "starter"
 	}
 }
 
-func (h *Handlers) stripeTierFromSubscription(sub *stripe.Subscription) string {
+func (a *App) stripeTierFromSubscription(sub *stripe.Subscription) string {
 	if sub.Items != nil && len(sub.Items.Data) > 0 {
 		priceID := sub.Items.Data[0].Price.ID
-		return h.priceIDToTier(priceID)
+		return a.priceIDToTier(priceID)
 	}
 	return "starter"
 }
 
-// notifyCameraLimitExceeded checks if the user's camera count exceeds the new
-// tier limit and emits a camera_limit_exceeded SSE event if so.
-func (h *Handlers) notifyCameraLimitExceeded(ctx context.Context, userID, tierID string) {
+// notifyCameraLimitExceeded emits a camera_limit_exceeded SSE event if the
+// user's camera count exceeds the new tier limit.
+func (a *App) notifyCameraLimitExceeded(ctx context.Context, userID, tierID string) {
 	tier := billing.GetTier(tierID)
 	if tier.CameraLimit == nil {
 		return
 	}
-	count, err := h.DB.GetCameraCount(ctx, userID)
+	count, err := a.DB.GetCameraCount(ctx, userID)
 	if err != nil || count <= int64(*tier.CameraLimit) {
 		return
 	}
-	if h.Redis == nil {
+	if a.Redis == nil {
 		return
 	}
 	payload, _ := json.Marshal(map[string]any{
@@ -392,7 +380,7 @@ func (h *Handlers) notifyCameraLimitExceeded(ctx context.Context, userID, tierID
 		"camera_limit": *tier.CameraLimit,
 		"tier":         tierID,
 	})
-	eventID, _ := redis.WriteEvent(ctx, h.Redis.RDB(), userID, "", "camera_limit_exceeded", string(payload))
+	eventID, _ := redis.WriteEvent(ctx, a.Redis.RDB(), userID, "", "camera_limit_exceeded", string(payload))
 	withID, _ := json.Marshal(map[string]any{
 		"event_id":     eventID,
 		"user_id":      userID,
@@ -400,7 +388,7 @@ func (h *Handlers) notifyCameraLimitExceeded(ctx context.Context, userID, tierID
 		"camera_limit": *tier.CameraLimit,
 		"tier":         tierID,
 	})
-	h.Redis.RDB().Publish(ctx, fmt.Sprintf("storage_capped:%s", userID), withID)
+	a.Redis.RDB().Publish(ctx, fmt.Sprintf("storage_capped:%s", userID), withID)
 	slog.Info("camera limit exceeded after tier change", "user_id", userID, "count", count, "limit", *tier.CameraLimit, "tier", tierID)
 }
 

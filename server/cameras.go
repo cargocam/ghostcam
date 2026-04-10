@@ -1,4 +1,4 @@
-package handlers
+package main
 
 import (
 	"encoding/json"
@@ -8,7 +8,6 @@ import (
 
 	"github.com/cargocam/ghostcam/server/auth"
 	"github.com/cargocam/ghostcam/server/billing"
-	"github.com/cargocam/ghostcam/server/ctxutil"
 	"github.com/cargocam/ghostcam/server/db"
 	"github.com/cargocam/ghostcam/server/redis"
 	"github.com/go-chi/chi/v5"
@@ -17,14 +16,14 @@ import (
 const provisionTokenTTLSecs = 24 * 3600 // 24 hours
 
 type cameraResponse struct {
-	DeviceID      string               `json:"device_id"`
-	DisplayName   string               `json:"display_name"`
-	EnrolledAt    uint64               `json:"enrolled_at"`
-	LastSeenAt    *int64               `json:"last_seen_at,omitempty"`
-	Provisioned   bool                 `json:"provisioned"`
-	Notes         *string              `json:"notes,omitempty"`
-	Resolution    string               `json:"resolution"`
-	RecordingMode string               `json:"recording_mode"`
+	DeviceID      string                `json:"device_id"`
+	DisplayName   string                `json:"display_name"`
+	EnrolledAt    uint64                `json:"enrolled_at"`
+	LastSeenAt    *int64                `json:"last_seen_at,omitempty"`
+	Provisioned   bool                  `json:"provisioned"`
+	Notes         *string               `json:"notes,omitempty"`
+	Resolution    string                `json:"resolution"`
+	RecordingMode string                `json:"recording_mode"`
 	Telemetry     *redis.TelemetryEntry `json:"telemetry,omitempty"`
 }
 
@@ -34,10 +33,10 @@ type enrollResponse struct {
 }
 
 // ListCameras handles GET /api/v1/cameras.
-func (h *Handlers) ListCameras(w http.ResponseWriter, r *http.Request) {
-	userID := ctxutil.GetUserID(r)
+func (a *App) ListCameras(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r)
 
-	cameras, err := h.DB.ListCameras(r.Context(), userID)
+	cameras, err := a.DB.ListCameras(r.Context(), userID)
 	if err != nil {
 		slog.Error("list cameras failed", "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
@@ -57,8 +56,8 @@ func (h *Handlers) ListCameras(w http.ResponseWriter, r *http.Request) {
 			Resolution:    c.Resolution,
 			RecordingMode: c.RecordingMode,
 		}
-		if h.Redis != nil {
-			entry, _ := redis.QueryTelemetryLatest(ctx, h.Redis.RDB(), c.DeviceID)
+		if a.Redis != nil {
+			entry, _ := redis.QueryTelemetryLatest(ctx, a.Redis.RDB(), c.DeviceID)
 			cr.Telemetry = entry
 		}
 		resp = append(resp, cr)
@@ -67,15 +66,15 @@ func (h *Handlers) ListCameras(w http.ResponseWriter, r *http.Request) {
 }
 
 // Enroll handles POST /api/v1/cameras (generate provision token).
-func (h *Handlers) Enroll(w http.ResponseWriter, r *http.Request) {
-	userID := ctxutil.GetUserID(r)
+func (a *App) Enroll(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r)
 	ctx := r.Context()
 
-	// Enforce camera limit based on tier
-	sub, _ := h.DB.GetSubscription(ctx, userID)
-	tier := billing.GetTier(effectiveTier(sub, h.Stripe.SecretKey != ""))
+	// Enforce camera limit based on tier.
+	sub, _ := a.DB.GetSubscription(ctx, userID)
+	tier := billing.GetTier(effectiveTier(sub, a.Stripe.SecretKey != ""))
 	if tier.CameraLimit != nil {
-		count, err := h.DB.GetCameraCount(ctx, userID)
+		count, err := a.DB.GetCameraCount(ctx, userID)
 		if err != nil {
 			slog.Error("enroll: get camera count failed", "error", err)
 			http.Error(w, "", http.StatusInternalServerError)
@@ -87,17 +86,17 @@ func (h *Handlers) Enroll(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Consume request body (ignored but accepted for backward compat)
+	// Consume request body (ignored but accepted for backward compat).
 	var body json.RawMessage
 	_ = json.NewDecoder(r.Body).Decode(&body)
 
 	rawToken := auth.GenerateRandomPassword()
-	tokenHash := auth.HMACToken(rawToken, h.HMACSecret)
+	tokenHash := auth.HMACToken(rawToken, a.HMACSecret)
 
 	now := uint64(time.Now().Unix())
 	expiresAt := now + provisionTokenTTLSecs
 
-	if err := h.DB.CreateProvisionToken(r.Context(), tokenHash, userID, int64(expiresAt)); err != nil {
+	if err := a.DB.CreateProvisionToken(r.Context(), tokenHash, userID, int64(expiresAt)); err != nil {
 		slog.Error("enroll: create provision token failed", "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
 		return
@@ -108,11 +107,11 @@ func (h *Handlers) Enroll(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetCamera handles GET /api/v1/cameras/{deviceID}.
-func (h *Handlers) GetCamera(w http.ResponseWriter, r *http.Request) {
-	userID := ctxutil.GetUserID(r)
+func (a *App) GetCamera(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r)
 	deviceID := chi.URLParam(r, "deviceID")
 
-	camera, err := h.DB.GetCamera(r.Context(), deviceID)
+	camera, err := a.DB.GetCamera(r.Context(), deviceID)
 	if err != nil {
 		slog.Error("get camera failed", "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
@@ -143,12 +142,11 @@ type updateCameraRequest struct {
 }
 
 // UpdateCamera handles PATCH /api/v1/cameras/{deviceID}.
-func (h *Handlers) UpdateCamera(w http.ResponseWriter, r *http.Request) {
-	userID := ctxutil.GetUserID(r)
+func (a *App) UpdateCamera(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r)
 	deviceID := chi.URLParam(r, "deviceID")
 
-	// Verify ownership
-	camera, err := h.DB.GetCamera(r.Context(), deviceID)
+	camera, err := a.DB.GetCamera(r.Context(), deviceID)
 	if err != nil || camera == nil || camera.UserID == nil || *camera.UserID != userID {
 		http.Error(w, "", http.StatusNotFound)
 		return
@@ -160,7 +158,6 @@ func (h *Handlers) UpdateCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Validate resolution
 	if body.Resolution != nil {
 		switch *body.Resolution {
 		case "480p", "720p", "1080p":
@@ -170,7 +167,6 @@ func (h *Handlers) UpdateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Validate recording mode
 	if body.RecordingMode != nil {
 		switch *body.RecordingMode {
 		case "constant", "motion":
@@ -182,7 +178,7 @@ func (h *Handlers) UpdateCamera(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	if err := h.DB.UpdateCamera(ctx, deviceID, &db.CameraUpdate{
+	if err := a.DB.UpdateCamera(ctx, deviceID, &db.CameraUpdate{
 		DisplayName:   body.DisplayName,
 		Notes:         body.Notes,
 		Resolution:    body.Resolution,
@@ -193,16 +189,16 @@ func (h *Handlers) UpdateCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enqueue commands for settings that require camera restart
+	// Enqueue commands for settings that require camera restart.
 	if body.Resolution != nil && *body.Resolution != camera.Resolution {
 		cmd, _ := json.Marshal(map[string]string{"type": "set_resolution", "resolution": *body.Resolution})
-		if err := h.DB.EnqueueCommand(ctx, deviceID, cmd); err != nil {
+		if err := a.DB.EnqueueCommand(ctx, deviceID, cmd); err != nil {
 			slog.Error("enqueue set_resolution failed", "error", err)
 		}
 	}
 	if body.RecordingMode != nil && *body.RecordingMode != camera.RecordingMode {
 		cmd, _ := json.Marshal(map[string]string{"type": "set_recording_mode", "mode": *body.RecordingMode})
-		if err := h.DB.EnqueueCommand(ctx, deviceID, cmd); err != nil {
+		if err := a.DB.EnqueueCommand(ctx, deviceID, cmd); err != nil {
 			slog.Error("enqueue set_recording_mode failed", "error", err)
 		}
 	}
@@ -211,17 +207,17 @@ func (h *Handlers) UpdateCamera(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeleteCamera handles DELETE /api/v1/cameras/{deviceID}.
-func (h *Handlers) DeleteCamera(w http.ResponseWriter, r *http.Request) {
-	userID := ctxutil.GetUserID(r)
+func (a *App) DeleteCamera(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r)
 	deviceID := chi.URLParam(r, "deviceID")
 
-	camera, err := h.DB.GetCamera(r.Context(), deviceID)
+	camera, err := a.DB.GetCamera(r.Context(), deviceID)
 	if err != nil || camera == nil || camera.UserID == nil || *camera.UserID != userID {
 		http.Error(w, "", http.StatusNotFound)
 		return
 	}
 
-	if err := h.DB.DeleteCamera(r.Context(), deviceID); err != nil {
+	if err := a.DB.DeleteCamera(r.Context(), deviceID); err != nil {
 		slog.Error("delete camera failed", "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
 		return

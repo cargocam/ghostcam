@@ -13,18 +13,15 @@ Ghostcam is a camera surveillance system built in Go. Cameras capture H.264 vide
 ```
 ghostcam/
 ├── common/          Shared Go types: telemetry datagrams, presign/provision contracts
-├── camera/          Camera agent: capture pipeline, upload, telemetry, provisioning, gpsd, firmware
-├── cmd/
-│   ├── ghostcam-server/   Server entrypoint
-│   └── ghostcam-camera/   Camera entrypoint
-├── server/          Server: HTTP handlers (chi), DB, Redis, S3 presign, auth, billing
+├── camera/          Camera binary (package main): capture pipeline, upload, telemetry,
+│                    provisioning, gpsd, firmware. main.go lives here — no cmd/ wrapper.
+├── server/          Server binary (package main): chi router + HTTP handlers as methods
+│                    on *App, middleware, rate limiting. main.go lives here — no cmd/ wrapper.
 │   ├── auth/        Argon2id passwords, JWT, HMAC token hashing
 │   ├── billing/     Tier definitions and storage limit enforcement
-│   ├── db/          PostgreSQL (pgx), migrations, record types
-│   ├── handlers/    HTTP handlers for all API endpoints (including events management)
+│   ├── db/          PostgreSQL (pgx), migrations, record types (concrete *DB, no interface)
 │   ├── redis/       Telemetry streams (XADD/XREAD), pub/sub for SSE, event storage
-│   ├── s3/          S3/Tigris presigned URL generation (GET + PUT)
-│   └── ctxutil/     Context key helpers
+│   └── s3/          S3/Tigris presigned URL generation + bucket lifecycle setup
 ├── ui/              Svelte 5 SPA: HLS playback (hls.js), timeline scrubber, GPS map
 ├── pi/              Pi system files: systemd services, GPS, NetworkManager configs
 │   └── image/       rpi-image-gen build system: device configs, layer, files for flashable .img
@@ -38,13 +35,13 @@ ghostcam/
 
 ```bash
 # Build server
-go build -o ghostcam-server ./cmd/ghostcam-server
+go build -o ghostcam-server ./server
 
 # Build camera
-go build -o ghostcam-camera ./cmd/ghostcam-camera
+go build -o ghostcam-camera ./camera
 
 # Cross-compile camera for Pi (no CGO needed)
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./cmd/ghostcam-camera
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./camera
 
 # Run tests
 go test ./...
@@ -55,7 +52,7 @@ cd ui && bun run test:e2e  # playwright e2e tests (requires dev server)
 ### Testing
 
 **Go** (`go test ./...`): Table-driven tests for pure functions. No mocking framework — tests cover:
-- `server/handlers/`: `effectiveTier()` billing logic, `epochMsToISO8601` formatting, `TestCameraLimitAllowed` (tier-based camera upload enforcement)
+- `server/`: `effectiveTier()` billing logic, `epochMsToISO8601` formatting, `TestCameraLimitAllowed` (tier-based camera upload enforcement)
 - `server/billing/`: `GetTier()` tier resolution, `StorageLimitBytes()` computation
 - `camera/`: motion detector (file-size fallback, rolling window), MPEG-TS sync byte validation, pending confirms persistence, config helpers (`coalesceStr`, `resolveVideoProfile`, `trimString`)
 
@@ -144,6 +141,7 @@ Server (Go) ← presigned URLs → Browser (hls.js)
 - **No persistent connections** -- cameras POST telemetry every 10s, upload segments via presigned PUT URLs
 - **Stateless server** -- JWT auth, no sessions table, horizontally scalable
 - **S3-native** -- segments served directly from Tigris edge via 302 redirect, no proxy
+- **No cleanup daemons** -- retention is enforced by an S3 bucket lifecycle rule (applied on startup) plus opportunistic DB pruning in the presign handler; there are no hourly session/segment/stale-camera sweep goroutines
 - **Single-instance deployment** -- one server behind Fly.io, one Postgres, one Redis (not designed for horizontal scaling)
 
 For detailed subsystem documentation see:
@@ -159,8 +157,8 @@ For detailed subsystem documentation see:
 
 - **Error handling**: Return `error` from functions, wrap with `fmt.Errorf("context: %w", err)`.
 - **Logging**: `log/slog` with structured fields: `slog.Info("connected", "device_id", id)`.
-- **HTTP**: chi router. Handlers are methods on `Handlers` struct. JSON responses via `writeJSON()`.
-- **Database**: pgx v5 pool. Database interface for testability. Batch inserts via `pgx.Batch`.
+- **HTTP**: chi router. Handlers are methods on `*App` in the `server` package. JSON responses via `writeJSON()`.
+- **Database**: pgx v5 pool, concrete `*db.DB` type (no `Database` interface — tests cover pure functions). Batch inserts via `pgx.Batch`.
 - **Concurrency**: `sync.WaitGroup` for goroutine lifecycle, `sync/atomic` for flags, channels for inter-goroutine communication.
 - **Build tags**: `//go:build linux && !synthetic` for real sensors (gpsd, /proc, nmcli). `//go:build !linux || synthetic` for synthetic sensors. Docker camera target uses `-tags synthetic`. Production Pi builds use real sensors with no synthetic code.
 

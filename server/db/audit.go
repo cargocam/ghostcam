@@ -7,7 +7,7 @@ import (
 	"log/slog"
 )
 
-func (db *PostgresDB) InsertAuditEntry(ctx context.Context, timestamp, eventType string, eventData json.RawMessage, hmac string) error {
+func (db *DB) InsertAuditEntry(ctx context.Context, timestamp, eventType string, eventData json.RawMessage, hmac string) error {
 	_, err := db.pool.Exec(ctx,
 		`INSERT INTO audit_log (timestamp, event_type, event_data, hmac)
 		 VALUES ($1::timestamptz, $2, $3, $4)`,
@@ -18,7 +18,7 @@ func (db *PostgresDB) InsertAuditEntry(ctx context.Context, timestamp, eventType
 	return nil
 }
 
-func (db *PostgresDB) QueryAuditLog(ctx context.Context, eventType, since, until string, limit, offset int64) ([]AuditLogRecord, int64, error) {
+func (db *DB) QueryAuditLog(ctx context.Context, eventType, since, until string, limit, offset int64) ([]AuditLogRecord, int64, error) {
 	query := `SELECT id, timestamp::text, event_type, event_data, hmac, COUNT(*) OVER() AS total
 		 FROM audit_log WHERE 1=1`
 	args := []any{}
@@ -62,7 +62,7 @@ func (db *PostgresDB) QueryAuditLog(ctx context.Context, eventType, since, until
 	return entries, total, rows.Err()
 }
 
-func (db *PostgresDB) GetHMACSecret(ctx context.Context) ([]byte, error) {
+func (db *DB) GetHMACSecret(ctx context.Context) ([]byte, error) {
 	var secret []byte
 	err := db.pool.QueryRow(ctx, "SELECT value FROM config WHERE key = 'hmac_secret'").Scan(&secret)
 	if err != nil {
@@ -71,12 +71,14 @@ func (db *PostgresDB) GetHMACSecret(ctx context.Context) ([]byte, error) {
 	return secret, nil
 }
 
-func (db *PostgresDB) HealthCheck(ctx context.Context) error {
+func (db *DB) HealthCheck(ctx context.Context) error {
 	_, err := db.pool.Exec(ctx, "SELECT 1")
 	return err
 }
 
-// AuditLog logs an audit event using slog (simplified version, no file + HMAC chaining).
+// AuditLog logs an audit event using slog. Structured logs double as the
+// audit trail — the audit_log table is only populated by explicit
+// InsertAuditEntry calls (e.g. HMAC-chained events).
 func AuditLog(eventType string, fields ...any) {
 	slog.Info("audit", append([]any{"event_type", eventType}, fields...)...)
 }

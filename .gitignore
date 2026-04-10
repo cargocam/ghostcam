@@ -1,6 +1,10 @@
 # Build artifacts
 /ghostcam-camera
 /ghostcam-server
+# `go build ./camera` / `go build ./server` drop a binary named after the
+# directory into the same directory.
+/camera/camera
+/server/server
 
 # UI
 ui/node_modules/

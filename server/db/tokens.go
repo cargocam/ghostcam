@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func (db *PostgresDB) CreateAPIToken(ctx context.Context, token *NewAPIToken) error {
+func (db *DB) CreateAPIToken(ctx context.Context, token *NewAPIToken) error {
 	now := nowUnix()
 	_, err := db.pool.Exec(ctx,
 		`INSERT INTO api_tokens (token_id, user_id, token_hash, label, created_at, expires_at)
@@ -19,7 +19,7 @@ func (db *PostgresDB) CreateAPIToken(ctx context.Context, token *NewAPIToken) er
 	return nil
 }
 
-func (db *PostgresDB) ListAPITokens(ctx context.Context, userID string) ([]APITokenRecord, error) {
+func (db *DB) ListAPITokens(ctx context.Context, userID string) ([]APITokenRecord, error) {
 	rows, err := db.pool.Query(ctx,
 		`SELECT token_id, user_id, label, created_at, expires_at, last_used_at
 		 FROM api_tokens WHERE user_id = $1 ORDER BY created_at`, userID)
@@ -39,7 +39,10 @@ func (db *PostgresDB) ListAPITokens(ctx context.Context, userID string) ([]APITo
 	return tokens, rows.Err()
 }
 
-func (db *PostgresDB) VerifyAPIToken(ctx context.Context, tokenHash string) (*APITokenRecord, error) {
+// VerifyAPIToken looks up a token by its HMAC hash and returns the record if
+// it exists and has not expired. Expired tokens are deleted on the fly so the
+// api_tokens table doesn't accumulate dead rows.
+func (db *DB) VerifyAPIToken(ctx context.Context, tokenHash string) (*APITokenRecord, error) {
 	row := db.pool.QueryRow(ctx,
 		`SELECT token_id, user_id, label, created_at, expires_at, last_used_at
 		 FROM api_tokens WHERE token_hash = $1`, tokenHash)
@@ -53,8 +56,13 @@ func (db *PostgresDB) VerifyAPIToken(ctx context.Context, tokenHash string) (*AP
 		return nil, fmt.Errorf("verify api token: %w", err)
 	}
 
-	// Update last_used_at
 	now := nowUnix()
+	if t.ExpiresAt != nil && *t.ExpiresAt <= now {
+		_, _ = db.pool.Exec(ctx, "DELETE FROM api_tokens WHERE token_id = $1", t.TokenID)
+		return nil, nil
+	}
+
+	// Update last_used_at (best-effort).
 	_, _ = db.pool.Exec(ctx,
 		"UPDATE api_tokens SET last_used_at = $1 WHERE token_id = $2", now, t.TokenID)
 	t.LastUsedAt = &now
@@ -62,7 +70,7 @@ func (db *PostgresDB) VerifyAPIToken(ctx context.Context, tokenHash string) (*AP
 	return &t, nil
 }
 
-func (db *PostgresDB) DeleteAPIToken(ctx context.Context, tokenID string) error {
+func (db *DB) DeleteAPIToken(ctx context.Context, tokenID string) error {
 	_, err := db.pool.Exec(ctx, "DELETE FROM api_tokens WHERE token_id = $1", tokenID)
 	if err != nil {
 		return fmt.Errorf("delete api token: %w", err)

@@ -1,15 +1,17 @@
-// Package s3 provides S3/Tigris presigned URL generation.
+// Package s3 provides S3/Tigris presigned URL generation and bucket setup.
 package s3
 
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 // Client wraps an S3 client for presigned URL generation.
@@ -84,14 +86,35 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, contentTyp
 	return nil
 }
 
-// Delete removes an object from S3 by key.
-func (c *Client) Delete(ctx context.Context, key string) error {
-	_, err := c.client.DeleteObject(ctx, &s3.DeleteObjectInput{
+// EnsureRetentionLifecycle configures a bucket lifecycle rule that expires
+// segment objects (everything outside the firmware/ prefix) after
+// retentionDays. The rule is idempotent — applying it on every startup keeps
+// the bucket in sync with the configured retention without any periodic
+// cleanup goroutine on the server side.
+func (c *Client) EnsureRetentionLifecycle(ctx context.Context, retentionDays int) error {
+	if retentionDays <= 0 {
+		return errors.New("retentionDays must be > 0")
+	}
+	days := int32(retentionDays)
+	_, err := c.client.PutBucketLifecycleConfiguration(ctx, &s3.PutBucketLifecycleConfigurationInput{
 		Bucket: aws.String(c.bucket),
-		Key:    aws.String(key),
+		LifecycleConfiguration: &types.BucketLifecycleConfiguration{
+			Rules: []types.LifecycleRule{
+				{
+					ID:     aws.String("ghostcam-segments-expiry"),
+					Status: types.ExpirationStatusEnabled,
+					Filter: &types.LifecycleRuleFilter{
+						Prefix: aws.String(""),
+					},
+					Expiration: &types.LifecycleExpiration{
+						Days: &days,
+					},
+				},
+			},
+		},
 	})
 	if err != nil {
-		return fmt.Errorf("deleting S3 object %s: %w", key, err)
+		return fmt.Errorf("put bucket lifecycle: %w", err)
 	}
 	return nil
 }

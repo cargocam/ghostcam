@@ -1,4 +1,4 @@
-package handlers
+package main
 
 import (
 	"encoding/json"
@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 
-	"github.com/cargocam/ghostcam/server/ctxutil"
 	"github.com/cargocam/ghostcam/server/redis"
 	"github.com/cargocam/ghostcam/server/s3"
 	"github.com/go-chi/chi/v5"
@@ -34,8 +33,8 @@ type prepareClipResponse struct {
 
 // PrepareClip handles POST /api/v1/clips/prepare.
 // Returns presigned GET URLs for all segments in the requested time range.
-func (h *Handlers) PrepareClip(w http.ResponseWriter, r *http.Request) {
-	userID := ctxutil.GetUserID(r)
+func (a *App) PrepareClip(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r)
 
 	var body prepareClipRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -48,20 +47,19 @@ func (h *Handlers) PrepareClip(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify ownership
-	camera, err := h.DB.GetCamera(r.Context(), body.DeviceID)
+	camera, err := a.DB.GetCamera(r.Context(), body.DeviceID)
 	if err != nil || camera == nil || camera.UserID == nil || *camera.UserID != userID {
 		http.Error(w, "", http.StatusNotFound)
 		return
 	}
 
-	if h.S3 == nil {
+	if a.S3 == nil {
 		writeError(w, http.StatusServiceUnavailable, "S3 not configured")
 		return
 	}
 
 	ctx := r.Context()
-	segments, err := h.DB.ListSegments(ctx, body.DeviceID, body.FromMs, body.ToMs)
+	segments, err := a.DB.ListSegments(ctx, body.DeviceID, body.FromMs, body.ToMs, a.retentionMs())
 	if err != nil {
 		slog.Error("prepare clip: list segments failed", "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
@@ -76,7 +74,7 @@ func (h *Handlers) PrepareClip(w http.ResponseWriter, r *http.Request) {
 	result := make([]clipSegment, 0, len(segments))
 	var totalBytes uint64
 	for _, seg := range segments {
-		url, err := h.S3.PresignGet(ctx, s3.SegmentKey(body.DeviceID, seg.SegmentID))
+		url, err := a.S3.PresignGet(ctx, s3.SegmentKey(body.DeviceID, seg.SegmentID))
 		if err != nil {
 			slog.Warn("prepare clip: presign failed", "segment_id", seg.SegmentID, "error", err)
 			continue
@@ -101,17 +99,17 @@ func (h *Handlers) PrepareClip(w http.ResponseWriter, r *http.Request) {
 }
 
 // ExportTelemetry handles GET /api/v1/telemetry/{deviceID}/export?from=&to=&format=csv|json.
-func (h *Handlers) ExportTelemetry(w http.ResponseWriter, r *http.Request) {
-	userID := ctxutil.GetUserID(r)
+func (a *App) ExportTelemetry(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r)
 	deviceID := chi.URLParam(r, "deviceID")
 
-	camera, err := h.DB.GetCamera(r.Context(), deviceID)
+	camera, err := a.DB.GetCamera(r.Context(), deviceID)
 	if err != nil || camera == nil || camera.UserID == nil || *camera.UserID != userID {
 		http.Error(w, "", http.StatusNotFound)
 		return
 	}
 
-	if h.Redis == nil {
+	if a.Redis == nil {
 		http.Error(w, "", http.StatusServiceUnavailable)
 		return
 	}
@@ -128,7 +126,7 @@ func (h *Handlers) ExportTelemetry(w http.ResponseWriter, r *http.Request) {
 		format = "json"
 	}
 
-	entries, err := redis.QueryTelemetryRange(r.Context(), h.Redis.RDB(), deviceID, fromMs, toMs, 10000)
+	entries, err := redis.QueryTelemetryRange(r.Context(), a.Redis.RDB(), deviceID, fromMs, toMs, 10000)
 	if err != nil {
 		slog.Error("export telemetry failed", "error", err)
 		http.Error(w, "", http.StatusInternalServerError)

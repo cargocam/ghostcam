@@ -1,3 +1,5 @@
+// Ghostcam camera agent. Packaged as `package main` so there is no wrapper
+// under cmd/ — the camera binary builds from this directory directly.
 package main
 
 import (
@@ -8,8 +10,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-
-	"github.com/cargocam/ghostcam/camera"
 )
 
 func main() {
@@ -17,13 +17,12 @@ func main() {
 		Level: slog.LevelDebug,
 	})))
 
-	cfg, err := camera.LoadConfig()
+	cfg, err := LoadConfig()
 	if err != nil {
 		slog.Error("failed to load config", "err", err)
 		os.Exit(1)
 	}
 
-	// Ensure directories exist
 	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {
 		slog.Error("failed to create data dir", "err", err)
 		os.Exit(1)
@@ -36,19 +35,16 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// Wait for network
-	camera.WaitForRoute(ctx)
+	WaitForRoute(ctx)
 
-	// Get device serial
-	deviceSerial := camera.GetDeviceSerial(cfg.DataDir)
+	deviceSerial := GetDeviceSerial(cfg.DataDir)
 	slog.Info("device identity", "serial", deviceSerial)
-	camera.SetGPSSeed(deviceSerial)
+	SetGPSSeed(deviceSerial)
 
-	// Load or obtain credentials
-	creds := camera.LoadCredentials(cfg.DataDir)
+	creds := LoadCredentials(cfg.DataDir)
 	if creds == nil {
 		slog.Info("no credentials found, entering provisioning mode")
-		creds, err = camera.RunProvisioning(ctx, cfg, deviceSerial)
+		creds, err = RunProvisioning(ctx, cfg, deviceSerial)
 		if err != nil {
 			slog.Error("provisioning failed", "err", err)
 			os.Exit(1)
@@ -59,7 +55,6 @@ func main() {
 		}
 	}
 
-	// Override server URL from credentials if not set by config
 	if cfg.ServerURL == "" {
 		cfg.ServerURL = creds.ServerURL
 	}
@@ -70,19 +65,17 @@ func main() {
 		"test_source", cfg.TestSource,
 	)
 
-	client := camera.NewClient(cfg.ServerURL, creds.APIKey, creds.DeviceID)
+	client := NewClient(cfg.ServerURL, creds.APIKey, creds.DeviceID)
 
-	// Check for firmware update before starting capture
-	if camera.CheckFirmwareUpdate(ctx, client, cfg.DataDir) {
+	if CheckFirmwareUpdate(ctx, client, cfg.DataDir) {
 		os.Exit(0) // systemd restarts; ExecStartPre installs the staged binary
 	}
 
-	// Segment channel (watcher -> upload loop)
-	segments := make(chan camera.NewSegment, 256)
+	segments := make(chan NewSegment, 256)
 
 	var wg sync.WaitGroup
 
-	// Start capture pipeline with crash recovery
+	// Capture pipeline with crash recovery.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -96,7 +89,7 @@ func main() {
 		for {
 			// Wait if server is unreachable — no point capturing segments
 			// that will be evicted before they can upload.
-			for camera.IsServerUnreachable() {
+			for IsServerUnreachable() {
 				slog.Debug("capture paused, server unreachable")
 				select {
 				case <-ctx.Done():
@@ -106,7 +99,7 @@ func main() {
 			}
 
 			start := time.Now()
-			err := camera.StartCapturePipeline(ctx, cfg)
+			err := StartCapturePipeline(ctx, cfg)
 			if ctx.Err() != nil {
 				return
 			}
@@ -114,7 +107,6 @@ func main() {
 				slog.Error("capture pipeline failed", "err", err)
 			}
 
-			// Only reset after sustained healthy operation (5 min)
 			if time.Since(start) > stableDuration {
 				backoff = time.Second
 				crashCount = 0
@@ -140,32 +132,27 @@ func main() {
 		}
 	}()
 
-	// Start segment watcher
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		camera.RunSegmentWatcher(ctx, cfg.SegmentDir, cfg.DataDir, cfg.LocalStorageCapBytes, segments)
+		RunSegmentWatcher(ctx, cfg.SegmentDir, cfg.DataDir, cfg.LocalStorageCapBytes, segments)
 	}()
 
-	// Start upload loop
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		camera.RunUploadLoop(ctx, client, cfg.DataDir, segments)
+		RunUploadLoop(ctx, client, cfg.DataDir, segments)
 	}()
 
-	// Start telemetry poll loop
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		camera.RunTelemetryPoll(ctx, client, cfg.DataDir)
+		RunTelemetryPoll(ctx, client, cfg.DataDir)
 	}()
 
-	// Wait for shutdown signal
 	<-ctx.Done()
 	slog.Info("shutting down, waiting for goroutines to drain (15s max)")
 
-	// Wait for goroutines with a 15s timeout
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
@@ -179,4 +166,3 @@ func main() {
 	}
 	slog.Info("goodbye")
 }
-

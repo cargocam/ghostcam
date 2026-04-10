@@ -22,13 +22,11 @@ jobs:
             camera:
               - 'camera/**'
               - 'common/**'
-              - 'cmd/ghostcam-camera/**'
               - 'go.mod'
               - 'go.sum'
             server:
               - 'server/**'
               - 'common/**'
-              - 'cmd/ghostcam-server/**'
               - 'go.mod'
               - 'go.sum'
             ui:
@@ -43,10 +41,10 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
-      - run: go build ./cmd/ghostcam-server
+      - run: go build ./server
       - name: Build camera binary
         if: needs.changes.outputs.camera == 'true'
-        run: go build ./cmd/ghostcam-camera
+        run: go build ./camera
       - run: go test ./...
 
   ui:

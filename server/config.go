@@ -1,5 +1,4 @@
-// Package server implements the Ghostcam HTTP server.
-package server
+package main
 
 import (
 	"fmt"
@@ -29,14 +28,27 @@ type ServerConfig struct {
 	// Public URL for QR codes (e.g. "https://cam.example.com")
 	PublicURL string
 	// Stripe (optional — billing disabled if StripeSecretKey is empty)
-	StripeSecretKey      string
-	StripeWebhookSecret  string
-	StripePriceIDStarter string
-	StripePriceIDPro     string
+	StripeSecretKey         string
+	StripeWebhookSecret     string
+	StripePriceIDStarter    string
+	StripePriceIDPro        string
 	StripePriceIDEnterprise string
 	StripePortalConfigID    string
 	// Segment retention in days (default 30)
 	SegmentRetentionDays int
+}
+
+// secureCookies returns true when the PublicURL is served over HTTPS.
+func (c *ServerConfig) secureCookies() bool {
+	return len(c.PublicURL) >= 8 && c.PublicURL[:8] == "https://"
+}
+
+// retentionDays returns the effective segment retention period.
+func (c *ServerConfig) retentionDays() int {
+	if c.SegmentRetentionDays <= 0 {
+		return 30
+	}
+	return c.SegmentRetentionDays
 }
 
 // serverConfigFile is the TOML-deserialized config file. All fields optional.

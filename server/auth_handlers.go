@@ -1,4 +1,4 @@
-package handlers
+package main
 
 import (
 	"encoding/json"
@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/cargocam/ghostcam/server/auth"
-	"github.com/cargocam/ghostcam/server/ctxutil"
 	"github.com/cargocam/ghostcam/server/db"
 )
 
@@ -24,10 +23,10 @@ type loginResponse struct {
 	UserID string `json:"user_id"`
 }
 
-func (h *Handlers) setAuthCookie(w http.ResponseWriter, userID, email string) {
-	token := auth.SignJWT(userID, email, h.HMACSecret, jwtTTL)
+func (a *App) setAuthCookie(w http.ResponseWriter, userID, email string) {
+	token := auth.SignJWT(userID, email, a.HMACSecret, jwtTTL)
 	secure := ""
-	if h.SecureCookies {
+	if a.Config.secureCookies() {
 		secure = "; Secure"
 	}
 	// Not HttpOnly: the UI decodes the JWT client-side to derive the email
@@ -37,7 +36,7 @@ func (h *Handlers) setAuthCookie(w http.ResponseWriter, userID, email string) {
 }
 
 // Login handles POST /api/v1/auth/login.
-func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
+func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 	var body loginRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -49,7 +48,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.DB.GetUserByEmail(r.Context(), body.Email)
+	user, err := a.DB.GetUserByEmail(r.Context(), body.Email)
 	if err != nil {
 		slog.Error("login: get user failed", "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
@@ -57,8 +56,8 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if user == nil {
-		// Perform a dummy password verification to equalize timing and prevent
-		// user enumeration via response latency differences.
+		// Dummy password verification to equalize timing and prevent user
+		// enumeration via response latency differences.
 		auth.DummyVerify(body.Password)
 		slog.Warn("login failed: unknown email", "email", body.Email, "ip", loginIP(r))
 		http.Error(w, "", http.StatusUnauthorized)
@@ -72,7 +71,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ok, err := h.DB.VerifyPassword(r.Context(), user.UserID, body.Password)
+	ok, err := a.DB.VerifyPassword(r.Context(), user.UserID, body.Password)
 	if err != nil || !ok {
 		slog.Warn("login failed: invalid password", "email", body.Email, "ip", loginIP(r))
 		http.Error(w, "", http.StatusUnauthorized)
@@ -81,23 +80,21 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 
 	db.AuditLog("auth_success", "user_id", user.UserID)
 
-	h.setAuthCookie(w, user.UserID, user.Email)
+	a.setAuthCookie(w, user.UserID, user.Email)
 	writeJSON(w, http.StatusOK, loginResponse{UserID: user.UserID})
 }
 
 // Register handles POST /api/v1/auth/register.
 // Public registration is disabled — returns 403. Admin users are seeded on
 // first run via GHOSTCAM_ADMIN_EMAIL / GHOSTCAM_ADMIN_PASSWORD env vars.
-// To re-enable registration, replace the body below with the original logic
-// (see git history for the registerRequest flow).
-func (h *Handlers) Register(w http.ResponseWriter, _ *http.Request) {
+func (a *App) Register(w http.ResponseWriter, _ *http.Request) {
 	writeError(w, http.StatusForbidden, "registration_disabled")
 }
 
 // Logout handles POST /api/v1/auth/logout.
-func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
+func (a *App) Logout(w http.ResponseWriter, _ *http.Request) {
 	secure := ""
-	if h.SecureCookies {
+	if a.Config.secureCookies() {
 		secure = "; Secure"
 	}
 	w.Header().Set("Set-Cookie", fmt.Sprintf("ghostcam-token=; Path=/; SameSite=Strict%s; Max-Age=0", secure))
@@ -110,8 +107,8 @@ type changePasswordRequest struct {
 }
 
 // ChangePassword handles PATCH /api/v1/auth/password.
-func (h *Handlers) ChangePassword(w http.ResponseWriter, r *http.Request) {
-	userID := ctxutil.GetUserID(r)
+func (a *App) ChangePassword(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r)
 
 	var body changePasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -128,7 +125,7 @@ func (h *Handlers) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ok, err := h.DB.VerifyPassword(r.Context(), userID, body.CurrentPassword)
+	ok, err := a.DB.VerifyPassword(r.Context(), userID, body.CurrentPassword)
 	if err != nil {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
@@ -144,15 +141,13 @@ func (h *Handlers) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.DB.SetPassword(r.Context(), userID, newHash); err != nil {
+	if err := a.DB.SetPassword(r.Context(), userID, newHash); err != nil {
 		slog.Error("change password: set password failed", "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 
-	// Issue new JWT after password change. Email comes from the existing
-	// JWT claim (empty on API-token auth, which ignores the cookie anyway).
-	h.setAuthCookie(w, userID, ctxutil.GetUserEmail(r))
+	a.setAuthCookie(w, userID, getUserEmail(r))
 	w.WriteHeader(http.StatusOK)
 }
 

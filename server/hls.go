@@ -1,4 +1,4 @@
-package handlers
+package main
 
 import (
 	"fmt"
@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cargocam/ghostcam/server/ctxutil"
 	"github.com/cargocam/ghostcam/server/s3"
 	"github.com/go-chi/chi/v5"
 )
@@ -18,25 +17,30 @@ const segmentDurationSecs = 6
 // liveWindowMs is the sliding window for live manifests (~15 segments).
 const liveWindowMs = 90 * 1000
 
-func (h *Handlers) verifyHLSAccess(r *http.Request) (string, bool) {
-	userID := ctxutil.GetUserID(r)
+func (a *App) verifyHLSAccess(r *http.Request) (string, bool) {
+	userID := getUserID(r)
 	deviceID := chi.URLParam(r, "deviceID")
-	camera, err := h.DB.GetCamera(r.Context(), deviceID)
+	camera, err := a.DB.GetCamera(r.Context(), deviceID)
 	if err != nil || camera == nil || camera.UserID == nil || *camera.UserID != userID {
 		return "", false
 	}
 	return deviceID, true
 }
 
+// retentionMs returns the retention window in milliseconds.
+func (a *App) retentionMs() uint64 {
+	return uint64(a.Config.retentionDays()) * 24 * 60 * 60 * 1000
+}
+
 // GetLiveManifest handles GET /hls/{deviceID}/live.m3u8
 // Returns a small sliding window (~90s) with no EXT-X-ENDLIST so hls.js polls for new segments.
-func (h *Handlers) GetLiveManifest(w http.ResponseWriter, r *http.Request) {
-	deviceID, ok := h.verifyHLSAccess(r)
+func (a *App) GetLiveManifest(w http.ResponseWriter, r *http.Request) {
+	deviceID, ok := a.verifyHLSAccess(r)
 	if !ok {
 		http.Error(w, "", http.StatusNotFound)
 		return
 	}
-	if h.S3 == nil {
+	if a.S3 == nil {
 		http.Error(w, "", http.StatusServiceUnavailable)
 		return
 	}
@@ -44,7 +48,7 @@ func (h *Handlers) GetLiveManifest(w http.ResponseWriter, r *http.Request) {
 	nowMs := uint64(time.Now().UnixMilli())
 	fromMs := nowMs - liveWindowMs
 
-	segments, err := h.DB.ListSegments(r.Context(), deviceID, fromMs, nowMs)
+	segments, err := a.DB.ListSegments(r.Context(), deviceID, fromMs, nowMs, a.retentionMs())
 	if err != nil {
 		slog.Error("list segments failed", "device_id", deviceID, "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
@@ -74,7 +78,7 @@ func (h *Handlers) GetLiveManifest(w http.ResponseWriter, r *http.Request) {
 		b.WriteString(fmt.Sprintf("#EXTINF:%.3f,\n", durationSecs))
 		b.WriteString(fmt.Sprintf("%s.ts\n", seg.SegmentID))
 	}
-	// No EXT-X-ENDLIST — hls.js will poll for updates
+	// No EXT-X-ENDLIST — hls.js will poll for updates.
 
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -83,13 +87,13 @@ func (h *Handlers) GetLiveManifest(w http.ResponseWriter, r *http.Request) {
 
 // GetVodManifest handles GET /hls/{deviceID}/vod.m3u8?from=&to=
 // Returns the full segment range with EXT-X-ENDLIST (finite playlist).
-func (h *Handlers) GetVodManifest(w http.ResponseWriter, r *http.Request) {
-	deviceID, ok := h.verifyHLSAccess(r)
+func (a *App) GetVodManifest(w http.ResponseWriter, r *http.Request) {
+	deviceID, ok := a.verifyHLSAccess(r)
 	if !ok {
 		http.Error(w, "", http.StatusNotFound)
 		return
 	}
-	if h.S3 == nil {
+	if a.S3 == nil {
 		http.Error(w, "", http.StatusServiceUnavailable)
 		return
 	}
@@ -108,7 +112,7 @@ func (h *Handlers) GetVodManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	segments, err := h.DB.ListSegments(r.Context(), deviceID, fromMs, toMs)
+	segments, err := a.DB.ListSegments(r.Context(), deviceID, fromMs, toMs, a.retentionMs())
 	if err != nil {
 		slog.Error("list segments failed", "device_id", deviceID, "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
@@ -141,19 +145,19 @@ func (h *Handlers) GetVodManifest(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetInit handles GET /hls/{deviceID}/init.mp4.
-func (h *Handlers) GetInit(w http.ResponseWriter, r *http.Request) {
-	deviceID, ok := h.verifyHLSAccess(r)
+func (a *App) GetInit(w http.ResponseWriter, r *http.Request) {
+	deviceID, ok := a.verifyHLSAccess(r)
 	if !ok {
 		http.Error(w, "", http.StatusNotFound)
 		return
 	}
-	if h.S3 == nil {
+	if a.S3 == nil {
 		http.Error(w, "", http.StatusServiceUnavailable)
 		return
 	}
 
 	initKey := s3.InitKey(deviceID)
-	url, err := h.S3.PresignGet(r.Context(), initKey)
+	url, err := a.S3.PresignGet(r.Context(), initKey)
 	if err != nil {
 		http.Error(w, "", http.StatusNotFound)
 		return
@@ -164,20 +168,20 @@ func (h *Handlers) GetInit(w http.ResponseWriter, r *http.Request) {
 }
 
 // GetSegment handles GET /hls/{deviceID}/{segmentID}.ts — re-presigns and redirects to S3.
-func (h *Handlers) GetSegment(w http.ResponseWriter, r *http.Request) {
-	deviceID, ok := h.verifyHLSAccess(r)
+func (a *App) GetSegment(w http.ResponseWriter, r *http.Request) {
+	deviceID, ok := a.verifyHLSAccess(r)
 	if !ok {
 		http.Error(w, "", http.StatusNotFound)
 		return
 	}
-	if h.S3 == nil {
+	if a.S3 == nil {
 		http.Error(w, "", http.StatusServiceUnavailable)
 		return
 	}
 
 	segmentID := chi.URLParam(r, "segmentID")
 	s3Key := s3.SegmentKey(deviceID, segmentID)
-	url, err := h.S3.PresignGet(r.Context(), s3Key)
+	url, err := a.S3.PresignGet(r.Context(), s3Key)
 	if err != nil {
 		slog.Warn("presign segment GET failed", "segment_id", segmentID, "error", err)
 		http.Error(w, "", http.StatusNotFound)
@@ -200,8 +204,8 @@ type coverageResponse struct {
 }
 
 // GetCoverage handles GET /hls/{deviceID}/coverage.
-func (h *Handlers) GetCoverage(w http.ResponseWriter, r *http.Request) {
-	deviceID, ok := h.verifyHLSAccess(r)
+func (a *App) GetCoverage(w http.ResponseWriter, r *http.Request) {
+	deviceID, ok := a.verifyHLSAccess(r)
 	if !ok {
 		http.Error(w, "", http.StatusNotFound)
 		return
@@ -210,11 +214,11 @@ func (h *Handlers) GetCoverage(w http.ResponseWriter, r *http.Request) {
 	nowMs := uint64(time.Now().UnixMilli())
 	// Default to full retention window so all available footage appears on the timeline.
 	// Clients can narrow with ?from=&to= if needed.
-	retentionMs := uint64(h.RetentionDays) * 24 * 60 * 60 * 1000
+	retentionMs := a.retentionMs()
 	fromMs := parseQueryUint64(r, "from", nowMs-retentionMs)
 	toMs := parseQueryUint64(r, "to", nowMs)
 
-	segments, err := h.DB.ListSegmentCoverage(r.Context(), deviceID, fromMs, toMs)
+	segments, err := a.DB.ListSegmentCoverage(r.Context(), deviceID, fromMs, toMs, retentionMs)
 	if err != nil {
 		slog.Error("list segment coverage failed", "device_id", deviceID, "error", err)
 		http.Error(w, "", http.StatusInternalServerError)

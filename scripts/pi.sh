@@ -80,7 +80,7 @@ build_and_deploy() {
     local target_bin="${PROJECT_ROOT}/ghostcam-camera"
 
     echo "Cross-compiling Go camera for linux/arm64..."
-    (cd "${PROJECT_ROOT}" && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o "${target_bin}" ./cmd/ghostcam-camera)
+    (cd "${PROJECT_ROOT}" && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o "${target_bin}" ./camera)
 
     if [ ! -f "${target_bin}" ]; then
         echo "ERROR: Build failed - binary not found at ${target_bin}"
