@@ -98,26 +98,27 @@
 		};
 	});
 
-	// Loop logic — separate effect so loopStart/loopEnd changes don't reload HLS
+	// Loop logic — rAF for tight boundary clamping (timeupdate is too infrequent)
 	$effect(() => {
 		if (!videoEl || loopStart <= 0 || loopEnd <= 0) return;
 		const mediaEl = videoEl;
 		const ls = loopStart;
 		const le = loopEnd;
+		let raf: number;
 
-		const onTimeUpdate = () => {
-			if (!firstPDTMs) return;
-			const epochNow = firstPDTMs / 1000 + mediaEl.currentTime;
-			if (epochNow >= le || epochNow < ls) {
-				const startOffset = ls - firstPDTMs / 1000;
-				mediaEl.currentTime = Math.max(0, startOffset);
+		const tick = () => {
+			if (firstPDTMs) {
+				const epochNow = firstPDTMs / 1000 + mediaEl.currentTime;
+				if (epochNow >= le || epochNow < ls) {
+					const startOffset = ls - firstPDTMs / 1000;
+					mediaEl.currentTime = Math.max(0, startOffset);
+				}
 			}
+			raf = requestAnimationFrame(tick);
 		};
-		mediaEl.addEventListener('timeupdate', onTimeUpdate);
+		raf = requestAnimationFrame(tick);
 
-		return () => {
-			mediaEl.removeEventListener('timeupdate', onTimeUpdate);
-		};
+		return () => cancelAnimationFrame(raf);
 	});
 
 	// Reset playback to clip start on handle release
