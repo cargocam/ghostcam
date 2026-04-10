@@ -118,7 +118,7 @@ func (db *DB) PruneSegments(ctx context.Context, deviceID string, olderThanMs ui
 		`DELETE FROM segments
 		 WHERE segment_id IN (
 		   SELECT segment_id FROM segments
-		   WHERE device_id = $1 AND created_at < $2
+		 WHERE device_id = $1 AND start_ts < $2
 		   ORDER BY created_at
 		   LIMIT $3
 		 )
