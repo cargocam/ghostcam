@@ -347,6 +347,7 @@
 		};
 		const onUp = () => {
 			draggingClipHandle = null;
+			clipStore.seekRevision++;
 			window.removeEventListener('pointermove', onMove);
 			window.removeEventListener('pointerup', onUp);
 		};

@@ -162,6 +162,7 @@
 				seekTo={clipSnapshot ? clipSnapshot.seekTo : (scrubberStore.seekTarget ?? -1)}
 				loopStart={clipStore.enabled ? clipStore.startTime : -1}
 				loopEnd={clipStore.enabled ? clipStore.endTime : -1}
+				loopSeekRevision={clipStore.seekRevision}
 				onError={(err) => console.warn(`HLS error for ${deviceId}:`, err)}
 			/>
 		{:else}

@@ -10,6 +10,8 @@ class ClipStore {
 	phase = $state<ClipPhase>('idle');
 	progress = $state(0); // 0-1
 	error = $state<string | null>(null);
+	/** Bumped on handle release to signal playback should reset to startTime. */
+	seekRevision = $state(0);
 
 	get durationSecs() {
 		return Math.max(0, this.endTime - this.startTime);

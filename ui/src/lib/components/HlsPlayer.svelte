@@ -9,6 +9,7 @@
 		seekTo = -1,
 		loopStart = -1,
 		loopEnd = -1,
+		loopSeekRevision = 0,
 		class: className = '',
 		onError = undefined,
 	}: {
@@ -18,6 +19,8 @@
 		/** Epoch seconds — loop boundaries. When both > 0, video loops within this range. */
 		loopStart?: number;
 		loopEnd?: number;
+		/** Bumped to force seek to loopStart (e.g. after handle release). */
+		loopSeekRevision?: number;
 		class?: string;
 		onError?: (error: string) => void;
 	} = $props();
@@ -115,6 +118,14 @@
 		return () => {
 			mediaEl.removeEventListener('timeupdate', onTimeUpdate);
 		};
+	});
+
+	// Reset playback to clip start on handle release
+	$effect(() => {
+		const _rev = loopSeekRevision; // track changes
+		if (!videoEl || loopStart <= 0 || !firstPDTMs || _rev === 0) return;
+		const startOffset = loopStart - firstPDTMs / 1000;
+		videoEl.currentTime = Math.max(0, startOffset);
 	});
 </script>
 
