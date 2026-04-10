@@ -105,7 +105,7 @@
 		const onTimeUpdate = () => {
 			if (!firstPDTMs) return;
 			const epochNow = firstPDTMs / 1000 + mediaEl.currentTime;
-			if (epochNow >= le) {
+			if (epochNow >= le || epochNow < ls) {
 				const startOffset = ls - firstPDTMs / 1000;
 				mediaEl.currentTime = Math.max(0, startOffset);
 			}
