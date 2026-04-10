@@ -55,7 +55,7 @@ cd ui && bun run test:e2e  # playwright e2e tests (requires dev server)
 ### Testing
 
 **Go** (`go test ./...`): Table-driven tests for pure functions. No mocking framework — tests cover:
-- `server/handlers/`: `effectiveTier()` billing logic, `epochMsToISO8601` formatting
+- `server/handlers/`: `effectiveTier()` billing logic, `epochMsToISO8601` formatting, `TestCameraLimitAllowed` (tier-based camera upload enforcement)
 - `server/billing/`: `GetTier()` tier resolution, `StorageLimitBytes()` computation
 - `camera/`: motion detector (file-size fallback, rolling window), MPEG-TS sync byte validation, pending confirms persistence, config helpers (`coalesceStr`, `resolveVideoProfile`, `trimString`)
 
@@ -256,12 +256,27 @@ Two manifest types serve live and playback use cases:
 
 Billing is always enabled. Every user defaults to the **free** tier (5 GB storage, 1 camera). `effectiveTier()` derives tier from Stripe subscription state: paid tiers require `stripe_subscription_id IS NOT NULL AND status = 'active'`. When Stripe is not configured (dev), returns "enterprise" (unlimited). Tier enforcement:
 
-- **Camera limit**: `POST /api/v1/cameras` returns HTTP 402 `camera_limit_reached` when the user's tier camera limit is reached.
+- **Camera limit (enrollment)**: `POST /api/v1/cameras` returns HTTP 402 `camera_limit_reached` when the user's tier camera limit is reached.
+- **Camera limit (presign)**: On downgrade, only the N oldest cameras (by `enrolled_at`) may upload. Excess cameras receive `storage_capped: true`, pausing uploads without deleting cameras. Read access (HLS, telemetry) remains available for all cameras.
 - **Storage limit**: The presign handler uses Redis `INCRBY` for atomic reservation to prevent TOCTOU race conditions when checking storage limits. Storage counter cached in Redis `storage_bytes:{user_id}` with 5-min TTL. If over limit, returns `storage_capped: true`.
 - **Storage capped events**: Deduplicated per device with a 5-minute cooldown via Redis `SETNX`.
+- **Downgrade notifications**: On subscription update/delete, if camera count exceeds new tier limit, a `camera_limit_exceeded` event is emitted via SSE.
 - **Registration disabled**: `POST /api/v1/auth/register` returns 403. Admin users are seeded on first run via env vars.
 
 Tiers: Free (5 GB / 1 camera), Starter (50 GB / 4 cameras), Pro (500 GB / 16 cameras), Enterprise (unlimited).
+
+### Clip Download
+
+Users can select a time range on the timeline and download footage as MP4 or telemetry as CSV/JSON.
+
+- **Timeline clip mode**: Scissors button enters clip mode — two yellow drag handles with highlighted region (10s min, 5 min max)
+- **Auto-zoom**: Timeline zooms to playhead on clip mode enter, zooms out on exit
+- **Loop playback**: Video loops within the selected clip range (rAF-based boundary clamping for frame accuracy)
+- **MP4 export**: Client-side via ffmpeg.wasm 0.11.x — lazy-loaded (~25 MB), downloads TS segments, remuxes to MP4 (`-c copy -movflags +faststart`)
+- **Telemetry export**: CSV (merged with `device_id` column for multi-camera) or JSON
+- **Multi-camera**: Exports selected camera or all cameras if none selected
+- **Server endpoints**: `POST /api/v1/clips/prepare` (presigned segment URLs), `GET /api/v1/telemetry/{id}/export` (CSV/JSON)
+- **Cross-Origin Isolation**: COOP/COEP headers required for ffmpeg.wasm SharedArrayBuffer
 
 ### SSE Event Types
 
@@ -373,9 +388,12 @@ server/
                           GetVODManifest (vod.m3u8: full range with ENDLIST),
                           GetSegment (302 redirect to S3), GetInit (302 redirect),
                           GetCoverage (segment list with motion flags)
+                  clips.go: PrepareClip (presigned segment URLs for clip download),
+                            ExportTelemetry (CSV/JSON telemetry export with Content-Disposition)
                   presign.go: Confirms uploaded segments (created_at in unix milliseconds, matching
                               retention's cutoffMs comparison), storage limit check with Redis INCRBY
-                              atomic reservation, storage_capped event deduplication (5 min cooldown via Redis SETNX)
+                              atomic reservation, storage_capped event deduplication (5 min cooldown via Redis SETNX),
+                              camera limit enforcement (oldest N cameras by enrolled_at may upload)
                   sse.go: SSE via Redis XREAD + pub/sub, write deadline disabled for long-lived connections
                   qr.go: Returns JSON {payload, token, expires_at} — UI generates QR SVG client-side
                   provision.go: Camera provisioning with one-time token
@@ -412,13 +430,20 @@ stores/
   groups.svelte.ts     Group list + active group
   alerts.svelte.ts     Disconnect/reconnect notifications; handles motion and storage_capped alert types
   cameraConfig.svelte.ts  Display name overrides (localStorage)
+  clip.svelte.ts          Clip mode state: enabled, startTime/endTime, phase, progress, seekRevision
+                          5-min max, 10s min; toggle enters/exits clip mode
   billing.svelte.ts       Subscription, tiers, usage state + Stripe checkout/portal
                           Derived fields: storageUsedGB, storageLimitGB, storagePercent, isStorageCapped
 components/
   HlsPlayer.svelte    hls.js wrapper for HLS playback via /hls/{deviceID}/live.m3u8 and vod.m3u8
+                       Supports loop playback via loopStart/loopEnd props (rAF boundary clamping)
   TimelineScrubber.svelte  Timeline with union bar + selected camera overlay, per-camera coverage
                            Coverage bars merge regardless of hasMotion (motion is coloring only)
                            Map tracking on by default, re-engages on scrub/live
+                           Clip mode: scissors button, yellow drag handles, auto-zoom on enter/exit
+                           Zoom-on-hold-still: 1800ms delay, cancelled if mouse moves
+  ClipDownloadBar.svelte   Download controls for clip mode: Video (MP4), CSV, JSON export buttons
+                           Progress bar during download/processing, multi-camera support
   LiveView.svelte      Main view with empty-state onboarding watermark
   camera/CameraCard.svelte  Camera card with HLS player, uses live.m3u8 / vod.m3u8
   camera/CameraList.svelte  Sidebar camera list with gear icon for settings dialog (no dropdown context menu)
@@ -483,7 +508,10 @@ GET    /hls/:id/init.mp4                   Init segment → 307 redirect to S3
 GET    /hls/:id/:segmentID.ts              Segment → 302 redirect to S3 (presigned on the fly)
 GET    /hls/:id/coverage                   Segment coverage with motion flags (has_motion always present, not omitted when false)
 
-GET    /events                             SSE stream (telemetry, motion, storage_capped, coverage events)
+POST   /api/v1/clips/prepare              { device_id, from_ms, to_ms } → presigned segment URLs for clip download
+GET    /api/v1/telemetry/:id/export       ?from=&to=&format=csv|json → telemetry export (Content-Disposition attachment)
+
+GET    /events                             SSE stream (telemetry, motion, storage_capped, coverage, camera_limit_exceeded events)
 
 GET    /api/v1/tokens                      List API tokens
 POST   /api/v1/tokens                      Create token
@@ -539,8 +567,9 @@ GET    /readyz                             200 when ready (no auth)
 - **Local storage eviction**: The camera evicts oldest segments when local storage exceeds 4 GB (default). Configure via `GHOSTCAM_LOCAL_STORAGE_CAP_MB` environment variable or `local_storage_cap_mb` in the camera config file.
 - **Upload failures**: Upload retry queue with 3 retries and exponential backoff (2s, 4s, 8s). After max retries, segment stays on disk (not deleted). `storageCapped` uses `atomic.Bool` to avoid data races.
 - **Audit log**: Set `GHOSTCAM_HMAC_KEY` to a secret key for HMAC-SHA256 signing (default: `dev-hmac-key`). Entries are written to the `audit_log` PostgreSQL table. Query via `GET /api/v1/audit` (admin only).
-- **Billing always on**: Every user defaults to the "free" tier (5 GB, 1 camera). `effectiveTier()` derives tier from Stripe subscription state; when Stripe not configured (dev), returns "enterprise" (unlimited). `GET /api/v1/billing/subscription` always returns `{ billing_enabled: true, tier: "<tier>" }`.
+- **Billing always on**: Every user defaults to the "free" tier (5 GB, 1 camera). `effectiveTier()` derives tier from Stripe subscription state; when Stripe not configured (dev), returns "enterprise" (unlimited). `GET /api/v1/billing/subscription` always returns `{ billing_enabled: true, tier: "<tier>" }`. In local dev, set `STRIPE_SECRET_KEY` in `.env` to enable real tier enforcement.
 - **Camera limit 402**: When a user hits their tier's camera limit, `POST /api/v1/cameras` returns HTTP 402 with `{ error: "camera_limit_reached" }`.
+- **Camera limit on downgrade**: On tier downgrade, excess cameras are soft-blocked: presign returns `storage_capped: true` for cameras beyond the limit (oldest N by `enrolled_at` remain active). Read access (HLS, telemetry) is preserved for all cameras. No cameras are deleted.
 - **Failed login logging**: Login failures are logged with email + IP address (via `X-Forwarded-For` or `RemoteAddr`).
 - **HLS segment expiry**: Manifests (`live.m3u8`, `vod.m3u8`) use relative `.ts` paths. Each segment request to `/hls/{id}/{segmentID}.ts` re-presigns on the fly and returns 302 to S3. No presigned URLs in manifests means no mid-stream expiry.
 - **Billing webhooks**: Stripe webhooks keep subscription state in sync. In production, set `STRIPE_WEBHOOK_SECRET` to the real signing secret.
@@ -563,5 +592,6 @@ GET    /readyz                             200 when ready (no auth)
 | `svelte` (5) | Frontend. Runes: `$state`, `$derived`, `$effect` |
 | `tailwindcss` (4) | OKLCH color system, `@import "tailwindcss"` |
 | `hls.js` (1) | HLS playback in browser |
+| `@ffmpeg/ffmpeg` (0.11.6) | Client-side MP4 assembly via ffmpeg.wasm (lazy-loaded) |
 | `bits-ui` (2) | Headless component primitives |
 | `leaflet` (1.9) | Map |

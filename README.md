@@ -16,7 +16,8 @@ Server (Go) ← 302 redirect → Browser (hls.js)
 - **No persistent connections** -- cameras POST telemetry every 10s, upload segments via presigned PUT URLs
 - **Stateless server** -- JWT auth, horizontally scalable
 - **S3-native HLS** -- manifests generated on the fly, segments served via 302 redirect to S3 (re-presigned per request)
-- **Billing always on** -- users default to free tier (5 GB / 1 camera), dev admin gets pro tier
+- **Billing always on** -- users default to free tier (5 GB / 1 camera); Stripe test mode for local dev
+- **Clip download** -- timeline range selection, client-side MP4 assembly via ffmpeg.wasm, telemetry CSV/JSON export
 
 ## Quick Start
 
@@ -36,7 +37,7 @@ docker compose --profile test up -d
 ```
 cmd/ghostcam-server/     Server entrypoint
 cmd/ghostcam-camera/     Camera entrypoint
-api/                     Shared Go types (camera <-> server contract)
+common/                  Shared Go types (camera <-> server contract)
 camera/                  Camera: capture pipeline, S3 upload, telemetry, provisioning, gpsd
 server/                  Server: HTTP handlers, DB, Redis, S3, auth, billing
   auth/                  Argon2id passwords, JWT, HMAC
@@ -110,10 +111,13 @@ go build -o ghostcam-server ./cmd/ghostcam-server
 | `POST /api/v1/cameras/provision` | Public (rate limited) | Camera provisioning |
 | `POST /api/v1/cameras/:id/telemetry` | Camera | Telemetry POST, returns pending commands |
 | `POST /api/v1/cameras/:id/presign` | Camera | Presigned S3 URLs + confirm uploads |
-| `GET /hls/:id/playlist.m3u8` | Viewer | Dynamic HLS manifest (max 24h, LIMIT 2000) |
+| `GET /hls/:id/live.m3u8` | Viewer | Live HLS manifest (90s sliding window) |
+| `GET /hls/:id/vod.m3u8` | Viewer | VOD HLS manifest (?from=&to=, max 24h) |
 | `GET /hls/:id/:segmentID.ts` | Viewer | 302 redirect to S3 (re-presigned per request) |
 | `GET /hls/:id/coverage` | Viewer | Segment coverage with motion flags |
-| `GET /events` | Viewer | SSE stream (telemetry, motion, storage_capped) |
+| `POST /api/v1/clips/prepare` | Viewer | Presigned segment URLs for clip download |
+| `GET /api/v1/telemetry/:id/export` | Viewer | Telemetry export (CSV/JSON) |
+| `GET /events` | Viewer | SSE stream (telemetry, motion, storage_capped, coverage) |
 | `GET /api/v1/billing/subscription` | Viewer | Always returns `billing_enabled: true` |
 | `POST /api/v1/cameras` | Viewer | Returns 402 when tier camera limit reached |
 | `POST /api/v1/admin/firmware` | Admin | Upload firmware binary to Tigris |
@@ -134,7 +138,7 @@ go build -o ghostcam-server ./cmd/ghostcam-server
 
 ## Infrastructure
 
-- **Fly.io** -- server hosting (ord)
+- **Fly.io** -- server hosting (sjc)
 - **Tigris** -- S3-compatible object storage (edge-cached)
 - **Neon** -- Postgres (us-west-2)
 - **Upstash** -- Redis (sjc)

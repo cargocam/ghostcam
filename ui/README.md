@@ -22,6 +22,7 @@ The Vite dev server proxies `/api`, `/hls`, and `/events` to the server at `:300
 - **lucide-svelte** — icons
 - **Leaflet** — map integration
 - **hls.js** — HLS playback for recorded footage
+- **@ffmpeg/ffmpeg 0.11.6** — client-side MP4 assembly via ffmpeg.wasm (lazy-loaded)
 
 ## Features
 
@@ -35,6 +36,8 @@ The Vite dev server proxies `/api`, `/hls`, and `/events` to the server at `:300
 - Dashboard view with aggregate stats and sparkline charts
 - Camera online/offline status, display name overrides (localStorage)
 - Connection alerts (disconnect/reconnect notifications)
+- Clip mode — timeline range selection with drag handles, loop playback preview
+- Download clip as MP4 (ffmpeg.wasm remux), or export telemetry as CSV/JSON
 - Dark/light/system theme, mobile responsive (sidebar + drawer nav)
 
 ## Architecture
@@ -55,6 +58,7 @@ Camera events and state arrive via **Server-Sent Events** (`/events`), not WebRT
 | `groupStore` | `groups.svelte.ts` | Group list and active group |
 | `settingsStore` | `settings.svelte.ts` | Theme, grid layout, view mode, mute state (localStorage) |
 | `alertStore` | `alerts.svelte.ts` | Disconnect/reconnect event log |
+| `clipStore` | `clip.svelte.ts` | Clip mode state: range, phase, progress, seekRevision |
 | `cameraConfigStore` | `cameraConfig.svelte.ts` | Per-camera display name overrides (localStorage) |
 | `videoStatsStore` | `videoStats.svelte.ts` | Per-track WebRTC inbound-rtp stats |
 | `thumbnailStore` | `thumbnails.svelte.ts` | Canvas-captured frame thumbnails (data URLs) |
@@ -65,7 +69,8 @@ Camera events and state arrive via **Server-Sent Events** (`/events`), not WebRT
 |------|---------|
 | `auth.ts` | Login, logout, session check |
 | `sse.ts` | SSE client — parses events, drives cameraStore and transportStore |
-| `signaling.ts` | `watchCamera` / `unwatchCamera` — WebRTC SDP exchange with server; `fetchTelemetryRangeCached` |
+| `signaling.ts` | `watchCamera` / `unwatchCamera` — WebRTC SDP exchange with server; `fetchTelemetryRangeCached`; `prepareClip`; `exportTelemetry` |
+| `ffmpeg.ts` | Lazy-loaded ffmpeg.wasm 0.11.x — `concatSegments()` downloads TS segments, remuxes to MP4 |
 | `webrtc.ts` | `WebRtcSession` — `RTCPeerConnection` per camera, ICE candidate handling, `stripCandidates()` for Firefox mDNS compat |
 | `connection-manager.ts` | Orchestrates SSE events → WebRTC session lifecycle |
 | `telemetry-history.ts` | Fetch telemetry time ranges from API with in-memory cache; `nearestTelemetryEntryWithin` |
