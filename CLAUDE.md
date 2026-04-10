@@ -149,7 +149,7 @@ For detailed subsystem documentation see:
 - **[docs/usage.md](docs/usage.md)** — Camera setup (flash/deb/binary) and viewer walkthrough: enrolling, playback, clips, billing
 - **[docs/api.md](docs/api.md)** — API endpoints, SSE events, camera-server protocol
 - **[docs/architecture.md](docs/architecture.md)** — Camera, server, and viewer file-by-file structure
-- **[docs/configuration.md](docs/configuration.md)** — Environment variables, config files, billing tiers, background jobs
+- **[docs/configuration.md](docs/configuration.md)** — Environment variables, config files, billing tiers, retention & cleanup
 - **[docs/debugging.md](docs/debugging.md)** — Troubleshooting common issues
 
 ## Code Conventions
