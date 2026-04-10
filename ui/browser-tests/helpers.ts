@@ -1,3 +1,17 @@
+// Shared setup for the browser-tests/ suite.
+//
+// IMPORTANT: these tests are NOT end-to-end tests. Every /api/v1/**, /hls/**,
+// and /events request is intercepted by page.route() below and answered with
+// hand-written fixtures. The Go server, Postgres, Redis, and S3 are never
+// touched. What these tests verify is limited to frontend wiring — form
+// state, route transitions, DOM rendering against a known response shape —
+// and nothing downstream of the HTTP boundary.
+//
+// This means the fixtures can drift silently from the real server's response
+// shapes. Any check that depends on the actual camera-server contract
+// (tier enforcement, auth, segment confirmation, SSE delivery, HLS playback)
+// needs a real backend and does not belong here.
+
 import type { Page } from '@playwright/test';
 
 /** Standard mock camera list returned by /api/v1/cameras */

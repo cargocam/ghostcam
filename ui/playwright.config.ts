@@ -1,7 +1,12 @@
 import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
-  testDir: './e2e',
+  // Browser-based frontend smoke tests. These run in a real Chromium but
+  // intercept every /api/v1/**, /hls/**, and /events request via page.route()
+  // and return hand-written fixtures — they do NOT exercise the Go server,
+  // the database, Redis, or S3. Treat them as UI integration tests, not
+  // end-to-end tests. See browser-tests/helpers.ts for the mock surface.
+  testDir: './browser-tests',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,

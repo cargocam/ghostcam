@@ -46,7 +46,7 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./camera
 # Run tests
 go test ./...
 cd ui && bun run test    # vitest unit tests
-cd ui && bun run test:e2e  # playwright e2e tests (requires dev server)
+cd ui && bun run test:browser  # playwright browser tests (frontend smoke; backend is mocked)
 ```
 
 ### Testing
@@ -61,7 +61,17 @@ cd ui && bun run test:e2e  # playwright e2e tests (requires dev server)
 - Alert deduplication (upsert vs append by type+cameraId)
 - Time formatting (`formatTimeAgo`)
 
-**CI** (`.github/workflows/ci.yml`): Runs `go vet`, `go test`, `bun run check`, `bun run test`, `bun run build`, Docker build on every push/PR.
+**UI browser tests** (`bun run test:browser`): Playwright specs in `ui/browser-tests/`
+that run in real Chromium against the Vite dev server. **Every** backend call
+(`/api/v1/**`, `/hls/**`, `/events`) is intercepted via `page.route()` and
+answered from hand-written fixtures in `browser-tests/helpers.ts` — the Go
+server, DB, Redis, and S3 are not exercised. These are frontend smoke tests,
+not end-to-end tests. Fixtures can drift from the server's real response
+shapes; anything that depends on the actual camera-server contract (auth,
+tier enforcement, SSE delivery, HLS playback) needs a live backend and does
+not belong here.
+
+**CI** (`.github/workflows/ci.yml`): Runs `go vet`, `go test`, `bun run check`, `bun run test`, `bun run build`, Docker build on every push/PR. The browser tests are not run in CI yet (they would need Playwright browser install; tracked as follow-up).
 
 ### Local dev
 
