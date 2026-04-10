@@ -35,26 +35,54 @@
 		return coverage.some((s) => target >= s.start && target <= s.end);
 	});
 
-	// Stable clip manifest range — only updates when clip mode toggles on, not on handle drag.
-	// Covers a 10-minute window centered on the initial clip to allow handle movement without reload.
-	// Snapshot clip state on mode enter — stable across handle drags to avoid HLS reloads.
+	// Clip manifest window — 10-min VOD centered on clip midpoint.
+	// Re-centers when clip bounds escape the buffered window (debounced to avoid reload spam).
+	const CLIP_MANIFEST_PADDING_SEC = 5 * 60; // 5 min each side = 10 min total
 	let clipSnapshot = $state<{ from: number; to: number; seekTo: number } | null>(null);
+	let clipReloadTimer: ReturnType<typeof setTimeout> | null = null;
 	let prevClipEnabled = false;
+
+	function buildClipSnapshot(start: number, end: number) {
+		const mid = (start + end) / 2;
+		return {
+			from: Math.floor((mid - CLIP_MANIFEST_PADDING_SEC) * 1000),
+			to: Math.floor((mid + CLIP_MANIFEST_PADDING_SEC) * 1000),
+			seekTo: start,
+		};
+	}
+
 	$effect(() => {
 		const enabled = clipStore.enabled;
 		if (enabled && !prevClipEnabled) {
+			// Clip mode just turned on — initial snapshot
 			untrack(() => {
-				const mid = (clipStore.startTime + clipStore.endTime) / 2;
-				clipSnapshot = {
-					from: Math.floor((mid - 5 * 60) * 1000),
-					to: Math.floor((mid + 5 * 60) * 1000),
-					seekTo: clipStore.startTime,
-				};
+				clipSnapshot = buildClipSnapshot(clipStore.startTime, clipStore.endTime);
 			});
 		} else if (!enabled) {
 			clipSnapshot = null;
+			if (clipReloadTimer) { clearTimeout(clipReloadTimer); clipReloadTimer = null; }
 		}
 		prevClipEnabled = enabled;
+	});
+
+	// Watch for clip bounds escaping the manifest window
+	$effect(() => {
+		if (!clipStore.enabled || !clipSnapshot) return;
+		const startMs = Math.floor(clipStore.startTime * 1000);
+		const endMs = Math.floor(clipStore.endTime * 1000);
+		const needsReload = startMs < clipSnapshot.from || endMs > clipSnapshot.to;
+		if (!needsReload) return;
+
+		// Debounce: wait for handle drag to settle before reloading
+		if (clipReloadTimer) clearTimeout(clipReloadTimer);
+		clipReloadTimer = setTimeout(() => {
+			clipReloadTimer = null;
+			clipSnapshot = buildClipSnapshot(clipStore.startTime, clipStore.endTime);
+		}, 500);
+
+		return () => {
+			if (clipReloadTimer) { clearTimeout(clipReloadTimer); clipReloadTimer = null; }
+		};
 	});
 
 	// Live: sliding window manifest, hls.js polls for new segments.
