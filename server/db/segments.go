@@ -118,8 +118,8 @@ func (db *DB) PruneSegments(ctx context.Context, deviceID string, olderThanMs ui
 		`DELETE FROM segments
 		 WHERE segment_id IN (
 		   SELECT segment_id FROM segments
-		 WHERE device_id = $1 AND start_ts < $2
-		   ORDER BY created_at
+		   WHERE device_id = $1 AND start_ts < $2
+		   ORDER BY start_ts
 		   LIMIT $3
 		 )
 		 RETURNING segment_id, device_id, s3_key, start_ts, end_ts, size_bytes, resolution, created_at, has_motion`,

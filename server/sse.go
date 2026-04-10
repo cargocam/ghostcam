@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/cargocam/ghostcam/server/apitypes"
@@ -78,6 +79,7 @@ func (a *App) SSE(w http.ResponseWriter, r *http.Request) {
 	pubsub := rdb.Subscribe(ctx,
 		fmt.Sprintf("motion:%s", userID),
 		fmt.Sprintf("storage_capped:%s", userID),
+		fmt.Sprintf("camera_limit_exceeded:%s", userID),
 		fmt.Sprintf("coverage:%s", userID),
 		fmt.Sprintf("events_sync:%s", userID),
 	)
@@ -113,18 +115,24 @@ func (a *App) SSE(w http.ResponseWriter, r *http.Request) {
 		case raw := <-eventCh:
 			parts := splitOnce(raw, "|")
 			channel, payload := parts[0], parts[1]
+			// Map Redis channel name to the SSE event type the UI
+			// listens for. We cannot switch on a single character
+			// because "coverage:" and "camera_limit_exceeded:" both
+			// start with 'c'. camera_limit_exceeded is forwarded as
+			// a storage_capped SSE event for UI backward-compat until
+			// the UI grows its own handler.
 			var eventType string
-			if len(channel) > 0 {
-				switch channel[0] {
-				case 'm':
-					eventType = "motion_detected"
-				case 's':
-					eventType = "storage_capped"
-				case 'c':
-					eventType = "coverage"
-				case 'e':
-					eventType = "events_sync"
-				}
+			switch {
+			case strings.HasPrefix(channel, "motion:"):
+				eventType = "motion_detected"
+			case strings.HasPrefix(channel, "storage_capped:"):
+				eventType = "storage_capped"
+			case strings.HasPrefix(channel, "camera_limit_exceeded:"):
+				eventType = "storage_capped"
+			case strings.HasPrefix(channel, "coverage:"):
+				eventType = "coverage"
+			case strings.HasPrefix(channel, "events_sync:"):
+				eventType = "events_sync"
 			}
 			if eventType != "" {
 				fmt.Fprintf(w, "event: %s\ndata: %s\n\n", eventType, payload)

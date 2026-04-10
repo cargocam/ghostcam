@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/cargocam/ghostcam/server/auth"
 )
@@ -45,19 +44,16 @@ func (a *App) viewerAuth(next http.Handler) http.Handler {
 		ctx := r.Context()
 
 		// 1. Authorization: Bearer <api-token>
+		// VerifyAPIToken already rejects expired tokens at the DB layer,
+		// so no additional expiry check is needed here.
 		if authHeader := r.Header.Get("Authorization"); authHeader != "" {
 			if token, ok := strings.CutPrefix(authHeader, "Bearer "); ok {
 				tokenHash := auth.HMACToken(token, a.HMACSecret)
 				record, err := a.DB.VerifyAPIToken(ctx, tokenHash)
 				if err == nil && record != nil {
-				ctx = context.WithValue(ctx, keyUserID, record.UserID)
-				next.ServeHTTP(w, r.WithContext(ctx))
-				return
-					if record.ExpiresAt == nil || *record.ExpiresAt > now {
-						ctx = context.WithValue(ctx, keyUserID, record.UserID)
-						next.ServeHTTP(w, r.WithContext(ctx))
-						return
-					}
+					ctx = context.WithValue(ctx, keyUserID, record.UserID)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
 				}
 			}
 		}
@@ -77,7 +73,11 @@ func (a *App) viewerAuth(next http.Handler) http.Handler {
 	})
 }
 
-// adminAuth wraps viewerAuth and enforces that the user matches AdminEmail.
+// adminAuth wraps viewerAuth and enforces that the authenticated viewer's
+// email matches AdminEmail. The admin email comes from the JWT claim that
+// viewerAuth populated on the cookie path — admins must log in via the
+// web UI, not via API token, because API-token auth does not populate
+// KeyUserEmail (the token record doesn't carry an email).
 func (a *App) adminAuth(next http.Handler) http.Handler {
 	return a.viewerAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		userID := getUserID(r)
@@ -87,10 +87,6 @@ func (a *App) adminAuth(next http.Handler) http.Handler {
 		}
 
 		if getUserEmail(r) != a.Config.AdminEmail {
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
-		if err != nil || user == nil || user.UserID != userID {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
