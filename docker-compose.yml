@@ -98,6 +98,8 @@ services:
       - VITE_API_URL=http://server:3000
     volumes:
       - ./ui/src:/app/src
+      - ./ui/public:/app/public
+      - ./ui/index.html:/app/index.html
 
   camera-1:
     profiles: [test]

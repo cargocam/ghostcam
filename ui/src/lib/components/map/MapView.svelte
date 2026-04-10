@@ -408,7 +408,7 @@
 				{#if tracking === 'off'}
 					<Locate class="h-4 w-4" />
 				{:else}
-					<LocateFixed class="h-4 w-4 text-green-500" />
+					<LocateFixed class="h-4 w-4 text-primary" />
 				{/if}
 			</button>
 		</div>

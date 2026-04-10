@@ -54,8 +54,8 @@
 	function createIcon(): L.DivIcon {
 		const online = camera.online;
 		const t = camera.telemetry;
-		const dotColor = online ? '#22c55e' : '#9ca3af';
-		const dotRing = selected ? 'box-shadow:0 0 0 3px #22c55e,0 1px 3px rgba(0,0,0,0.3)' : 'box-shadow:0 1px 3px rgba(0,0,0,0.3)';
+		const dotColor = online ? '#10b981' : '#9ca3af';
+		const dotRing = selected ? 'box-shadow:0 0 0 3px #10b981,0 1px 3px rgba(0,0,0,0.3)' : 'box-shadow:0 1px 3px rgba(0,0,0,0.3)';
 
 		const dotHtml = `<div style="position:absolute;width:${DOT_SIZE}px;height:${DOT_SIZE}px;border-radius:50%;background:${dotColor};border:2px solid white;${dotRing};z-index:2"></div>`;
 
@@ -104,7 +104,7 @@
 		let panelHtml = '';
 		if (markerMode === 'pip') {
 			const pipBorder = selected
-				? 'border:2px solid #22c55e;box-shadow:0 0 0 2px #22c55e,0 2px 8px rgba(0,0,0,0.4)'
+				? 'border:2px solid #10b981;box-shadow:0 0 0 2px #10b981,0 2px 8px rgba(0,0,0,0.4)'
 				: 'border:1px solid rgba(255,255,255,0.15);box-shadow:0 2px 8px rgba(0,0,0,0.4)';
 			const statusDot = `<span style="width:6px;height:6px;border-radius:50%;background:${dotColor};flex-shrink:0"></span>`;
 			panelHtml = `
@@ -121,7 +121,7 @@
 			const mem = t?.memory_mb?.toFixed(0) ?? '--';
 			const temp = t?.temp_celsius ? `${t.temp_celsius.toFixed(0)}°` : '';
 			const infoBorder = selected
-				? 'border:2px solid #22c55e;box-shadow:0 0 0 2px #22c55e,0 2px 8px rgba(0,0,0,0.3)'
+				? 'border:2px solid #10b981;box-shadow:0 0 0 2px #10b981,0 2px 8px rgba(0,0,0,0.3)'
 				: 'border:1px solid rgba(255,255,255,0.1);box-shadow:0 2px 8px rgba(0,0,0,0.3)';
 			panelHtml = `
 				<div style="position:absolute;left:${panelLeft}px;top:${panelTop}px;z-index:1;background:rgba(0,0,0,0.85);border-radius:8px;padding:6px 10px;color:white;font-size:11px;font-family:monospace;white-space:nowrap;${infoBorder}">

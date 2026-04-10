@@ -132,6 +132,15 @@ server/
 ## Viewer Structure
 
 ```
+index.html             PWA head: favicon.svg, manifest.json, theme-color, apple-touch-icon
+main.ts                Mounts App; registers /sw.js in production (skipped in dev for HMR)
+public/
+  favicon.svg          Ghost silhouette (transparent bg) used for browser tab icon
+  icon.svg             App icon (rounded dark background + ghost)
+  icon-maskable.svg    Maskable PWA icon (80% safe zone, full-bleed background)
+  manifest.json        PWA manifest (name, start_url, standalone display, icons, theme color)
+  sw.js                Service worker: network-first shell cache, skips /api, /hls, /events
+
 signaling.ts           API calls: fetchCameras, fetchTelemetryRange, fetchCoverage
 stores/
   transport.svelte.ts  SSE connection, auth state, camera polling

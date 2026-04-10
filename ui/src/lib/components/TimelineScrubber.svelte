@@ -395,7 +395,7 @@
 		<!-- Union coverage (semi-transparent when a camera is selected) -->
 		{#each unionBars as bar}
 			<div
-				class="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-emerald-500"
+				class="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-primary"
 				class:opacity-25={hasSelection}
 				class:opacity-70={!hasSelection}
 				style="left: {bar.left}%; width: {bar.width}%"
@@ -406,7 +406,7 @@
 		{#if hasSelection}
 			{#each selectedBars as bar}
 				<div
-					class="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-emerald-400"
+					class="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-primary"
 					style="left: {bar.left}%; width: {bar.width}%"
 				></div>
 			{/each}
@@ -461,7 +461,7 @@
 					class={cn(
 						'w-3 h-3 rounded-full transition-transform',
 						scrubberStore.isLive
-							? 'bg-emerald-400 shadow-[0_0_8px_theme(colors.emerald.400/0.6)]'
+							? 'bg-primary shadow-[0_0_8px_rgba(16,185,129,0.6)]'
 							: 'bg-sky-400 shadow-[0_0_8px_theme(colors.sky.400/0.6)]',
 						dragging && 'scale-150',
 					)}
@@ -482,8 +482,8 @@
 		class={cn(
 			"shrink-0 w-14 py-1 text-xs font-medium rounded text-center transition-colors",
 			scrubberStore.isLive
-				? "text-emerald-400 cursor-default"
-				: "bg-emerald-500 text-black hover:bg-emerald-400 cursor-pointer",
+				? "text-primary cursor-default"
+				: "bg-primary text-black hover:brightness-110 cursor-pointer",
 		)}
 		onclick={() => scrubberStore.goLive()}
 		disabled={scrubberStore.isLive}

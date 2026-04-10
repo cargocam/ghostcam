@@ -175,7 +175,7 @@
 		<div class="rounded-lg border bg-card p-4">
 			<div class="text-xs text-muted-foreground uppercase tracking-wider mb-2">Connection</div>
 			<div class="flex items-center gap-2">
-				<span class={cn("h-2.5 w-2.5 rounded-full", transportStore.connected ? 'bg-green-500' : 'bg-red-500')}></span>
+				<span class={cn("h-2.5 w-2.5 rounded-full", transportStore.connected ? 'bg-primary' : 'bg-red-500')}></span>
 				<span class="text-sm font-medium capitalize">{transportStore.connectionState}</span>
 			</div>
 			{#if transportStore.error}
@@ -186,7 +186,7 @@
 		<div class="rounded-lg border bg-card p-4">
 			<div class="text-xs text-muted-foreground uppercase tracking-wider mb-2">Delivery</div>
 			<div class="flex items-center gap-2">
-				<span class={cn("h-2.5 w-2.5 rounded-full", 'bg-green-500')}></span>
+				<span class={cn("h-2.5 w-2.5 rounded-full", 'bg-primary')}></span>
 				<span class="text-sm font-medium">S3 / Tigris</span>
 			</div>
 			<p class="text-xs text-muted-foreground mt-1">Segments served from edge</p>
@@ -231,10 +231,10 @@
 								</td>
 								<td class="px-4 py-2.5">
 									<span class={cn("inline-flex items-center gap-1.5",
-										camera.online ? 'text-green-500' : 'text-muted-foreground'
+										camera.online ? 'text-primary' : 'text-muted-foreground'
 									)}>
 										<span class={cn("h-1.5 w-1.5 rounded-full",
-											camera.online ? 'bg-green-500' : 'bg-muted-foreground/40'
+											camera.online ? 'bg-primary' : 'bg-muted-foreground/40'
 										)}></span>
 										{camera.online ? 'Online' : 'Offline'}
 									</span>
