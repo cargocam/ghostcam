@@ -22,13 +22,11 @@ jobs:
             camera:
               - 'camera/**'
               - 'common/**'
-              - 'cmd/ghostcam-camera/**'
               - 'go.mod'
               - 'go.sum'
             server:
               - 'server/**'
               - 'common/**'
-              - 'cmd/ghostcam-server/**'
               - 'go.mod'
               - 'go.sum'
             ui:
@@ -43,11 +41,21 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
-      - run: go build ./cmd/ghostcam-server
+      # `go build ./server` / `./camera` need explicit -o because the
+      # output name defaults to the last path component, which is also
+      # the directory name (ambiguity: file vs directory). Dockerfile
+      # already does the same. Write to /tmp so the workspace stays clean.
+      - run: go build -o /tmp/ghostcam-server ./server
       - name: Build camera binary
         if: needs.changes.outputs.camera == 'true'
-        run: go build ./cmd/ghostcam-camera
+        run: go build -o /tmp/ghostcam-camera ./camera
       - run: go test ./...
+      # Hard-fail drift check: regenerate TypeScript types from the Go
+      # source of truth (common/ + server/apitypes/) and fail if the
+      # checked-in ui/src/lib/api-types/ files no longer match. Run
+      # `make generate-types` locally and commit the diff to fix.
+      - name: Check api-types are in sync with Go source
+        run: make check-types
 
   ui:
     needs: changes
@@ -82,9 +90,111 @@ jobs:
             --cache-to type=gha,mode=max,scope=camera \
             --load .
 
-  deploy:
+  # Real end-to-end tests against a live compose stack. Covers seams that
+  # no other job can (SSE delivery, HLS manifest generation from real
+  # segments, JWT round-trip). See e2e/README.md for what this covers
+  # and what it deliberately does not.
+  e2e:
     needs: [go, ui, docker]
-    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.go.result == 'success' && (needs.ui.result == 'success' || needs.ui.result == 'skipped') && needs.docker.result == 'success'
+    if: always() && needs.go.result == 'success' && (needs.ui.result == 'success' || needs.ui.result == 'skipped') && needs.docker.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ hashFiles('e2e/package.json') }}
+
+      - name: Install e2e deps
+        working-directory: e2e
+        run: bun install
+
+      - name: Install Chromium (cache miss only)
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        working-directory: e2e
+        run: bunx playwright install --with-deps chromium
+
+      - name: Install Chromium system deps (cache hit)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        working-directory: e2e
+        run: bunx playwright install-deps chromium
+
+      - name: Start the live stack
+        env:
+          # Explicit empty so the `-` default doesn't kick in. This
+          # keeps effectiveTier's dev-mode fallback active, which means
+          # the admin is unlimited and all 3 test cameras provision.
+          STRIPE_SECRET_KEY: ""
+        run: |
+          # Presigned URLs need a host that's reachable from BOTH the
+          # camera containers (via container→host routing) AND any
+          # browser-side code on the runner itself. 127.0.0.1 fails from
+          # inside containers (it points at the container's own loopback).
+          # The runner's eth0 IP is the stable choice on Linux: from a
+          # container it routes through the bridge gateway back to the
+          # host; from the host it's its own address.
+          export GHOSTCAM_PUBLIC_IP=$(hostname -I | awk '{print $1}')
+          echo "GHOSTCAM_PUBLIC_IP=$GHOSTCAM_PUBLIC_IP" >> $GITHUB_ENV
+          docker compose --profile test up -d
+          docker compose ps
+
+      - name: Wait for server healthy
+        run: |
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:3000/readyz > /dev/null 2>&1; then
+              echo "server ready after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "server did not become ready in 60s"
+          docker compose ps
+          docker compose logs server
+          exit 1
+
+      - name: Run e2e
+        working-directory: e2e
+        run: bun run test
+
+      - name: Collect compose logs on failure
+        if: failure()
+        run: |
+          mkdir -p e2e-artifacts
+          docker compose logs --no-color > e2e-artifacts/compose.log
+          docker compose ps > e2e-artifacts/compose-ps.txt
+
+      - name: Upload compose logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-compose-logs
+          path: e2e-artifacts/
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-playwright-report
+          path: e2e/playwright-report/
+
+      - name: Tear down
+        if: always()
+        env:
+          STRIPE_SECRET_KEY: ""
+        run: |
+          # GHOSTCAM_PUBLIC_IP was written to $GITHUB_ENV by the "Start
+          # the live stack" step above, so we inherit it here. Fall back
+          # to the eth0 lookup in the rare case that step failed early.
+          export GHOSTCAM_PUBLIC_IP=${GHOSTCAM_PUBLIC_IP:-$(hostname -I | awk '{print $1}')}
+          docker compose --profile test down -v
+
+  deploy:
+    needs: [go, ui, docker, e2e]
+    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.go.result == 'success' && (needs.ui.result == 'success' || needs.ui.result == 'skipped') && needs.docker.result == 'success' && needs.e2e.result == 'success'
     runs-on: ubuntu-latest
     concurrency: deploy-production
     steps:

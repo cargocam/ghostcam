@@ -38,21 +38,30 @@ For camera setup and a full walkthrough of the viewer, see **[docs/usage.md](doc
 ## Project Structure
 
 ```
-cmd/ghostcam-server/     Server entrypoint
-cmd/ghostcam-camera/     Camera entrypoint
 common/                  Shared Go types (camera <-> server contract)
-camera/                  Camera: capture pipeline, S3 upload, telemetry, provisioning, gpsd
-server/                  Server: HTTP handlers, DB, Redis, S3, auth, billing
+camera/                  Camera binary (package main): capture pipeline, S3 upload,
+                         telemetry, provisioning, gpsd
+server/                  Server binary (package main): chi router + HTTP handlers
+                         (methods on *App), plus subpackages:
+  apitypes/              Viewer<->server request/response/SSE types (tygo source)
   auth/                  Argon2id passwords, JWT, HMAC
   billing/               Tier definitions (free/starter/pro/enterprise)
   db/                    PostgreSQL (pgx), migrations
-  handlers/              HTTP handlers (chi)
   redis/                 Telemetry streams (XADD/XREAD), pub/sub
-  s3/                    Presigned URL generation (GET + PUT)
+  s3/                    Presigned URL generation, Upload, Delete
+tygo.yaml                Codegen: common/ + server/apitypes/ -> ui/src/lib/api-types/
+Makefile                 `make generate-types` / `make check-types` (CI drift check)
 ui/                      Svelte 5 SPA (hls.js, Leaflet, Tailwind)
+  src/lib/api-types/     Generated TypeScript types — DO NOT EDIT (tygo output)
+  browser-tests/         Playwright frontend smoke tests (backend mocked)
+e2e/                     Playwright tests that drive the live docker-compose stack
 pi/                      Pi system files (systemd, GPS, NetworkManager)
 scripts/                 Developer tools (pi.sh)
 ```
+
+Both `camera/` and `server/` are top-level `package main` directories — no
+`cmd/` wrapper. `go build ./camera` and `go build ./server` produce the two
+binaries.
 
 ## Camera
 
@@ -73,7 +82,7 @@ Key features:
 
 ```bash
 # Cross-compile for Pi (3 seconds, no sysroot needed)
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./cmd/ghostcam-camera
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./camera
 
 # Deploy to Pi
 scp ghostcam-camera pi@10.0.0.229:/usr/local/bin/
@@ -93,7 +102,7 @@ Key features:
 - **QR codes** use configured `GHOSTCAM_PUBLIC_URL` instead of `r.Host`
 - **Storage limits**: Redis `INCRBY` atomic reservation prevents TOCTOU race
 - **Storage capped events** deduplicated (5 min cooldown per device via Redis `SETNX`)
-- **Admin auth** required for `/api/v1/audit` and `/api/v1/admin/reload`
+- **Admin auth** required for `/api/v1/admin/firmware`
 - **HTTP timeouts**: Read 30s, Write 60s, Idle 120s
 - **SSE**: write deadline disabled for long-lived connections
 - **ListSegments**: LIMIT 2000, max 24hr range validation
@@ -101,10 +110,18 @@ Key features:
 - **Failed login logging** with email + IP
 - **HLS manifest**: `#EXT-X-INDEPENDENT-SEGMENTS` tag; segments via 302 redirect to S3
 - **Auto-create** "free" subscription on user creation
-- **Background jobs**: hourly segment retention (30 days default), 6-hourly stale camera cleanup
+- **No cleanup daemons**: segment retention is enforced by opportunistic
+  prune in the presign handler — DB rows and their matching S3 objects
+  are deleted together (LIMIT 100 per call), tied to normal upload
+  activity. Firmware binaries share the bucket and are intentionally
+  excluded.
+- **Fail-closed billing**: `billing.GetTier` returns `(Tier, bool)`;
+  unknown tier strings never grant unlimited resources. `effectiveTier`
+  validates DB-stored tiers and Stripe webhooks refuse to escalate to a
+  paid tier on unrecognised price IDs.
 
 ```bash
-go build -o ghostcam-server ./cmd/ghostcam-server
+go build -o ghostcam-server ./server
 ```
 
 ### Key Endpoints
@@ -138,7 +155,7 @@ go build -o ghostcam-server ./cmd/ghostcam-server
 | `GHOSTCAM_S3_ENDPOINT` | S3 endpoint URL (Tigris, MinIO) |
 | `GHOSTCAM_ADMIN_EMAIL` | Admin user email |
 | `GHOSTCAM_ADMIN_PASSWORD` | Preset admin password |
-| `GHOSTCAM_SEGMENT_RETENTION_DAYS` | Segment retention (default 30); hourly cleanup |
+| `GHOSTCAM_SEGMENT_RETENTION_DAYS` | Segment retention (default 30); drives the opportunistic prune in the presign handler and the read cutoff for manifest/coverage queries |
 
 ## Infrastructure
 

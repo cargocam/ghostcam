@@ -3,7 +3,6 @@ package db
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -13,90 +12,14 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Database is the interface for all database operations.
-type Database interface {
-	// Camera operations
-	GetCamera(ctx context.Context, deviceID string) (*CameraRecord, error)
-	ListCameras(ctx context.Context, userID string) ([]CameraRecord, error)
-	UpdateCamera(ctx context.Context, deviceID string, update *CameraUpdate) error
-	TouchCameraLastSeen(ctx context.Context, deviceID string) error
-	DeleteCamera(ctx context.Context, deviceID string) error
-	CreateProvisionedCamera(ctx context.Context, deviceID, userID, deviceSerial string) error
-
-	// Camera API keys
-	GetCameraByAPIKey(ctx context.Context, apiKeyHash string) (*CameraRecord, error)
-	GetCameraBySerial(ctx context.Context, deviceSerial string) (*CameraRecord, error)
-	CreateCameraAPIKey(ctx context.Context, deviceID, apiKeyHash string) error
-	DeleteCameraAPIKey(ctx context.Context, deviceID string) error
-
-	// Provision tokens
-	CreateProvisionToken(ctx context.Context, tokenHash, userID string, expiresAt int64) error
-	ClaimProvisionToken(ctx context.Context, tokenHash, deviceID string) (*string, error)
-
-	// Sessions
-	CreateSession(ctx context.Context, session *NewSession) error
-	GetSession(ctx context.Context, sessionID string) (*SessionRecord, error)
-	DeleteSession(ctx context.Context, sessionID string) error
-	ExtendSession(ctx context.Context, sessionID string) error
-	CleanupExpiredSessions(ctx context.Context) (int64, error)
-
-	// Users
-	CreateUser(ctx context.Context, email, passwordHash, displayName string) (string, error)
-	GetUserByEmail(ctx context.Context, email string) (*UserRecord, error)
-	VerifyPassword(ctx context.Context, userID, password string) (bool, error)
-	SetPassword(ctx context.Context, userID, passwordHash string) error
-
-	// API tokens
-	CreateAPIToken(ctx context.Context, token *NewAPIToken) error
-	ListAPITokens(ctx context.Context, userID string) ([]APITokenRecord, error)
-	VerifyAPIToken(ctx context.Context, tokenHash string) (*APITokenRecord, error)
-	DeleteAPIToken(ctx context.Context, tokenID string) error
-
-	// Segments
-	InsertSegments(ctx context.Context, segments []SegmentRecord) error
-	ListSegments(ctx context.Context, deviceID string, fromTS, toTS uint64) ([]SegmentRecord, error)
-	ListSegmentCoverage(ctx context.Context, deviceID string, fromTS, toTS uint64) ([]CoverageRecord, error)
-	LatestSegment(ctx context.Context, deviceID string) (*SegmentRecord, error)
-
-	// Commands
-	EnqueueCommand(ctx context.Context, deviceID string, command json.RawMessage) error
-	ClaimCommands(ctx context.Context, deviceID string) ([]json.RawMessage, error)
-
-	// Billing
-	GetSubscription(ctx context.Context, userID string) (*SubscriptionRecord, error)
-	GetSubscriptionByStripeCustomer(ctx context.Context, stripeCustomerID string) (*SubscriptionRecord, error)
-	CreateSubscription(ctx context.Context, userID, tier, status string) error
-	UpdateSubscription(ctx context.Context, userID string, update *SubscriptionUpdate) error
-	GetCameraCount(ctx context.Context, userID string) (int64, error)
-	GetUserStorageBytes(ctx context.Context, userID string) (uint64, error)
-
-	// Cleanup
-	DeleteOldSegments(ctx context.Context, olderThanMs uint64, batchSize int) ([]SegmentRecord, error)
-	DeleteStaleUnclaimedCameras(ctx context.Context, olderThanUnix int64) (int64, error)
-	DeleteExpiredProvisionTokens(ctx context.Context) (int64, error)
-
-	// Stripe idempotency
-	CheckStripeEvent(ctx context.Context, eventID string) (bool, error)
-	RecordStripeEvent(ctx context.Context, eventID string) error
-
-	// Audit
-	InsertAuditEntry(ctx context.Context, timestamp, eventType string, eventData json.RawMessage, hmac string) error
-	QueryAuditLog(ctx context.Context, eventType, since, until string, limit, offset int64) ([]AuditLogRecord, int64, error)
-
-	// Server config
-	GetHMACSecret(ctx context.Context) ([]byte, error)
-
-	// Health
-	HealthCheck(ctx context.Context) error
-}
-
-// PostgresDB implements Database using pgxpool.
-type PostgresDB struct {
+// DB wraps a pgxpool connection. It is the only database implementation —
+// tests cover pure functions, not DB code, so there's no interface.
+type DB struct {
 	pool *pgxpool.Pool
 }
 
-// Connect creates a new PostgresDB and runs migrations.
-func Connect(ctx context.Context, databaseURL string) (*PostgresDB, error) {
+// Connect creates a new DB and runs migrations.
+func Connect(ctx context.Context, databaseURL string) (*DB, error) {
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parsing database URL: %w", err)
@@ -113,7 +36,7 @@ func Connect(ctx context.Context, databaseURL string) (*PostgresDB, error) {
 		return nil, fmt.Errorf("pinging database: %w", err)
 	}
 
-	db := &PostgresDB{pool: pool}
+	db := &DB{pool: pool}
 	if err := db.RunMigrations(ctx); err != nil {
 		pool.Close()
 		return nil, fmt.Errorf("running migrations: %w", err)
@@ -123,13 +46,13 @@ func Connect(ctx context.Context, databaseURL string) (*PostgresDB, error) {
 }
 
 // Close closes the database pool.
-func (db *PostgresDB) Close() {
+func (db *DB) Close() {
 	db.pool.Close()
 }
 
 // Initialize performs first-run setup: creates admin user if no users exist,
 // ensures HMAC secret exists. Returns the initial password if one was generated.
-func (db *PostgresDB) Initialize(ctx context.Context, presetPassword, adminEmail string) (string, error) {
+func (db *DB) Initialize(ctx context.Context, presetPassword, adminEmail string) (string, error) {
 	var hasUsers bool
 	err := db.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM users)").Scan(&hasUsers)
 	if err != nil {
@@ -189,11 +112,6 @@ func nowUnix() int64 {
 	return time.Now().Unix()
 }
 
-// nowMs returns the current time as Unix milliseconds.
-func nowMs() uint64 {
-	return uint64(time.Now().UnixMilli())
-}
-
 // Record types
 
 // CameraRecord is a camera from the database.
@@ -214,23 +132,6 @@ type CameraUpdate struct {
 	Notes         *string
 	Resolution    *string
 	RecordingMode *string
-}
-
-// NewSession holds fields for creating a session.
-type NewSession struct {
-	SessionID string
-	UserID    string
-	UserAgent string
-	IPAddress string
-}
-
-// SessionRecord is a session from the database.
-type SessionRecord struct {
-	SessionID    string
-	UserID       string
-	CreatedAt    int64
-	ExpiresAt    int64
-	LastActiveAt *int64
 }
 
 // UserRecord is a user from the database.
@@ -285,10 +186,10 @@ type CoverageRecord struct {
 
 // SubscriptionRecord is a subscription from the database.
 type SubscriptionRecord struct {
-	UserID             string
-	Tier               string
-	Status             string
-	StripeCustomerID   *string
+	UserID               string
+	Tier                 string
+	Status               string
+	StripeCustomerID     *string
 	StripeSubscriptionID *string
 }
 
@@ -300,11 +201,21 @@ type SubscriptionUpdate struct {
 	StripeSubscriptionID *string
 }
 
-// AuditLogRecord is an audit log entry from the database.
-type AuditLogRecord struct {
-	ID        int64           `json:"id"`
-	Timestamp string          `json:"timestamp"`
-	EventType string          `json:"event_type"`
-	EventData json.RawMessage `json:"event_data"`
-	HMAC      string          `json:"hmac"`
+// GetHMACSecret loads the server's HMAC secret from the config table.
+// The secret is generated on first run by Initialize and is used to sign
+// JWT cookies and hash API tokens.
+func (db *DB) GetHMACSecret(ctx context.Context) ([]byte, error) {
+	var secret []byte
+	err := db.pool.QueryRow(ctx, "SELECT value FROM config WHERE key = 'hmac_secret'").Scan(&secret)
+	if err != nil {
+		return nil, fmt.Errorf("get HMAC secret: %w", err)
+	}
+	return secret, nil
+}
+
+// HealthCheck runs a trivial query to confirm the pool can reach the DB.
+// Used by the /readyz endpoint.
+func (db *DB) HealthCheck(ctx context.Context) error {
+	_, err := db.pool.Exec(ctx, "SELECT 1")
+	return err
 }

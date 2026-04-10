@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func (db *PostgresDB) GetSubscription(ctx context.Context, userID string) (*SubscriptionRecord, error) {
+func (db *DB) GetSubscription(ctx context.Context, userID string) (*SubscriptionRecord, error) {
 	row := db.pool.QueryRow(ctx,
 		`SELECT user_id, tier, status, stripe_customer_id, stripe_subscription_id FROM subscriptions WHERE user_id = $1`, userID)
 
@@ -23,7 +23,7 @@ func (db *PostgresDB) GetSubscription(ctx context.Context, userID string) (*Subs
 	return &s, nil
 }
 
-func (db *PostgresDB) GetSubscriptionByStripeCustomer(ctx context.Context, stripeCustomerID string) (*SubscriptionRecord, error) {
+func (db *DB) GetSubscriptionByStripeCustomer(ctx context.Context, stripeCustomerID string) (*SubscriptionRecord, error) {
 	row := db.pool.QueryRow(ctx,
 		`SELECT user_id, tier, status, stripe_customer_id, stripe_subscription_id FROM subscriptions WHERE stripe_customer_id = $1`, stripeCustomerID)
 
@@ -38,7 +38,7 @@ func (db *PostgresDB) GetSubscriptionByStripeCustomer(ctx context.Context, strip
 	return &s, nil
 }
 
-func (db *PostgresDB) CreateSubscription(ctx context.Context, userID, tier, status string) error {
+func (db *DB) CreateSubscription(ctx context.Context, userID, tier, status string) error {
 	now := time.Now().Unix()
 	_, err := db.pool.Exec(ctx,
 		`INSERT INTO subscriptions (user_id, tier, status, created_at, updated_at) VALUES ($1, $2, $3, $4, $4)
@@ -50,7 +50,7 @@ func (db *PostgresDB) CreateSubscription(ctx context.Context, userID, tier, stat
 	return nil
 }
 
-func (db *PostgresDB) UpdateSubscription(ctx context.Context, userID string, update *SubscriptionUpdate) error {
+func (db *DB) UpdateSubscription(ctx context.Context, userID string, update *SubscriptionUpdate) error {
 	now := time.Now().Unix()
 	_, err := db.pool.Exec(ctx,
 		`UPDATE subscriptions SET
@@ -67,7 +67,7 @@ func (db *PostgresDB) UpdateSubscription(ctx context.Context, userID string, upd
 	return nil
 }
 
-func (db *PostgresDB) GetCameraCount(ctx context.Context, userID string) (int64, error) {
+func (db *DB) GetCameraCount(ctx context.Context, userID string) (int64, error) {
 	var count int64
 	err := db.pool.QueryRow(ctx,
 		"SELECT COUNT(*) FROM cameras WHERE user_id = $1", userID).Scan(&count)
@@ -77,7 +77,7 @@ func (db *PostgresDB) GetCameraCount(ctx context.Context, userID string) (int64,
 	return count, nil
 }
 
-func (db *PostgresDB) GetUserStorageBytes(ctx context.Context, userID string) (uint64, error) {
+func (db *DB) GetUserStorageBytes(ctx context.Context, userID string) (uint64, error) {
 	var total int64
 	err := db.pool.QueryRow(ctx,
 		`SELECT COALESCE(SUM(s.size_bytes), 0)
@@ -89,7 +89,7 @@ func (db *PostgresDB) GetUserStorageBytes(ctx context.Context, userID string) (u
 	return uint64(total), nil
 }
 
-func (db *PostgresDB) CheckStripeEvent(ctx context.Context, eventID string) (bool, error) {
+func (db *DB) CheckStripeEvent(ctx context.Context, eventID string) (bool, error) {
 	var exists bool
 	err := db.pool.QueryRow(ctx,
 		"SELECT EXISTS(SELECT 1 FROM stripe_events WHERE event_id = $1)", eventID).Scan(&exists)
@@ -99,7 +99,7 @@ func (db *PostgresDB) CheckStripeEvent(ctx context.Context, eventID string) (boo
 	return exists, nil
 }
 
-func (db *PostgresDB) RecordStripeEvent(ctx context.Context, eventID string) error {
+func (db *DB) RecordStripeEvent(ctx context.Context, eventID string) error {
 	now := time.Now().Unix()
 	_, err := db.pool.Exec(ctx,
 		"INSERT INTO stripe_events (event_id, processed_at) VALUES ($1, $2) ON CONFLICT DO NOTHING",

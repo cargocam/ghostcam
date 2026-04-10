@@ -1,4 +1,5 @@
-import type { CameraInfo, TelemetryData } from '$lib/types.js';
+import type { CameraResponse } from '$lib/api-types';
+import type { TelemetryData } from '$lib/types.js';
 
 /**
  * How long (ms) since the last server_ts before considering a camera offline.
@@ -32,7 +33,7 @@ class CameraStore {
 		return this.cameras.find((c) => c.device_id === deviceId);
 	}
 
-	setInitialList(list: CameraInfo[]) {
+	setInitialList(list: CameraResponse[]) {
 		this.cameras = list.map((c) => {
 			const t = c.telemetry;
 			const initialTelemetry: TelemetryData | null = t ? {
@@ -41,7 +42,7 @@ class CameraStore {
 				memory_mb: t.mem,
 				uptime_secs: t.uptime,
 				gps: t.lat != null && t.lon != null
-					? { latitude: t.lat, longitude: t.lon, alt: t.alt }
+					? { latitude: t.lat, longitude: t.lon, alt: t.alt ?? undefined }
 					: undefined,
 			} : null;
 			return {

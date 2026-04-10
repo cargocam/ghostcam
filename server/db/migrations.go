@@ -13,7 +13,7 @@ var migrationsFS embed.FS
 
 // RunMigrations executes all SQL migration files in order.
 // Migrations are idempotent (CREATE IF NOT EXISTS, etc.) so they can be re-run safely.
-func (db *PostgresDB) RunMigrations(ctx context.Context) error {
+func (db *DB) RunMigrations(ctx context.Context) error {
 	entries, err := migrationsFS.ReadDir("migrations")
 	if err != nil {
 		return fmt.Errorf("reading migrations directory: %w", err)

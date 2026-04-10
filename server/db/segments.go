@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func (db *PostgresDB) InsertSegments(ctx context.Context, segments []SegmentRecord) error {
+func (db *DB) InsertSegments(ctx context.Context, segments []SegmentRecord) error {
 	if len(segments) == 0 {
 		return nil
 	}
@@ -32,7 +32,17 @@ func (db *PostgresDB) InsertSegments(ctx context.Context, segments []SegmentReco
 	return nil
 }
 
-func (db *PostgresDB) ListSegments(ctx context.Context, deviceID string, fromTS, toTS uint64) ([]SegmentRecord, error) {
+// ListSegments returns segments for the given device in the [fromTS, toTS] window.
+// Segments older than retentionMs are excluded so that stale rows (whose S3
+// objects have been reaped by the bucket lifecycle rule) never appear in the
+// timeline or manifests.
+func (db *DB) ListSegments(ctx context.Context, deviceID string, fromTS, toTS, retentionMs uint64) ([]SegmentRecord, error) {
+	if retentionMs > 0 {
+		cutoff := uint64(nowUnix())*1000 - retentionMs
+		if fromTS < cutoff {
+			fromTS = cutoff
+		}
+	}
 	rows, err := db.pool.Query(ctx,
 		`SELECT segment_id, device_id, s3_key, start_ts, end_ts, size_bytes, resolution, created_at, has_motion
 		 FROM segments
@@ -62,8 +72,16 @@ func (db *PostgresDB) ListSegments(ctx context.Context, deviceID string, fromTS,
 }
 
 // ListSegmentCoverage returns lightweight coverage data (no s3_key, size, resolution)
-// for all segments in a time range. Safety limit of 50,000 rows (~3.5 days at 6s segments).
-func (db *PostgresDB) ListSegmentCoverage(ctx context.Context, deviceID string, fromTS, toTS uint64) ([]CoverageRecord, error) {
+// for all segments in a time range. Segments older than retentionMs are excluded
+// so expired S3 objects never appear on the timeline. Capped at 50,000 rows
+// (~3.5 days at 6s segments).
+func (db *DB) ListSegmentCoverage(ctx context.Context, deviceID string, fromTS, toTS, retentionMs uint64) ([]CoverageRecord, error) {
+	if retentionMs > 0 {
+		cutoff := uint64(nowUnix())*1000 - retentionMs
+		if fromTS < cutoff {
+			fromTS = cutoff
+		}
+	}
 	rows, err := db.pool.Query(ctx,
 		`SELECT segment_id, start_ts, end_ts, has_motion
 		 FROM segments
@@ -90,18 +108,24 @@ func (db *PostgresDB) ListSegmentCoverage(ctx context.Context, deviceID string, 
 	return records, rows.Err()
 }
 
-// DeleteOldSegments deletes segments older than olderThanMs and returns the deleted records
-// (so their S3 keys can be cleaned up). Deletes at most batchSize rows.
-func (db *PostgresDB) DeleteOldSegments(ctx context.Context, olderThanMs uint64, batchSize int) ([]SegmentRecord, error) {
+// PruneSegments deletes segments older than olderThanMs for the given device
+// and returns the full deleted rows so the caller can reap the matching S3
+// objects. Bounded by LIMIT so it is safe to call synchronously from hot
+// paths. Cleanup is amortized across normal presign requests instead of a
+// dedicated background loop.
+func (db *DB) PruneSegments(ctx context.Context, deviceID string, olderThanMs uint64, limit int) ([]SegmentRecord, error) {
 	rows, err := db.pool.Query(ctx,
 		`DELETE FROM segments
 		 WHERE segment_id IN (
-		   SELECT segment_id FROM segments WHERE created_at < $1 LIMIT $2
+		   SELECT segment_id FROM segments
+		   WHERE device_id = $1 AND start_ts < $2
+		   ORDER BY start_ts
+		   LIMIT $3
 		 )
 		 RETURNING segment_id, device_id, s3_key, start_ts, end_ts, size_bytes, resolution, created_at, has_motion`,
-		int64(olderThanMs), batchSize)
+		deviceID, int64(olderThanMs), limit)
 	if err != nil {
-		return nil, fmt.Errorf("delete old segments: %w", err)
+		return nil, fmt.Errorf("prune segments: %w", err)
 	}
 	defer rows.Close()
 
@@ -110,7 +134,7 @@ func (db *PostgresDB) DeleteOldSegments(ctx context.Context, olderThanMs uint64,
 		var s SegmentRecord
 		var startTS, endTS, sizeBytes, createdAt int64
 		if err := rows.Scan(&s.SegmentID, &s.DeviceID, &s.S3Key, &startTS, &endTS, &sizeBytes, &s.Resolution, &createdAt, &s.HasMotion); err != nil {
-			return nil, fmt.Errorf("scanning deleted segment: %w", err)
+			return nil, fmt.Errorf("scanning pruned segment: %w", err)
 		}
 		s.StartTS = uint64(startTS)
 		s.EndTS = uint64(endTS)
@@ -121,7 +145,7 @@ func (db *PostgresDB) DeleteOldSegments(ctx context.Context, olderThanMs uint64,
 	return deleted, rows.Err()
 }
 
-func (db *PostgresDB) LatestSegment(ctx context.Context, deviceID string) (*SegmentRecord, error) {
+func (db *DB) LatestSegment(ctx context.Context, deviceID string) (*SegmentRecord, error) {
 	row := db.pool.QueryRow(ctx,
 		`SELECT segment_id, device_id, s3_key, start_ts, end_ts, size_bytes, resolution, created_at, has_motion
 		 FROM segments WHERE device_id = $1 ORDER BY start_ts DESC LIMIT 1`, deviceID)

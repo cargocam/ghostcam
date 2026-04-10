@@ -1,25 +1,7 @@
-export interface CameraInfo {
-	device_id: string;
-	display_name: string;
-	group_id?: string;
-	capabilities?: string[];
-	resolution: string;
-	recording_mode: string;
-	last_seen_at?: number;
-	provisioned?: boolean;
-	telemetry?: {
-		ts: number;
-		cpu?: number;
-		temp?: number;
-		mem?: number;
-		uptime?: number;
-		sig?: number;
-		lat?: number;
-		lon?: number;
-		alt?: number;
-		gps_fix?: number;
-	};
-}
+// Client-only UI types. Anything that crosses the wire with the server
+// belongs in $lib/api-types (generated from Go). If you find yourself adding
+// a `foo_response` / `foo_request` interface here, you're drifting — put the
+// Go struct in server/apitypes/ and run `make generate-types` instead.
 
 export interface GpsData {
 	latitude: number;
@@ -27,6 +9,12 @@ export interface GpsData {
 	alt?: number;
 }
 
+/**
+ * Reshaped telemetry used by the camera store's internal state. The raw wire
+ * shape is `TelemetryEntry` from `$lib/api-types`; this type renames fields
+ * to match how Svelte components consume them (e.g. `cpu_percent` instead of
+ * `cpu`). Keep it UI-only.
+ */
 export interface TelemetryData {
 	device_id?: string;
 	cpu_percent?: number;
@@ -36,6 +24,11 @@ export interface TelemetryData {
 	gps?: GpsData;
 }
 
+/**
+ * Client-side grouping of cameras. Not persisted on the server — the backend
+ * has no /groups endpoint. If a future release adds server groups, move this
+ * to a Go struct and generate it.
+ */
 export interface GroupInfo {
 	group_id: string;
 	camera_count: number;
@@ -44,30 +37,3 @@ export interface GroupInfo {
 export type GridLayout = 'auto' | '1+5';
 export type ViewMode = 'live' | 'map' | 'dashboard' | 'camera';
 export type MarkerMode = 'dot' | 'detailed' | 'pip';
-
-export interface SubscriptionInfo {
-	tier: string;
-	status: string;
-	billing_enabled: boolean;
-	current_period_end?: number;
-	grace_expires_at?: number;
-	stripe_public_key?: string;
-	stripe_pricing_table_id?: string;
-}
-
-export interface TierInfo {
-	id: string;
-	name: string;
-	camera_limit: number | null;
-	storage_gb: number | null;
-	bandwidth_gb: number | null;
-}
-
-export interface UsageInfo {
-	cameras_count: number;
-	storage_bytes: number;
-	bandwidth_bytes: number;
-	camera_limit: number | null;
-	storage_limit_gb: number | null;
-	bandwidth_limit_gb: number | null;
-}

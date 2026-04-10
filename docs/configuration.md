@@ -24,9 +24,7 @@ Both server and camera support TOML config files with layered resolution. Enviro
 
 `database_url` and `admin_password` are **env-var only**. They cannot be set in the TOML config file.
 
-## Runtime Reload
-
-- **API**: `POST /api/v1/admin/reload` (requires admin auth) -- reloads config from disk
+Config is loaded once at startup — there is no runtime reload endpoint. To apply a config change, restart the server.
 
 ## Environment Variables
 
@@ -47,8 +45,7 @@ Both server and camera support TOML config files with layered resolution. Enviro
 | `GHOSTCAM_S3_REGION` | `auto` | S3 region |
 | `GHOSTCAM_S3_ENDPOINT` | _(none)_ | S3 endpoint URL (Tigris, MinIO, etc.) |
 | `GHOSTCAM_S3_PRESIGN_TTL_SECS` | `3600` | Presigned URL TTL in seconds |
-| `GHOSTCAM_HMAC_KEY` | `dev-hmac-key` | HMAC key for audit log signing |
-| `GHOSTCAM_SEGMENT_RETENTION_DAYS` | `30` | Segment retention in days |
+| `GHOSTCAM_SEGMENT_RETENTION_DAYS` | `30` | Segment retention in days. Used as the cutoff for opportunistic prune in the presign handler and as the read cutoff for manifest / coverage queries. |
 | `STRIPE_SECRET_KEY` | _(none)_ | Stripe API key |
 | `STRIPE_WEBHOOK_SECRET` | _(none)_ | Stripe webhook signing secret |
 | `STRIPE_PRICE_ID_STARTER` | _(none)_ | Stripe Price ID for starter tier |
@@ -85,10 +82,18 @@ Billing is always enabled. Every user defaults to **free**. `effectiveTier()` de
 | Pro | 500 GB | 16 |
 | Enterprise | unlimited | unlimited |
 
-## Background Jobs
+## Retention & Cleanup
 
-| Job | Interval | Description |
-|-----|----------|-------------|
-| Session cleanup | 1 hour | Deletes expired sessions |
-| Segment retention | 1 hour | Deletes segments older than `GHOSTCAM_SEGMENT_RETENTION_DAYS` from S3 and Postgres, 100 at a time |
-| Stale camera cleanup | 6 hours | Deletes unclaimed cameras older than 24h and expired provision tokens |
+The server has **no background cleanup goroutines**. All cleanup is driven by
+normal request activity or by the storage layer itself:
+
+| Concern | Mechanism |
+|---------|-----------|
+| Sessions | Removed — auth is stateless (JWT cookies + API tokens). |
+| S3 segment objects + DB rows | Pruned together, opportunistically, inside the presign handler whenever a camera confirms uploads. `PruneSegments` deletes DB rows `WHERE device_id = $1 AND created_at < cutoff LIMIT 100` and returns the deleted rows so the handler can issue matching S3 deletes. We deliberately do **not** use an S3 bucket lifecycle rule because firmware binaries live in the same bucket under `firmware/` and must not be auto-expired — a camera that stays offline beyond the retention window would otherwise lose its OTA update path. |
+| HLS / coverage reads | `ListSegments` / `ListSegmentCoverage` clamp their `from` parameter to `now - retentionMs`, so rows that haven't been pruned yet never surface through the API. |
+| Expired provision tokens | Deleted in the same transaction that creates a new token for the same user. |
+| Camera commands | `ClaimCommands` uses `DELETE ... RETURNING`, so the queue can't grow past what's claimed on the next telemetry poll. |
+| Expired API tokens | Dropped on the next verify attempt by `VerifyAPIToken`. |
+| Rate-limit entries | Evicted opportunistically when the in-memory map grows past a threshold. |
+| Stale unclaimed cameras | Not possible — `CreateProvisionedCamera` always requires a `user_id`, so an unclaimed camera row can never be created. |

@@ -10,8 +10,8 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:e2e": "playwright test",
-    "test:e2e:ui": "playwright test --ui"
+    "test:browser": "playwright test",
+    "test:browser:ui": "playwright test --ui"
   },
   "dependencies": {
     "@ffmpeg/ffmpeg": "0.11.6",

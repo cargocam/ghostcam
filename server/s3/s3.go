@@ -84,7 +84,9 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, contentTyp
 	return nil
 }
 
-// Delete removes an object from S3 by key.
+// Delete removes an object from S3 by key. Used by the opportunistic
+// prune path in the presign handler to reap segment objects whose DB rows
+// have just been deleted.
 func (c *Client) Delete(ctx context.Context, key string) error {
 	_, err := c.client.DeleteObject(ctx, &s3.DeleteObjectInput{
 		Bucket: aws.String(c.bucket),
@@ -99,11 +101,6 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 // FirmwareKey returns the S3 key for a firmware binary.
 func FirmwareKey(version string) string {
 	return fmt.Sprintf("firmware/%s/ghostcam-camera", version)
-}
-
-// PresignTTLSecs returns the presign TTL in seconds.
-func (c *Client) PresignTTLSecs() uint64 {
-	return uint64(c.presignTTL.Seconds())
 }
 
 // InitKey returns the S3 key for a camera's init segment.

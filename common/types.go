@@ -35,14 +35,6 @@ type CameraCommand struct {
 	PSK        string `json:"psk,omitempty"`        // network_config
 }
 
-// RecordingMode represents the camera's recording mode.
-type RecordingMode string
-
-const (
-	RecordingModeConstant RecordingMode = "constant"
-	RecordingModeMotion   RecordingMode = "motion"
-)
-
 // PresignRequest requests presigned PUT URLs and confirms previously uploaded segments.
 type PresignRequest struct {
 	Count    uint32           `json:"count"`
@@ -73,10 +65,13 @@ type PresignResponse struct {
 	StorageCapped bool           `json:"storage_capped,omitempty"`
 }
 
-// QrPayload is the JSON payload encoded in provisioning QR codes.
-type QrPayload struct {
-	Server   string `json:"s"`
-	Token    string `json:"t"`
-	WifiSSID string `json:"w,omitempty"`
-	WifiPSK  string `json:"p,omitempty"`
+// QRPayload is the JSON shape encoded inside a provisioning QR code. The
+// viewer UI builds it (via the server's EnrollmentQR handler), displays
+// it as a QR image, and the camera parses it on first boot after scan.
+// Field names are single letters to keep the QR code compact.
+type QRPayload struct {
+	Server       string `json:"s"`           // server base URL
+	Token        string `json:"t"`           // one-time provision token
+	WifiSSID     string `json:"w,omitempty"` // optional Wi-Fi SSID to join
+	WifiPassword string `json:"p,omitempty"` // optional Wi-Fi password
 }

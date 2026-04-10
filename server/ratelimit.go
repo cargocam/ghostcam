@@ -1,4 +1,4 @@
-package server
+package main
 
 import (
 	"net"
@@ -7,45 +7,29 @@ import (
 	"time"
 )
 
-// rateLimitEntry tracks token bucket state for a single IP.
 type rateLimitEntry struct {
 	tokens    float64
 	lastCheck time.Time
 }
 
-// RateLimiter is a simple per-IP token bucket rate limiter.
+// RateLimiter is a per-IP token bucket rate limiter. Stale entries are
+// evicted opportunistically on access instead of by a background sweeper,
+// so there is no dedicated cleanup goroutine to manage.
 type RateLimiter struct {
-	mu       sync.Mutex
-	entries  map[string]*rateLimitEntry
-	rate     float64 // tokens per second
-	maxBurst float64 // max tokens (bucket size)
+	mu         sync.Mutex
+	entries    map[string]*rateLimitEntry
+	rate       float64 // tokens per second
+	maxBurst   float64 // bucket size
+	idleExpiry time.Duration
 }
 
-// NewRateLimiter creates a rate limiter allowing reqsPerMin requests per minute per IP.
+// NewRateLimiter creates a rate limiter allowing reqsPerMin per IP per minute.
 func NewRateLimiter(reqsPerMin int) *RateLimiter {
-	rl := &RateLimiter{
-		entries:  make(map[string]*rateLimitEntry),
-		rate:     float64(reqsPerMin) / 60.0,
-		maxBurst: float64(reqsPerMin),
-	}
-	// Periodically clean up stale entries
-	go func() {
-		for {
-			time.Sleep(5 * time.Minute)
-			rl.cleanup()
-		}
-	}()
-	return rl
-}
-
-func (rl *RateLimiter) cleanup() {
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-	cutoff := time.Now().Add(-10 * time.Minute)
-	for ip, entry := range rl.entries {
-		if entry.lastCheck.Before(cutoff) {
-			delete(rl.entries, ip)
-		}
+	return &RateLimiter{
+		entries:    make(map[string]*rateLimitEntry),
+		rate:       float64(reqsPerMin) / 60.0,
+		maxBurst:   float64(reqsPerMin),
+		idleExpiry: 10 * time.Minute,
 	}
 }
 
@@ -55,6 +39,17 @@ func (rl *RateLimiter) Allow(ip string) bool {
 	defer rl.mu.Unlock()
 
 	now := time.Now()
+	// Opportunistic eviction: if the map has grown, drop entries whose last
+	// check is older than idleExpiry. Amortizes cleanup across normal calls.
+	if len(rl.entries) > 128 {
+		cutoff := now.Add(-rl.idleExpiry)
+		for k, v := range rl.entries {
+			if v.lastCheck.Before(cutoff) {
+				delete(rl.entries, k)
+			}
+		}
+	}
+
 	entry, ok := rl.entries[ip]
 	if !ok {
 		entry = &rateLimitEntry{tokens: rl.maxBurst, lastCheck: now}
@@ -75,11 +70,10 @@ func (rl *RateLimiter) Allow(ip string) bool {
 	return true
 }
 
-// Middleware returns an HTTP middleware that rate-limits requests by client IP.
+// Middleware returns an HTTP middleware that rate-limits by client IP.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := clientIP(r)
-		if !rl.Allow(ip) {
+		if !rl.Allow(clientIP(r)) {
 			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 			return
 		}
@@ -88,14 +82,11 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 }
 
 // clientIP extracts the client IP from the request. Prefers Fly-Client-IP
-// (trusted, set by Fly.io proxy and cannot be spoofed by clients) over
-// X-Forwarded-For (can be forged when not behind a reverse proxy).
+// (trusted, set by Fly.io proxy and cannot be spoofed) over X-Forwarded-For.
 func clientIP(r *http.Request) string {
-	// Fly.io's trusted client IP header — cannot be spoofed
 	if fci := r.Header.Get("Fly-Client-IP"); fci != "" {
 		return fci
 	}
-	// X-Forwarded-For — only safe behind a trusted proxy, but use as fallback
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		for i := 0; i < len(xff); i++ {
 			if xff[i] == ',' {

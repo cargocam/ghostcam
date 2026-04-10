@@ -74,8 +74,12 @@ services:
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
       # Stripe (test mode) — enables real tier enforcement locally
-      # Replace with your Stripe test dashboard values for checkout/portal to work
-      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-sk_test_placeholder}
+      # Replace with your Stripe test dashboard values for checkout/portal to work.
+      # Note: use `:-` default only if unset OR empty would normally both get the
+      # placeholder — we use plain `-` so that explicit STRIPE_SECRET_KEY= (empty)
+      # disables Stripe entirely, which is what e2e/ uses to give the admin the
+      # dev-mode "enterprise" fallback and allow all 3 test cameras to provision.
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY-sk_test_placeholder}
       # STRIPE_WEBHOOK_SECRET intentionally omitted — stripe-webhooks container
       # generates its own signing secret; without this var the server skips
       # signature verification and just parses the JSON body (safe for dev).
@@ -115,7 +119,6 @@ services:
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
     volumes:
       - camera-1-data:/var/ghostcam
-      - ./docker/test-loop.mp4:/var/ghostcam/test-loop.mp4:ro
     command: ["--test-source"]
 
   camera-2:
@@ -132,7 +135,6 @@ services:
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
     volumes:
       - camera-2-data:/var/ghostcam
-      - ./docker/test-loop.mp4:/var/ghostcam/test-loop.mp4:ro
     command: ["--test-source"]
 
   camera-3:
@@ -149,8 +151,15 @@ services:
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
     volumes:
       - camera-3-data:/var/ghostcam
-      - ./docker/test-loop.mp4:/var/ghostcam/test-loop.mp4:ro
     command: ["--test-source"]
+
+  # Local dev optimization: drop docker/test-loop.mp4 into the repo and add
+  # a docker-compose.override.yml that bind-mounts it into each camera's
+  # /var/ghostcam/test-loop.mp4. The camera will prefer it over ffmpeg's
+  # CPU-intensive testsrc2 filter. CI deliberately does NOT mount this
+  # file — the file is .gitignored so a committed bind mount would create
+  # an empty directory at the host path on a fresh checkout, which then
+  # mounts as a directory inside the container and crashes ffmpeg.
 
   stripe-webhooks:
     image: stripe/stripe-cli:latest
@@ -161,7 +170,7 @@ services:
       - --forward-to
       - http://server:3000/api/v1/webhooks/stripe
       - --api-key
-      - ${STRIPE_SECRET_KEY:-sk_test_placeholder}
+      - ${STRIPE_SECRET_KEY-sk_test_placeholder}
     environment:
       - STRIPE_CLI_TELEMETRY_OPTOUT=1
 

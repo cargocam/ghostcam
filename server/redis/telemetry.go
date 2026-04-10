@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cargocam/ghostcam/common"
+	"github.com/cargocam/ghostcam/server/apitypes"
 	goredis "github.com/redis/go-redis/v9"
 )
 
@@ -15,23 +16,6 @@ const (
 	telemetryKeyPrefix = "telemetry:"
 	retentionMs        = 24 * 60 * 60 * 1000 // 24 hours
 )
-
-// TelemetryEntry is the response type for telemetry queries.
-type TelemetryEntry struct {
-	TS       uint64   `json:"ts"`
-	ServerTS uint64   `json:"server_ts"`
-	Sig      *int8    `json:"sig,omitempty"`
-	Temp     *uint32  `json:"temp,omitempty"`
-	FPS      *float32 `json:"fps,omitempty"`
-	Kbps     *uint32  `json:"kbps,omitempty"`
-	CPU      *uint32  `json:"cpu,omitempty"`
-	Mem      *uint32  `json:"mem,omitempty"`
-	Uptime   *uint32  `json:"uptime,omitempty"`
-	Lat      *float64 `json:"lat,omitempty"`
-	Lon      *float64 `json:"lon,omitempty"`
-	Alt      *float32 `json:"alt,omitempty"`
-	GPSFix   *uint8   `json:"gps_fix,omitempty"`
-}
 
 // WriteTelemetry writes a telemetry datagram to Redis using XADD with MINID trimming.
 func WriteTelemetry(ctx context.Context, rdb *goredis.Client, deviceID string, d *common.TelemetryDatagram) {
@@ -99,8 +83,8 @@ func datagramToFields(d *common.TelemetryDatagram, serverTS uint64) map[string]i
 }
 
 // FieldsToEntry parses Redis stream entry fields into a TelemetryEntry.
-func FieldsToEntry(fields map[string]interface{}) (*TelemetryEntry, error) {
-	e := &TelemetryEntry{}
+func FieldsToEntry(fields map[string]interface{}) (*apitypes.TelemetryEntry, error) {
+	e := &apitypes.TelemetryEntry{}
 	for k, v := range fields {
 		s, ok := v.(string)
 		if !ok {
@@ -161,7 +145,7 @@ func FieldsToEntry(fields map[string]interface{}) (*TelemetryEntry, error) {
 }
 
 // QueryTelemetryRange returns telemetry entries for a device between fromMs and toMs.
-func QueryTelemetryRange(ctx context.Context, rdb *goredis.Client, deviceID string, fromMs, toMs uint64, limit int64) ([]TelemetryEntry, error) {
+func QueryTelemetryRange(ctx context.Context, rdb *goredis.Client, deviceID string, fromMs, toMs uint64, limit int64) ([]apitypes.TelemetryEntry, error) {
 	if rdb == nil {
 		return nil, nil
 	}
@@ -175,7 +159,7 @@ func QueryTelemetryRange(ctx context.Context, rdb *goredis.Client, deviceID stri
 		return nil, err
 	}
 
-	entries := make([]TelemetryEntry, 0, len(results))
+	entries := make([]apitypes.TelemetryEntry, 0, len(results))
 	for _, msg := range results {
 		e, err := FieldsToEntry(msg.Values)
 		if err != nil {
@@ -187,7 +171,7 @@ func QueryTelemetryRange(ctx context.Context, rdb *goredis.Client, deviceID stri
 }
 
 // QueryTelemetryLatest returns the most recent telemetry entry for a device.
-func QueryTelemetryLatest(ctx context.Context, rdb *goredis.Client, deviceID string) (*TelemetryEntry, error) {
+func QueryTelemetryLatest(ctx context.Context, rdb *goredis.Client, deviceID string) (*apitypes.TelemetryEntry, error) {
 	if rdb == nil {
 		return nil, nil
 	}

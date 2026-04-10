@@ -8,7 +8,7 @@
 	import { billingStore } from '$lib/stores/billing.svelte.js';
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { changePassword } from '$lib/auth.js';
-	import { Sun, Moon, Monitor, CreditCard, ExternalLink, AlertTriangle, Trash2 } from 'lucide-svelte';
+	import { Sun, Moon, Monitor, CreditCard, ExternalLink, Trash2 } from 'lucide-svelte';
 
 	let {
 		open = $bindable(false),
@@ -24,8 +24,6 @@
 	});
 
 	let isFree = $derived(billingStore.currentTier === 'free');
-	let hasPricingTable = $derived(billingStore.stripePublicKey && billingStore.stripePricingTableId);
-	let upgradeOpen = $state(false);
 
 	// Change email dialog state (stubbed — not yet implemented on the backend)
 	let changeEmailOpen = $state(false);
@@ -77,19 +75,6 @@
 		setTimeout(() => (changePasswordOpen = false), 1200);
 	}
 
-	// Load Stripe Pricing Table script once
-	let stripeScriptLoaded = $state(false);
-	$effect(() => {
-		if (hasPricingTable && !stripeScriptLoaded) {
-			if (!document.querySelector('script[src*="pricing-table.js"]')) {
-				const script = document.createElement('script');
-				script.src = 'https://js.stripe.com/v3/pricing-table.js';
-				script.async = true;
-				document.head.appendChild(script);
-			}
-			stripeScriptLoaded = true;
-		}
-	});
 </script>
 
 <Sheet bind:open>
@@ -141,25 +126,6 @@
 						Billing
 					</h3>
 
-					{#if billingStore.isPastDue}
-						<div class="flex items-center gap-2 px-3 py-2 mb-3 rounded-md bg-destructive/10 text-destructive text-xs">
-							<AlertTriangle class="h-3.5 w-3.5 flex-shrink-0" />
-							<span>
-								Payment past due.
-								{#if billingStore.subscription?.grace_expires_at}
-									Service suspended after {new Date(billingStore.subscription.grace_expires_at * 1000).toLocaleDateString()}.
-								{/if}
-							</span>
-						</div>
-					{/if}
-
-					{#if billingStore.isSuspended}
-						<div class="flex items-center gap-2 px-3 py-2 mb-3 rounded-md bg-destructive/10 text-destructive text-xs">
-							<AlertTriangle class="h-3.5 w-3.5 flex-shrink-0" />
-							<span>Account suspended. Update payment to restore access.</span>
-						</div>
-					{/if}
-
 					<!-- Current plan + usage -->
 					<div class="mb-3">
 						<span class="text-sm font-medium capitalize">{billingStore.currentTier}</span>
@@ -200,8 +166,12 @@
 
 					<!-- Actions -->
 					{#if isFree}
-						<Button class="w-full" onclick={() => upgradeOpen = true}>
-							Upgrade
+						<!-- TODO: replace with a tier picker once the UI supports showing
+						     billing.AllTiers() cards. For now, "Upgrade" jumps straight
+						     into Stripe Checkout for the starter tier. -->
+						<Button class="w-full" onclick={() => billingStore.checkout('starter')}>
+							Upgrade to Starter
+							<ExternalLink class="h-3.5 w-3.5 ml-1.5" />
 						</Button>
 					{:else}
 						<Button variant="outline" class="w-full" onclick={() => billingStore.openPortal()}>
@@ -391,16 +361,3 @@
 	</DialogContent>
 </Dialog>
 
-{#if hasPricingTable}
-	<Dialog bind:open={upgradeOpen}>
-		<DialogContent style="max-width: min(1100px, 90vw);">
-			<DialogHeader>
-				<DialogTitle>Choose a plan</DialogTitle>
-				<DialogDescription>Select a plan to upgrade your account.</DialogDescription>
-			</DialogHeader>
-			<div class="mt-2">
-				{@html `<stripe-pricing-table pricing-table-id="${billingStore.stripePricingTableId}" publishable-key="${billingStore.stripePublicKey}" theme="night"></stripe-pricing-table>`}
-			</div>
-		</DialogContent>
-	</Dialog>
-{/if}

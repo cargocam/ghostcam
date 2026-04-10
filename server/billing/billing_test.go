@@ -5,20 +5,29 @@ import "testing"
 func TestGetTier(t *testing.T) {
 	tests := []struct {
 		id         string
+		wantOk     bool
 		wantName   string
 		wantCamLim *int
 		wantGB     *int
 	}{
-		{"free", "Free", testIntPtr(1), testIntPtr(5)},
-		{"starter", "Starter", testIntPtr(4), testIntPtr(50)},
-		{"pro", "Pro", testIntPtr(16), testIntPtr(500)},
-		{"enterprise", "Enterprise", nil, nil},
-		{"nonexistent", "Unlimited", nil, nil}, // fallback to unlimited
+		{"free", true, "Free", intPtr(1), intPtr(5)},
+		{"starter", true, "Starter", intPtr(4), intPtr(50)},
+		{"pro", true, "Pro", intPtr(16), intPtr(500)},
+		{"enterprise", true, "Enterprise", nil, nil},
+		{"nonexistent", false, "", nil, nil},
+		{"", false, "", nil, nil},
+		{"unlimited", false, "", nil, nil}, // old fallback name — must not resolve
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.id, func(t *testing.T) {
-			tier := GetTier(tt.id)
+			tier, ok := GetTier(tt.id)
+			if ok != tt.wantOk {
+				t.Fatalf("GetTier(%q) ok = %v, want %v", tt.id, ok, tt.wantOk)
+			}
+			if !ok {
+				return
+			}
 			if tier.Name != tt.wantName {
 				t.Errorf("GetTier(%q).Name = %q, want %q", tt.id, tier.Name, tt.wantName)
 			}
@@ -33,15 +42,13 @@ func TestGetTier(t *testing.T) {
 }
 
 func TestStorageLimitBytes(t *testing.T) {
-	free := GetTier("free")
+	free, _ := GetTier("free")
 	if free.StorageLimitBytes() != 5*1024*1024*1024 {
 		t.Errorf("free tier storage = %d, want %d", free.StorageLimitBytes(), 5*1024*1024*1024)
 	}
 
-	enterprise := GetTier("enterprise")
+	enterprise, _ := GetTier("enterprise")
 	if enterprise.StorageLimitBytes() != 0 {
 		t.Errorf("enterprise storage should be 0 (unlimited), got %d", enterprise.StorageLimitBytes())
 	}
 }
-
-func testIntPtr(i int) *int { return &i }

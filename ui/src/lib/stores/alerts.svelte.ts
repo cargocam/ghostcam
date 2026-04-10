@@ -3,8 +3,8 @@ import {
 	markEventRead as apiMarkRead,
 	markAllEventsRead as apiMarkAllRead,
 	dismissEvent as apiDismiss,
-	type ServerEvent,
 } from '$lib/signaling.js';
+import type { EventEntry as ServerEvent } from '$lib/api-types';
 
 export type AlertType = 'disconnect' | 'reconnect' | 'motion' | 'storage_capped';
 

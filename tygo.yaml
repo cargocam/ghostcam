@@ -1,0 +1,19 @@
+# Generates TypeScript interfaces for every viewer-server and camera-server
+# data contract from the Go source of truth. One file per Go package is
+# emitted under ui/src/lib/api-types/. CI runs this and fails the build if
+# the checked-in output drifts. Regenerate with `make generate-types`.
+#
+# The frontmatter blocks inject the cross-package imports that tygo itself
+# does not emit (see: https://github.com/gzuidhof/tygo/issues/ — tygo writes
+# types but leaves imports to the caller). We keep each package's output
+# self-contained by re-importing types it references from sibling files.
+
+packages:
+  # common/ — shared camera<->server and viewer<->server contract types.
+  - path: "github.com/cargocam/ghostcam/common"
+    output_path: "ui/src/lib/api-types/common.ts"
+
+  # server/apitypes/ — viewer<->server HTTP request/response and SSE payloads.
+  # References TelemetryEntry defined in the same file, so no imports needed.
+  - path: "github.com/cargocam/ghostcam/server/apitypes"
+    output_path: "ui/src/lib/api-types/apitypes.ts"

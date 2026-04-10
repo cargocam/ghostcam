@@ -1,4 +1,5 @@
-import { fetchTelemetryRange, type TelemetryEntry } from '$lib/signaling.js';
+import { fetchTelemetryRange } from '$lib/signaling.js';
+import type { TelemetryEntry } from '$lib/api-types';
 
 type CacheEntry = {
 	expiresAt: number;

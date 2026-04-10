@@ -4,10 +4,10 @@ WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /ghostcam-server ./cmd/ghostcam-server
-RUN CGO_ENABLED=0 go build -o /ghostcam-camera ./cmd/ghostcam-camera
+RUN CGO_ENABLED=0 go build -o /ghostcam-server ./server
+RUN CGO_ENABLED=0 go build -o /ghostcam-camera ./camera
 # Test camera: synthetic sensors (GPS, CPU, etc.) instead of real hardware
-RUN CGO_ENABLED=0 go build -tags synthetic -o /ghostcam-camera-synthetic ./cmd/ghostcam-camera
+RUN CGO_ENABLED=0 go build -tags synthetic -o /ghostcam-camera-synthetic ./camera
 
 # --- UI builder ---
 FROM oven/bun:1 AS ui-builder

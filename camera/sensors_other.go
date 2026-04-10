@@ -1,6 +1,6 @@
 //go:build !linux || synthetic
 
-package camera
+package main
 
 import (
 	"math"

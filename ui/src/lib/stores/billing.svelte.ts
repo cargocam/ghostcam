@@ -1,4 +1,4 @@
-import type { SubscriptionInfo, UsageInfo } from '$lib/types.js';
+import type { SubscriptionResponse, UsageResponse } from '$lib/api-types';
 import {
 	getSubscription,
 	getUsage,
@@ -7,17 +7,13 @@ import {
 } from '$lib/signaling.js';
 
 class BillingStore {
-	subscription = $state<SubscriptionInfo | null>(null);
-	usage = $state<UsageInfo | null>(null);
+	subscription = $state<SubscriptionResponse | null>(null);
+	usage = $state<UsageResponse | null>(null);
 	loading = $state(false);
 	error = $state<string | null>(null);
 
 	billingEnabled = $derived(this.subscription?.billing_enabled ?? false);
 	currentTier = $derived(this.subscription?.tier ?? 'free');
-	isPastDue = $derived(this.subscription?.status === 'past_due');
-	isSuspended = $derived(this.subscription?.status === 'suspended');
-	stripePublicKey = $derived(this.subscription?.stripe_public_key ?? null);
-	stripePricingTableId = $derived(this.subscription?.stripe_pricing_table_id ?? null);
 
 	storageUsedGB = $derived((this.usage?.storage_bytes ?? 0) / (1024 * 1024 * 1024));
 	storageLimitGB = $derived(this.usage?.storage_limit_gb ?? null);

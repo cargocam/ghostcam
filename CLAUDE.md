@@ -12,20 +12,25 @@ Ghostcam is a camera surveillance system built in Go. Cameras capture H.264 vide
 
 ```
 ghostcam/
-├── common/          Shared Go types: telemetry datagrams, presign/provision contracts
-├── camera/          Camera agent: capture pipeline, upload, telemetry, provisioning, gpsd, firmware
-├── cmd/
-│   ├── ghostcam-server/   Server entrypoint
-│   └── ghostcam-camera/   Camera entrypoint
-├── server/          Server: HTTP handlers (chi), DB, Redis, S3 presign, auth, billing
+├── common/          Shared Go types: camera<->server contract (telemetry, presign, provisioning)
+├── camera/          Camera binary (package main): capture pipeline, upload, telemetry,
+│                    provisioning, gpsd, firmware. main.go lives here — no cmd/ wrapper.
+├── server/          Server binary (package main): chi router + HTTP handlers as methods
+│                    on *App, middleware, rate limiting. main.go lives here — no cmd/ wrapper.
+│   ├── apitypes/    Viewer<->server HTTP request/response + SSE payload types.
+│   │                Source of truth for ui/src/lib/api-types/ — types only,
+│   │                tygo reads this package plus common/.
 │   ├── auth/        Argon2id passwords, JWT, HMAC token hashing
 │   ├── billing/     Tier definitions and storage limit enforcement
-│   ├── db/          PostgreSQL (pgx), migrations, record types
-│   ├── handlers/    HTTP handlers for all API endpoints (including events management)
+│   ├── db/          PostgreSQL (pgx), migrations, record types (concrete *DB, no interface)
 │   ├── redis/       Telemetry streams (XADD/XREAD), pub/sub for SSE, event storage
-│   ├── s3/          S3/Tigris presigned URL generation (GET + PUT)
-│   └── ctxutil/     Context key helpers
+│   └── s3/          S3/Tigris presigned URL generation, Upload, Delete
+├── tygo.yaml        Codegen config: common/ + server/apitypes/ → ui/src/lib/api-types/
+├── Makefile         `make generate-types` / `make check-types` (CI drift check)
 ├── ui/              Svelte 5 SPA: HLS playback (hls.js), timeline scrubber, GPS map
+│   └── src/lib/api-types/  Generated TypeScript types — DO NOT EDIT (see tygo.yaml)
+├── e2e/             Real end-to-end Playwright specs that drive the live
+│                    docker-compose stack (not mocked). Run via CI e2e job.
 ├── pi/              Pi system files: systemd services, GPS, NetworkManager configs
 │   └── image/       rpi-image-gen build system: device configs, layer, files for flashable .img
 ├── scripts/         Developer tools: pi.sh (camera manager CLI)
@@ -38,24 +43,48 @@ ghostcam/
 
 ```bash
 # Build server
-go build -o ghostcam-server ./cmd/ghostcam-server
+go build -o ghostcam-server ./server
 
 # Build camera
-go build -o ghostcam-camera ./cmd/ghostcam-camera
+go build -o ghostcam-camera ./camera
 
 # Cross-compile camera for Pi (no CGO needed)
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./cmd/ghostcam-camera
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./camera
 
 # Run tests
 go test ./...
 cd ui && bun run test    # vitest unit tests
-cd ui && bun run test:e2e  # playwright e2e tests (requires dev server)
+cd ui && bun run test:browser  # playwright browser tests (frontend smoke; backend is mocked)
+
+# Regenerate TypeScript API types from Go source of truth.
+# Run after changing any struct in common/ or server/apitypes/.
+make generate-types
 ```
+
+### API Type Generation
+
+The UI consumes a single source of truth for every request/response/event
+payload: `server/apitypes/apitypes.go` (viewer<->server) and `common/types.go`
++ `common/telemetry.go` (camera<->server). `tygo` walks those packages and
+writes matching TypeScript interfaces to `ui/src/lib/api-types/`. The UI
+imports exclusively from `$lib/api-types`, and the `browser-tests/` fixtures
+are typed against the same file — so any drift between the Go structs and
+the TypeScript consumers is a compile error, not a runtime mystery.
+
+To change a wire shape:
+
+1. Edit the Go struct in `server/apitypes/` or `common/`.
+2. Run `make generate-types`.
+3. Commit both the Go change and the regenerated `ui/src/lib/api-types/` files.
+
+CI runs `make check-types` (via the `go` job). A PR that modifies a struct
+without regenerating is hard-rejected — the drift check uses
+`git diff --exit-code` against the regenerated output.
 
 ### Testing
 
 **Go** (`go test ./...`): Table-driven tests for pure functions. No mocking framework — tests cover:
-- `server/handlers/`: `effectiveTier()` billing logic, `epochMsToISO8601` formatting, `TestCameraLimitAllowed` (tier-based camera upload enforcement)
+- `server/`: `effectiveTier()` billing logic, `epochMsToISO8601` formatting, `TestCameraLimitAllowed` (tier-based camera upload enforcement)
 - `server/billing/`: `GetTier()` tier resolution, `StorageLimitBytes()` computation
 - `camera/`: motion detector (file-size fallback, rolling window), MPEG-TS sync byte validation, pending confirms persistence, config helpers (`coalesceStr`, `resolveVideoProfile`, `trimString`)
 
@@ -64,7 +93,27 @@ cd ui && bun run test:e2e  # playwright e2e tests (requires dev server)
 - Alert deduplication (upsert vs append by type+cameraId)
 - Time formatting (`formatTimeAgo`)
 
-**CI** (`.github/workflows/ci.yml`): Runs `go vet`, `go test`, `bun run check`, `bun run test`, `bun run build`, Docker build on every push/PR.
+**UI browser tests** (`bun run test:browser`): Playwright specs in `ui/browser-tests/`
+that run in real Chromium against the Vite dev server. **Every** backend call
+(`/api/v1/**`, `/hls/**`, `/events`) is intercepted via `page.route()` and
+answered from hand-written fixtures in `browser-tests/helpers.ts` — the Go
+server, DB, Redis, and S3 are not exercised. These are frontend smoke tests,
+not end-to-end tests. Fixture shapes are typed against the tygo-generated
+`$lib/api-types/` file, so drift from the server structs is a compile error,
+but runtime behavior downstream of the HTTP boundary is untested.
+
+**Real e2e tests** (`cd e2e && bun run test`): Playwright specs in `e2e/`
+that drive the live `docker compose --profile test` stack — real Go server,
+Postgres, Redis, MinIO, and three synthetic test cameras. Covers the seams
+between layers that nothing else can: JWT round-trip, SSE telemetry delivery,
+HLS manifest generation from real segment rows. See `e2e/README.md` for
+what is and isn't covered and how to run locally. Takes ~1–2 minutes per
+run; gated behind `go` + `ui` + `docker` jobs in CI.
+
+**CI** (`.github/workflows/ci.yml`): Runs `go vet`, `go test`, `make check-types`,
+`bun run check`, `bun run test`, `bun run build`, Docker build, and the
+`e2e` job (compose up, Playwright, compose down) on every push/PR. The
+`ui/browser-tests/` suite is not run in CI — it's a local smoke test only.
 
 ### Local dev
 
@@ -144,13 +193,15 @@ Server (Go) ← presigned URLs → Browser (hls.js)
 - **No persistent connections** -- cameras POST telemetry every 10s, upload segments via presigned PUT URLs
 - **Stateless server** -- JWT auth, no sessions table, horizontally scalable
 - **S3-native** -- segments served directly from Tigris edge via 302 redirect, no proxy
+- **No cleanup daemons** -- retention is enforced by opportunistic prune in the presign handler (DB rows + matching S3 objects, bounded LIMIT 100 per call); there are no hourly session/segment/stale-camera sweep goroutines. We do not use an S3 bucket lifecycle rule because firmware binaries share the bucket and must not be auto-expired.
+- **Fail-closed tier handling** -- `billing.GetTier` returns `(Tier, bool)`; unknown tier IDs never fall back to an unlimited tier. `effectiveTier` validates the DB-stored tier string and falls back to free on unknown. Stripe webhooks log loudly and refuse to escalate the user to a paid tier if the price ID is unrecognised.
 - **Single-instance deployment** -- one server behind Fly.io, one Postgres, one Redis (not designed for horizontal scaling)
 
 For detailed subsystem documentation see:
 - **[docs/usage.md](docs/usage.md)** — Camera setup (flash/deb/binary) and viewer walkthrough: enrolling, playback, clips, billing
 - **[docs/api.md](docs/api.md)** — API endpoints, SSE events, camera-server protocol
 - **[docs/architecture.md](docs/architecture.md)** — Camera, server, and viewer file-by-file structure
-- **[docs/configuration.md](docs/configuration.md)** — Environment variables, config files, billing tiers, background jobs
+- **[docs/configuration.md](docs/configuration.md)** — Environment variables, config files, billing tiers, retention & cleanup
 - **[docs/debugging.md](docs/debugging.md)** — Troubleshooting common issues
 
 ## Code Conventions
@@ -159,8 +210,8 @@ For detailed subsystem documentation see:
 
 - **Error handling**: Return `error` from functions, wrap with `fmt.Errorf("context: %w", err)`.
 - **Logging**: `log/slog` with structured fields: `slog.Info("connected", "device_id", id)`.
-- **HTTP**: chi router. Handlers are methods on `Handlers` struct. JSON responses via `writeJSON()`.
-- **Database**: pgx v5 pool. Database interface for testability. Batch inserts via `pgx.Batch`.
+- **HTTP**: chi router. Handlers are methods on `*App` in the `server` package. JSON responses via `writeJSON()`.
+- **Database**: pgx v5 pool, concrete `*db.DB` type (no `Database` interface — tests cover pure functions). Batch inserts via `pgx.Batch`.
 - **Concurrency**: `sync.WaitGroup` for goroutine lifecycle, `sync/atomic` for flags, channels for inter-goroutine communication.
 - **Build tags**: `//go:build linux && !synthetic` for real sensors (gpsd, /proc, nmcli). `//go:build !linux || synthetic` for synthetic sensors. Docker camera target uses `-tags synthetic`. Production Pi builds use real sensors with no synthetic code.
 
