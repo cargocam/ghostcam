@@ -2,9 +2,10 @@
 
 # Regenerate ui/src/lib/api-types/ from the Go source of truth. Run after
 # changing any struct in common/ or server/apitypes/, then commit the
-# updated TypeScript files alongside the Go change.
+# updated TypeScript files alongside the Go change. Uses the Go 1.24+
+# `tool` directive pinned in go.mod.
 generate-types:
-	@go run github.com/gzuidhof/tygo generate
+	@go tool tygo generate
 	@echo "Generated api-types. Review ui/src/lib/api-types/ and commit."
 
 # CI guard: regenerate and fail if anything drifted from what's checked in.

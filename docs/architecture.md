@@ -77,6 +77,13 @@ server/            (package main — binary builds from this directory)
   ratelimit.go    Per-IP token bucket rate limiter with opportunistic eviction
                   (no dedicated cleanup goroutine)
 
+  apitypes/       Viewer<->server HTTP request/response types and SSE payload types.
+                  Types only — no behavior. Read by tygo to generate
+                  ui/src/lib/api-types/. Editing a struct here is automatically
+                  reflected in the UI types on the next `make generate-types` run;
+                  CI's `make check-types` step hard-fails any PR whose generated
+                  files are stale.
+
   auth_handlers.go  Login (with DummyVerify timing equalization), Logout, Register (403),
                     ChangePassword. setAuthCookie uses Config.secureCookies().
   cameras.go        ListCameras / Enroll / GetCamera / UpdateCamera / DeleteCamera.

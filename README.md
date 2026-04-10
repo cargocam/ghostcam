@@ -43,12 +43,16 @@ camera/                  Camera binary (package main): capture pipeline, S3 uplo
                          telemetry, provisioning, gpsd
 server/                  Server binary (package main): chi router + HTTP handlers
                          (methods on *App), plus subpackages:
+  apitypes/              Viewer<->server request/response/SSE types (tygo source)
   auth/                  Argon2id passwords, JWT, HMAC
   billing/               Tier definitions (free/starter/pro/enterprise)
   db/                    PostgreSQL (pgx), migrations
   redis/                 Telemetry streams (XADD/XREAD), pub/sub
   s3/                    Presigned URL generation, Upload, Delete
+tools/                   Go build-time tool pins (tygo)
+tygo.yaml                Codegen: common/ + server/apitypes/ -> ui/src/lib/api-types/
 ui/                      Svelte 5 SPA (hls.js, Leaflet, Tailwind)
+  src/lib/api-types/     Generated TypeScript types — DO NOT EDIT (tygo output)
 pi/                      Pi system files (systemd, GPS, NetworkManager)
 scripts/                 Developer tools (pi.sh)
 ```

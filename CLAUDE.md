@@ -12,17 +12,24 @@ Ghostcam is a camera surveillance system built in Go. Cameras capture H.264 vide
 
 ```
 ghostcam/
-├── common/          Shared Go types: telemetry datagrams, presign/provision contracts
+├── common/          Shared Go types: camera<->server contract (telemetry, presign, provisioning)
 ├── camera/          Camera binary (package main): capture pipeline, upload, telemetry,
 │                    provisioning, gpsd, firmware. main.go lives here — no cmd/ wrapper.
 ├── server/          Server binary (package main): chi router + HTTP handlers as methods
 │                    on *App, middleware, rate limiting. main.go lives here — no cmd/ wrapper.
+│   ├── apitypes/    Viewer<->server HTTP request/response + SSE payload types.
+│   │                Source of truth for ui/src/lib/api-types/ — types only,
+│   │                tygo reads this package plus common/.
 │   ├── auth/        Argon2id passwords, JWT, HMAC token hashing
 │   ├── billing/     Tier definitions and storage limit enforcement
 │   ├── db/          PostgreSQL (pgx), migrations, record types (concrete *DB, no interface)
 │   ├── redis/       Telemetry streams (XADD/XREAD), pub/sub for SSE, event storage
 │   └── s3/          S3/Tigris presigned URL generation, Upload, Delete
+├── tools/           Go build-time tool pins (tygo)
+├── tygo.yaml        Codegen config: common/ + server/apitypes/ → ui/src/lib/api-types/
+├── Makefile         `make generate-types` / `make check-types` (CI drift check)
 ├── ui/              Svelte 5 SPA: HLS playback (hls.js), timeline scrubber, GPS map
+│   └── src/lib/api-types/  Generated TypeScript types — DO NOT EDIT (see tygo.yaml)
 ├── pi/              Pi system files: systemd services, GPS, NetworkManager configs
 │   └── image/       rpi-image-gen build system: device configs, layer, files for flashable .img
 ├── scripts/         Developer tools: pi.sh (camera manager CLI)
@@ -47,7 +54,31 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./camera
 go test ./...
 cd ui && bun run test    # vitest unit tests
 cd ui && bun run test:browser  # playwright browser tests (frontend smoke; backend is mocked)
+
+# Regenerate TypeScript API types from Go source of truth.
+# Run after changing any struct in common/ or server/apitypes/.
+make generate-types
 ```
+
+### API Type Generation
+
+The UI consumes a single source of truth for every request/response/event
+payload: `server/apitypes/apitypes.go` (viewer<->server) and `common/types.go`
++ `common/telemetry.go` (camera<->server). `tygo` walks those packages and
+writes matching TypeScript interfaces to `ui/src/lib/api-types/`. The UI
+imports exclusively from `$lib/api-types`, and the `browser-tests/` fixtures
+are typed against the same file — so any drift between the Go structs and
+the TypeScript consumers is a compile error, not a runtime mystery.
+
+To change a wire shape:
+
+1. Edit the Go struct in `server/apitypes/` or `common/`.
+2. Run `make generate-types`.
+3. Commit both the Go change and the regenerated `ui/src/lib/api-types/` files.
+
+CI runs `make check-types` (via the `go` job). A PR that modifies a struct
+without regenerating is hard-rejected — the drift check uses
+`git diff --exit-code` against the regenerated output.
 
 ### Testing
 
