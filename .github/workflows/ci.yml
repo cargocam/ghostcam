@@ -41,10 +41,14 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
-      - run: go build ./server
+      # `go build ./server` / `./camera` need explicit -o because the
+      # output name defaults to the last path component, which is also
+      # the directory name (ambiguity: file vs directory). Dockerfile
+      # already does the same. Write to /tmp so the workspace stays clean.
+      - run: go build -o /tmp/ghostcam-server ./server
       - name: Build camera binary
         if: needs.changes.outputs.camera == 'true'
-        run: go build ./camera
+        run: go build -o /tmp/ghostcam-camera ./camera
       - run: go test ./...
       # Hard-fail drift check: regenerate TypeScript types from the Go
       # source of truth (common/ + server/apitypes/) and fail if the
