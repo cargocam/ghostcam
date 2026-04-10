@@ -6,7 +6,9 @@
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { transportStore } from '$lib/stores/transport.svelte.js';
 	import { billingStore } from '$lib/stores/billing.svelte.js';
-	import { Sun, Moon, Monitor, Bug, CreditCard, ExternalLink, AlertTriangle } from 'lucide-svelte';
+	import { authStore } from '$lib/stores/auth.svelte.js';
+	import { changePassword } from '$lib/auth.js';
+	import { Sun, Moon, Monitor, CreditCard, ExternalLink, AlertTriangle, Trash2 } from 'lucide-svelte';
 
 	let {
 		open = $bindable(false),
@@ -24,6 +26,56 @@
 	let isFree = $derived(billingStore.currentTier === 'free');
 	let hasPricingTable = $derived(billingStore.stripePublicKey && billingStore.stripePricingTableId);
 	let upgradeOpen = $state(false);
+
+	// Change email dialog state (stubbed — not yet implemented on the backend)
+	let changeEmailOpen = $state(false);
+	// Delete account dialog state (stubbed — not yet implemented on the backend)
+	let deleteAccountOpen = $state(false);
+
+	// Change password dialog state
+	let changePasswordOpen = $state(false);
+	let currentPassword = $state('');
+	let newPassword = $state('');
+	let confirmPassword = $state('');
+	let changePasswordError = $state('');
+	let changePasswordSubmitting = $state(false);
+	let changePasswordSuccess = $state(false);
+
+	function resetChangePasswordForm() {
+		currentPassword = '';
+		newPassword = '';
+		confirmPassword = '';
+		changePasswordError = '';
+		changePasswordSubmitting = false;
+		changePasswordSuccess = false;
+	}
+
+	$effect(() => {
+		if (!changePasswordOpen) resetChangePasswordForm();
+	});
+
+	async function handleChangePassword(e: SubmitEvent) {
+		e.preventDefault();
+		changePasswordError = '';
+		if (newPassword !== confirmPassword) {
+			changePasswordError = 'New passwords do not match';
+			return;
+		}
+		if (newPassword.length < 8 || newPassword.length > 128) {
+			changePasswordError = 'Password must be 8-128 characters';
+			return;
+		}
+		changePasswordSubmitting = true;
+		const result = await changePassword(currentPassword, newPassword);
+		changePasswordSubmitting = false;
+		if (!result.ok) {
+			changePasswordError = result.error ?? 'Failed to change password';
+			return;
+		}
+		authStore.refresh();
+		changePasswordSuccess = true;
+		setTimeout(() => (changePasswordOpen = false), 1200);
+	}
 
 	// Load Stripe Pricing Table script once
 	let stripeScriptLoaded = $state(false);
@@ -47,7 +99,7 @@
 			<SheetDescription>Viewer preferences</SheetDescription>
 		</SheetHeader>
 
-		<div class="mt-6 space-y-6 overflow-y-auto" style="max-height: calc(100vh - 8rem);">
+		<div class="mt-6 space-y-6 overflow-y-auto pb-4" style="max-height: calc(100vh - 10rem);">
 			<!-- Theme -->
 			<div>
 				<h3 class="text-sm font-medium mb-3">Theme</h3>
@@ -77,22 +129,6 @@
 						System
 					</Button>
 				</div>
-			</div>
-
-			<Separator />
-
-			<!-- Debug mode -->
-			<div>
-				<h3 class="text-sm font-medium mb-3">Developer</h3>
-				<Button
-					variant={settingsStore.debugMode ? 'default' : 'outline'}
-					size="sm"
-					onclick={() => (settingsStore.debugMode = !settingsStore.debugMode)}
-				>
-					<Bug class="h-4 w-4 mr-1.5" />
-					Debug Overlay
-				</Button>
-				<p class="text-xs text-muted-foreground mt-1.5">Show WebRTC stats on camera cards</p>
 			</div>
 
 			<Separator />
@@ -178,52 +214,182 @@
 				<Separator />
 			{/if}
 
-			<!-- Storage (always visible) -->
-			{#if billingStore.usage}
-				<div>
-					<h3 class="text-sm font-medium mb-2">Storage</h3>
-					<div class="flex justify-between text-xs text-muted-foreground mb-1">
-						<span>{billingStore.storageUsedGB.toFixed(2)} GB used</span>
-						<span>
-							{#if billingStore.storageLimitGB != null}
-								{billingStore.storageLimitGB} GB limit
-							{:else}
-								Unlimited
-							{/if}
-						</span>
-					</div>
-					{#if billingStore.storageLimitGB != null}
-						<div class="h-2 rounded-full bg-muted overflow-hidden">
-							<div
-								class="h-full rounded-full transition-all {billingStore.isStorageCapped ? 'bg-destructive' : billingStore.storagePercent > 80 ? 'bg-amber-500' : 'bg-primary'}"
-								style="width: {billingStore.storagePercent}%"
-							></div>
-						</div>
-						{#if billingStore.isStorageCapped}
-							<p class="text-xs text-destructive mt-1">Storage full. Camera uploads paused.</p>
-						{/if}
-					{/if}
-				</div>
-
-				<Separator />
-			{/if}
-
-			<!-- Connection status -->
+			<!-- Account -->
 			<div>
-				<h3 class="text-sm font-medium mb-2">Connection</h3>
-				<div class="flex items-center gap-2 text-sm">
-					<span class={transportStore.connected ? 'text-primary' : 'text-destructive'}>
-						{transportStore.connected ? 'Connected' : 'Disconnected'}
-					</span>
-					<span class="text-xs text-muted-foreground">({transportStore.connectionState})</span>
-					{#if transportStore.error}
-						<span class="text-xs text-destructive">{transportStore.error}</span>
-					{/if}
+				<h3 class="text-sm font-medium mb-3">Account</h3>
+				<div class="space-y-2 text-sm">
+					<div class="flex items-center gap-2">
+						<span class="text-muted-foreground truncate" title={authStore.email}>
+							{authStore.email || '—'}
+						</span>
+						<button
+							type="button"
+							class="hover:underline underline-offset-4"
+							onclick={() => (changeEmailOpen = true)}
+						>
+							update
+						</button>
+					</div>
+					<div>
+						<button
+							type="button"
+							class="hover:underline underline-offset-4"
+							onclick={() => (changePasswordOpen = true)}
+						>
+							change password
+						</button>
+					</div>
+					<div>
+						<button
+							type="button"
+							class="text-destructive hover:underline underline-offset-4"
+							onclick={() => (deleteAccountOpen = true)}
+						>
+							delete account
+						</button>
+					</div>
+					<div>
+						<button
+							type="button"
+							class="text-destructive hover:underline underline-offset-4"
+							onclick={async () => {
+								await transportStore.logout();
+								open = false;
+							}}
+						>
+							log out
+						</button>
+					</div>
 				</div>
 			</div>
 		</div>
+
+		<!-- Connection status (floating footer) -->
+		<div class="absolute inset-x-0 bottom-0 border-t bg-background px-6 py-2 flex items-center gap-1.5 text-xs">
+			<span
+				class="h-1.5 w-1.5 rounded-full {transportStore.connected ? 'bg-primary' : 'bg-destructive'}"
+				aria-hidden="true"
+			></span>
+			<span class={transportStore.connected ? 'text-muted-foreground' : 'text-destructive'}>
+				{transportStore.connected
+					? 'Connected'
+					: transportStore.connectionState === 'unauthenticated'
+						? 'Unauthenticated'
+						: 'Disconnected'}
+			</span>
+			{#if transportStore.error}
+				<span class="text-destructive truncate" title={transportStore.error}>· {transportStore.error}</span>
+			{/if}
+		</div>
 	</SheetContent>
 </Sheet>
+
+<Dialog bind:open={changePasswordOpen}>
+	<DialogContent>
+		<DialogHeader>
+			<DialogTitle>Change password</DialogTitle>
+			<DialogDescription>Enter your current password and choose a new one.</DialogDescription>
+		</DialogHeader>
+		<form onsubmit={handleChangePassword} class="space-y-4 mt-2">
+			<div>
+				<label for="cp-current" class="text-xs text-muted-foreground mb-1 block">Current password</label>
+				<input
+					id="cp-current"
+					type="password"
+					autocomplete="current-password"
+					bind:value={currentPassword}
+					required
+					class="w-full rounded-md border bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+				/>
+			</div>
+			<div>
+				<label for="cp-new" class="text-xs text-muted-foreground mb-1 block">New password</label>
+				<input
+					id="cp-new"
+					type="password"
+					autocomplete="new-password"
+					bind:value={newPassword}
+					required
+					minlength="8"
+					maxlength="128"
+					class="w-full rounded-md border bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+				/>
+			</div>
+			<div>
+				<label for="cp-confirm" class="text-xs text-muted-foreground mb-1 block">Confirm new password</label>
+				<input
+					id="cp-confirm"
+					type="password"
+					autocomplete="new-password"
+					bind:value={confirmPassword}
+					required
+					minlength="8"
+					maxlength="128"
+					class="w-full rounded-md border bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+				/>
+			</div>
+			{#if changePasswordError}
+				<p class="text-sm text-destructive">{changePasswordError}</p>
+			{/if}
+			{#if changePasswordSuccess}
+				<p class="text-sm text-primary">Password updated.</p>
+			{/if}
+			<div class="flex justify-end gap-2">
+				<Button
+					type="button"
+					variant="outline"
+					onclick={() => (changePasswordOpen = false)}
+					disabled={changePasswordSubmitting}
+				>
+					Cancel
+				</Button>
+				<Button
+					type="submit"
+					disabled={changePasswordSubmitting || !currentPassword || !newPassword || !confirmPassword}
+				>
+					{changePasswordSubmitting ? 'Saving...' : 'Save'}
+				</Button>
+			</div>
+		</form>
+	</DialogContent>
+</Dialog>
+
+<Dialog bind:open={changeEmailOpen}>
+	<DialogContent>
+		<DialogHeader>
+			<DialogTitle>Update email</DialogTitle>
+			<DialogDescription>
+				Email changes aren't available yet. Contact support to update the email on your account.
+			</DialogDescription>
+		</DialogHeader>
+		{#if authStore.email}
+			<p class="text-xs text-muted-foreground mt-2">
+				Current email: <span class="text-foreground">{authStore.email}</span>
+			</p>
+		{/if}
+		<div class="flex justify-end mt-4">
+			<Button type="button" onclick={() => (changeEmailOpen = false)}>Close</Button>
+		</div>
+	</DialogContent>
+</Dialog>
+
+<Dialog bind:open={deleteAccountOpen}>
+	<DialogContent>
+		<DialogHeader>
+			<DialogTitle class="flex items-center gap-2">
+				<Trash2 class="h-4 w-4 text-destructive" />
+				Delete account
+			</DialogTitle>
+			<DialogDescription>
+				Account deletion isn't available yet. Contact support to permanently delete your
+				account and all associated data.
+			</DialogDescription>
+		</DialogHeader>
+		<div class="flex justify-end mt-4">
+			<Button type="button" onclick={() => (deleteAccountOpen = false)}>Close</Button>
+		</div>
+	</DialogContent>
+</Dialog>
 
 {#if hasPricingTable}
 	<Dialog bind:open={upgradeOpen}>

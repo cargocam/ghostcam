@@ -1,4 +1,5 @@
 import { checkSession, login as authLogin, register as authRegister, logout as authLogout } from '$lib/auth.js';
+import { authStore } from '$lib/stores/auth.svelte.js';
 import { listCameras, fetchCoverage } from '$lib/signaling.js';
 import { cameraStore } from '$lib/stores/cameras.svelte.js';
 import { groupStore } from '$lib/stores/groups.svelte.js';
@@ -182,6 +183,7 @@ class TransportStore {
 	async login(email: string, password: string): Promise<boolean> {
 		const ok = await authLogin(email, password);
 		if (ok) {
+			authStore.refresh();
 			this.authenticated = true;
 			await this.initialize();
 		}
@@ -191,6 +193,7 @@ class TransportStore {
 	async register(email: string, password: string, displayName?: string): Promise<{ ok: boolean; error?: string }> {
 		const result = await authRegister(email, password, displayName);
 		if (result.ok) {
+			authStore.refresh();
 			this.authenticated = true;
 			await this.initialize();
 		}
@@ -199,6 +202,7 @@ class TransportStore {
 
 	async logout() {
 		await authLogout();
+		authStore.refresh();
 		this.authenticated = false;
 		this.connected = false;
 		this.sse?.close();

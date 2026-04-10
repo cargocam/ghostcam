@@ -43,3 +43,19 @@ export async function checkSession(): Promise<boolean> {
 	});
 	return res.ok;
 }
+
+export async function changePassword(
+	currentPassword: string,
+	newPassword: string,
+): Promise<{ ok: boolean; error?: string }> {
+	const res = await fetch(`${API_BASE}/auth/password`, {
+		method: 'PATCH',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+		credentials: 'include',
+	});
+	if (res.ok) return { ok: true };
+	if (res.status === 401) return { ok: false, error: 'Current password is incorrect' };
+	if (res.status === 400) return { ok: false, error: 'Password must be 8-128 characters' };
+	return { ok: false, error: 'Failed to change password' };
+}

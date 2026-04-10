@@ -136,13 +136,25 @@ func GenerateHMACSecret() []byte {
 
 // --- JWT ---
 
-// SignJWT creates an HS256-signed JWT with the given user_id and expiry.
+// JWTClaims holds the decoded claims from a verified JWT.
+type JWTClaims struct {
+	UserID string
+	Email  string
+}
+
+// SignJWT creates an HS256-signed JWT with the given user_id, email, and expiry.
 // Minimal implementation — no external JWT library needed.
-func SignJWT(userID string, secret []byte, ttl time.Duration) string {
+func SignJWT(userID, email string, secret []byte, ttl time.Duration) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
 	exp := time.Now().Add(ttl).Unix()
-	payload := fmt.Sprintf(`{"sub":"%s","exp":%d}`, userID, exp)
-	payloadEnc := base64.RawURLEncoding.EncodeToString([]byte(payload))
+	// Use json.Marshal for the payload to safely escape email (may contain
+	// characters that would break a fmt.Sprintf JSON string).
+	payloadBytes, _ := json.Marshal(map[string]any{
+		"sub":   userID,
+		"email": email,
+		"exp":   exp,
+	})
+	payloadEnc := base64.RawURLEncoding.EncodeToString(payloadBytes)
 
 	sigInput := header + "." + payloadEnc
 	mac := hmac.New(sha256.New, secret)
@@ -152,12 +164,12 @@ func SignJWT(userID string, secret []byte, ttl time.Duration) string {
 	return sigInput + "." + sig
 }
 
-// VerifyJWT verifies an HS256 JWT and returns the user_id (sub claim).
-// Returns empty string if invalid or expired.
-func VerifyJWT(token string, secret []byte) string {
+// VerifyJWT verifies an HS256 JWT and returns its claims.
+// Returns nil if invalid or expired.
+func VerifyJWT(token string, secret []byte) *JWTClaims {
 	parts := splitDot(token)
 	if len(parts) != 3 {
-		return ""
+		return nil
 	}
 
 	// Verify signature
@@ -166,33 +178,34 @@ func VerifyJWT(token string, secret []byte) string {
 	mac.Write([]byte(sigInput))
 	expectedSig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 	if subtle.ConstantTimeCompare([]byte(parts[2]), []byte(expectedSig)) != 1 {
-		return ""
+		return nil
 	}
 
 	// Decode payload
 	payloadBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return ""
+		return nil
 	}
 
 	// Parse claims
 	var claims struct {
-		Sub string `json:"sub"`
-		Exp int64  `json:"exp"`
+		Sub   string `json:"sub"`
+		Email string `json:"email"`
+		Exp   int64  `json:"exp"`
 	}
 	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
-		return ""
+		return nil
 	}
 
 	if claims.Sub == "" || claims.Exp == 0 {
-		return ""
+		return nil
 	}
 
 	if time.Now().Unix() > claims.Exp {
-		return ""
+		return nil
 	}
 
-	return claims.Sub
+	return &JWTClaims{UserID: claims.Sub, Email: claims.Email}
 }
 
 func splitDot(s string) []string {

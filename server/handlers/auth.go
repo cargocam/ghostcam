@@ -24,13 +24,15 @@ type loginResponse struct {
 	UserID string `json:"user_id"`
 }
 
-func (h *Handlers) setAuthCookie(w http.ResponseWriter, userID string) {
-	token := auth.SignJWT(userID, h.HMACSecret, jwtTTL)
+func (h *Handlers) setAuthCookie(w http.ResponseWriter, userID, email string) {
+	token := auth.SignJWT(userID, email, h.HMACSecret, jwtTTL)
 	secure := ""
 	if h.SecureCookies {
 		secure = "; Secure"
 	}
-	cookie := fmt.Sprintf("ghostcam-token=%s; Path=/; HttpOnly; SameSite=Strict%s; Max-Age=%d", token, secure, cookieMaxAge)
+	// Not HttpOnly: the UI decodes the JWT client-side to derive the email
+	// claim reactively for display. Auth still goes through the same cookie.
+	cookie := fmt.Sprintf("ghostcam-token=%s; Path=/; SameSite=Strict%s; Max-Age=%d", token, secure, cookieMaxAge)
 	w.Header().Set("Set-Cookie", cookie)
 }
 
@@ -79,7 +81,7 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 
 	db.AuditLog("auth_success", "user_id", user.UserID)
 
-	h.setAuthCookie(w, user.UserID)
+	h.setAuthCookie(w, user.UserID, user.Email)
 	writeJSON(w, http.StatusOK, loginResponse{UserID: user.UserID})
 }
 
@@ -98,7 +100,7 @@ func (h *Handlers) Logout(w http.ResponseWriter, r *http.Request) {
 	if h.SecureCookies {
 		secure = "; Secure"
 	}
-	w.Header().Set("Set-Cookie", fmt.Sprintf("ghostcam-token=; Path=/; HttpOnly; SameSite=Strict%s; Max-Age=0", secure))
+	w.Header().Set("Set-Cookie", fmt.Sprintf("ghostcam-token=; Path=/; SameSite=Strict%s; Max-Age=0", secure))
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -148,8 +150,9 @@ func (h *Handlers) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Issue new JWT after password change
-	h.setAuthCookie(w, userID)
+	// Issue new JWT after password change. Email comes from the existing
+	// JWT claim (empty on API-token auth, which ignores the cookie anyway).
+	h.setAuthCookie(w, userID, ctxutil.GetUserEmail(r))
 	w.WriteHeader(http.StatusOK)
 }
 

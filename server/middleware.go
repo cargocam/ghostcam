@@ -34,9 +34,10 @@ func ViewerAuth(app *App) func(http.Handler) http.Handler {
 
 			// 2. Check JWT cookie (stateless — no DB lookup)
 			if cookie, err := r.Cookie("ghostcam-token"); err == nil {
-				userID := auth.VerifyJWT(cookie.Value, app.HMACSecret)
-				if userID != "" {
-					ctx = context.WithValue(ctx, ctxutil.KeyUserID, userID)
+				claims := auth.VerifyJWT(cookie.Value, app.HMACSecret)
+				if claims != nil {
+					ctx = context.WithValue(ctx, ctxutil.KeyUserID, claims.UserID)
+					ctx = context.WithValue(ctx, ctxutil.KeyUserEmail, claims.Email)
 					next.ServeHTTP(w, r.WithContext(ctx))
 					return
 				}
