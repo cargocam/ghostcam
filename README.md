@@ -16,6 +16,7 @@ Server (Go) ← 302 redirect → Browser (hls.js)
 - **No persistent connections** -- cameras POST telemetry every 10s, upload segments via presigned PUT URLs
 - **Stateless server** -- JWT auth, horizontally scalable
 - **S3-native HLS** -- manifests generated on the fly, segments served via 302 redirect to S3 (re-presigned per request)
+- **Single-instance deployment** -- designed for one server behind Fly.io, not horizontally scaled
 - **Billing always on** -- users default to free tier (5 GB / 1 camera); Stripe test mode for local dev
 - **Clip download** -- timeline range selection, client-side MP4 assembly via ffmpeg.wasm, telemetry CSV/JSON export
 

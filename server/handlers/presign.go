@@ -122,17 +122,21 @@ func (h *Handlers) Presign(w http.ResponseWriter, r *http.Request) {
 	tier := billing.GetTier(effectiveTier(sub, h.Stripe.SecretKey != ""))
 
 	// Camera limit: only the N oldest cameras (by enrolled_at) may upload.
+	// Fast path: skip the expensive ListCameras if count is within limit.
 	if tier.CameraLimit != nil {
-		cameras, err := h.DB.ListCameras(ctx, userID) // ordered by enrolled_at
-		if err == nil && len(cameras) > *tier.CameraLimit {
-			allowed := make(map[string]bool, *tier.CameraLimit)
-			for i := 0; i < *tier.CameraLimit && i < len(cameras); i++ {
-				allowed[cameras[i].DeviceID] = true
-			}
-			if !allowed[deviceID] {
-				slog.Info("camera over tier limit", "device_id", deviceID, "user_id", userID, "limit", *tier.CameraLimit, "count", len(cameras))
-				writeJSON(w, http.StatusOK, common.PresignResponse{URLs: nil, StorageCapped: true})
-				return
+		count, err := h.DB.GetCameraCount(ctx, userID)
+		if err == nil && count > int64(*tier.CameraLimit) {
+			cameras, err := h.DB.ListCameras(ctx, userID) // ordered by enrolled_at
+			if err == nil {
+				allowed := make(map[string]bool, *tier.CameraLimit)
+				for i := 0; i < *tier.CameraLimit && i < len(cameras); i++ {
+					allowed[cameras[i].DeviceID] = true
+				}
+				if !allowed[deviceID] {
+					slog.Info("camera over tier limit", "device_id", deviceID, "user_id", userID, "limit", *tier.CameraLimit, "count", count)
+					writeJSON(w, http.StatusOK, common.PresignResponse{URLs: nil, StorageCapped: true})
+					return
+				}
 			}
 		}
 	}

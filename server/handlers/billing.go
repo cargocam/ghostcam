@@ -194,7 +194,9 @@ func (h *Handlers) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify signature if webhook secret is configured
+	// Verify webhook signature. In production, STRIPE_WEBHOOK_SECRET must be set.
+	// In dev, the stripe-webhooks Docker container forwards events without a shared
+	// secret, so we accept unsigned payloads only when running locally (no PublicURL).
 	var event stripe.Event
 	if h.Stripe.WebhookSecret != "" {
 		event, err = webhook.ConstructEvent(body, r.Header.Get("Stripe-Signature"), h.Stripe.WebhookSecret)
@@ -203,11 +205,17 @@ func (h *Handlers) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "", http.StatusBadRequest)
 			return
 		}
-	} else {
+	} else if h.PublicURL == "" {
+		// Local dev only — no signature verification
 		if err := json.Unmarshal(body, &event); err != nil {
 			http.Error(w, "", http.StatusBadRequest)
 			return
 		}
+	} else {
+		// Production with no webhook secret — reject
+		slog.Error("stripe webhook rejected: STRIPE_WEBHOOK_SECRET not configured")
+		http.Error(w, "", http.StatusForbidden)
+		return
 	}
 
 	ctx := r.Context()

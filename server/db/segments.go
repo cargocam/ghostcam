@@ -62,13 +62,14 @@ func (db *PostgresDB) ListSegments(ctx context.Context, deviceID string, fromTS,
 }
 
 // ListSegmentCoverage returns lightweight coverage data (no s3_key, size, resolution)
-// for all segments in a time range. No row limit — intended for timeline rendering.
+// for all segments in a time range. Safety limit of 50,000 rows (~3.5 days at 6s segments).
 func (db *PostgresDB) ListSegmentCoverage(ctx context.Context, deviceID string, fromTS, toTS uint64) ([]CoverageRecord, error) {
 	rows, err := db.pool.Query(ctx,
 		`SELECT segment_id, start_ts, end_ts, has_motion
 		 FROM segments
 		 WHERE device_id = $1 AND start_ts >= $2 AND start_ts <= $3
-		 ORDER BY start_ts`,
+		 ORDER BY start_ts
+		 LIMIT 50000`,
 		deviceID, int64(fromTS), int64(toTS))
 	if err != nil {
 		return nil, fmt.Errorf("list segment coverage: %w", err)

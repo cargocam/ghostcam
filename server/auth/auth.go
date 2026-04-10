@@ -77,6 +77,14 @@ func VerifyPassword(password, encoded string) (bool, error) {
 	return subtle.ConstantTimeCompare(computedHash, expectedHash) == 1, nil
 }
 
+// DummyVerify performs a password hash computation with the same parameters as
+// a real verification. Used to equalize login timing for non-existent users,
+// preventing user enumeration via response latency.
+func DummyVerify(password string) {
+	salt := make([]byte, saltLen)
+	argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+}
+
 func splitDollar(s string) []string {
 	var parts []string
 	start := 0

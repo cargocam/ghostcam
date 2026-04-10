@@ -53,13 +53,18 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
+
 	if user == nil {
+		// Perform a dummy password verification to equalize timing and prevent
+		// user enumeration via response latency differences.
+		auth.DummyVerify(body.Password)
 		slog.Warn("login failed: unknown email", "email", body.Email, "ip", loginIP(r))
 		http.Error(w, "", http.StatusUnauthorized)
 		return
 	}
 
 	if user.DisabledAt != nil {
+		auth.DummyVerify(body.Password)
 		slog.Warn("login failed: account disabled", "email", body.Email, "ip", loginIP(r))
 		http.Error(w, "", http.StatusUnauthorized)
 		return
@@ -148,11 +153,13 @@ func (h *Handlers) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-// loginIP extracts the client IP for login logging, preferring X-Forwarded-For
-// (set by Fly.io proxy) over RemoteAddr.
+// loginIP extracts the client IP for login logging. Prefers Fly-Client-IP
+// (trusted, set by Fly.io proxy) over X-Forwarded-For.
 func loginIP(r *http.Request) string {
+	if fci := r.Header.Get("Fly-Client-IP"); fci != "" {
+		return fci
+	}
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Take first IP (client IP)
 		for i := 0; i < len(xff); i++ {
 			if xff[i] == ',' {
 				return xff[:i]

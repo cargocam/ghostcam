@@ -200,6 +200,10 @@ The server runs several background goroutines:
 | Segment retention | 1 hour | Deletes segments older than `GHOSTCAM_SEGMENT_RETENTION_DAYS` (default 30) from S3 and Postgres, 100 at a time |
 | Stale camera cleanup | 6 hours | Deletes unclaimed cameras older than 24h and expired provision tokens |
 
+## Deployment Model
+
+Ghostcam is designed as a **single-instance deployment** — one server process behind Fly.io's reverse proxy, one Postgres, one Redis. It is not designed for horizontal scaling (no distributed locks, no shared-nothing architecture). The server is stateless in the HTTP sense (JWT auth, no session table) but relies on a single Redis for SSE pub/sub and telemetry streams. If scaling beyond one instance is needed, SSE fan-out and Redis pub/sub would need to move to an external broker.
+
 ## Architecture
 
 The server is a stateless HTTP API (Go/chi). Cameras upload MPEG-TS segments directly to S3 via presigned PUT URLs and POST telemetry over HTTP. Viewers stream HLS from the server, which generates manifests on the fly and serves segment requests via 302 redirects to S3 (re-presigning on each request to avoid mid-stream URL expiry).

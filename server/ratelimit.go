@@ -87,11 +87,16 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// clientIP extracts the client IP from the request, preferring X-Forwarded-For
-// (Fly.io sets this) and falling back to RemoteAddr.
+// clientIP extracts the client IP from the request. Prefers Fly-Client-IP
+// (trusted, set by Fly.io proxy and cannot be spoofed by clients) over
+// X-Forwarded-For (can be forged when not behind a reverse proxy).
 func clientIP(r *http.Request) string {
+	// Fly.io's trusted client IP header — cannot be spoofed
+	if fci := r.Header.Get("Fly-Client-IP"); fci != "" {
+		return fci
+	}
+	// X-Forwarded-For — only safe behind a trusted proxy, but use as fallback
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Take the first IP in the chain (client IP)
 		for i := 0; i < len(xff); i++ {
 			if xff[i] == ',' {
 				return xff[:i]
