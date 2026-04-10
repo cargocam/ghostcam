@@ -125,16 +125,20 @@ jobs:
 
       - name: Start the live stack
         env:
-          # GITHUB_ACTIONS runners don't have a meaningful LAN IP. Use
-          # loopback — presigned URLs written against 127.0.0.1:9000 are
-          # reachable from the same host because MinIO binds to
-          # 0.0.0.0:9000 via the compose port mapping.
-          GHOSTCAM_PUBLIC_IP: 127.0.0.1
           # Explicit empty so the `-` default doesn't kick in. This
           # keeps effectiveTier's dev-mode fallback active, which means
           # the admin is unlimited and all 3 test cameras provision.
           STRIPE_SECRET_KEY: ""
         run: |
+          # Presigned URLs need a host that's reachable from BOTH the
+          # camera containers (via container→host routing) AND any
+          # browser-side code on the runner itself. 127.0.0.1 fails from
+          # inside containers (it points at the container's own loopback).
+          # The runner's eth0 IP is the stable choice on Linux: from a
+          # container it routes through the bridge gateway back to the
+          # host; from the host it's its own address.
+          export GHOSTCAM_PUBLIC_IP=$(hostname -I | awk '{print $1}')
+          echo "GHOSTCAM_PUBLIC_IP=$GHOSTCAM_PUBLIC_IP" >> $GITHUB_ENV
           docker compose --profile test up -d
           docker compose ps
 
@@ -180,9 +184,13 @@ jobs:
       - name: Tear down
         if: always()
         env:
-          GHOSTCAM_PUBLIC_IP: 127.0.0.1
           STRIPE_SECRET_KEY: ""
-        run: docker compose --profile test down -v
+        run: |
+          # GHOSTCAM_PUBLIC_IP was written to $GITHUB_ENV by the "Start
+          # the live stack" step above, so we inherit it here. Fall back
+          # to the eth0 lookup in the rare case that step failed early.
+          export GHOSTCAM_PUBLIC_IP=${GHOSTCAM_PUBLIC_IP:-$(hostname -I | awk '{print $1}')}
+          docker compose --profile test down -v
 
   deploy:
     needs: [go, ui, docker, e2e]

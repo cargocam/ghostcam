@@ -117,7 +117,6 @@ services:
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
     volumes:
       - camera-1-data:/var/ghostcam
-      - ./docker/test-loop.mp4:/var/ghostcam/test-loop.mp4:ro
     command: ["--test-source"]
 
   camera-2:
@@ -134,7 +133,6 @@ services:
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
     volumes:
       - camera-2-data:/var/ghostcam
-      - ./docker/test-loop.mp4:/var/ghostcam/test-loop.mp4:ro
     command: ["--test-source"]
 
   camera-3:
@@ -151,8 +149,15 @@ services:
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
     volumes:
       - camera-3-data:/var/ghostcam
-      - ./docker/test-loop.mp4:/var/ghostcam/test-loop.mp4:ro
     command: ["--test-source"]
+
+  # Local dev optimization: drop docker/test-loop.mp4 into the repo and add
+  # a docker-compose.override.yml that bind-mounts it into each camera's
+  # /var/ghostcam/test-loop.mp4. The camera will prefer it over ffmpeg's
+  # CPU-intensive testsrc2 filter. CI deliberately does NOT mount this
+  # file — the file is .gitignored so a committed bind mount would create
+  # an empty directory at the host path on a fresh checkout, which then
+  # mounts as a directory inside the container and crashes ffmpeg.
 
   stripe-webhooks:
     image: stripe/stripe-cli:latest
