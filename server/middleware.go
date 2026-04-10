@@ -50,7 +50,9 @@ func (a *App) viewerAuth(next http.Handler) http.Handler {
 				tokenHash := auth.HMACToken(token, a.HMACSecret)
 				record, err := a.DB.VerifyAPIToken(ctx, tokenHash)
 				if err == nil && record != nil {
-					now := time.Now().Unix()
+				ctx = context.WithValue(ctx, keyUserID, record.UserID)
+				next.ServeHTTP(w, r.WithContext(ctx))
+				return
 					if record.ExpiresAt == nil || *record.ExpiresAt > now {
 						ctx = context.WithValue(ctx, keyUserID, record.UserID)
 						next.ServeHTTP(w, r.WithContext(ctx))
