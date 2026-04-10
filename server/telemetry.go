@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/cargocam/ghostcam/common"
+	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/cargocam/ghostcam/server/redis"
 	"github.com/go-chi/chi/v5"
 )
@@ -98,7 +99,5 @@ func (a *App) GetTelemetryRange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, struct {
-		Entries []redis.TelemetryEntry `json:"entries"`
-	}{Entries: entries})
+	writeJSON(w, http.StatusOK, apitypes.TelemetryRangeResponse{Entries: entries})
 }

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/cargocam/ghostcam/server/redis"
 	"github.com/go-chi/chi/v5"
 )
@@ -14,7 +15,7 @@ import (
 func (a *App) ListEvents(w http.ResponseWriter, r *http.Request) {
 	userID := getUserID(r)
 	if a.Redis == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"events": []any{}})
+		writeJSON(w, http.StatusOK, apitypes.ListEventsResponse{Events: []apitypes.EventEntry{}})
 		return
 	}
 
@@ -29,20 +30,23 @@ func (a *App) ListEvents(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
+	if events == nil {
+		events = []apitypes.EventEntry{}
+	}
 
-	writeJSON(w, http.StatusOK, map[string]any{"events": events})
+	writeJSON(w, http.StatusOK, apitypes.ListEventsResponse{Events: events})
 }
 
 // GetUnreadCount handles GET /api/v1/events/unread
 func (a *App) GetUnreadCount(w http.ResponseWriter, r *http.Request) {
 	userID := getUserID(r)
 	if a.Redis == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"count": 0})
+		writeJSON(w, http.StatusOK, apitypes.UnreadCountResponse{Count: 0})
 		return
 	}
 
 	count, _ := redis.UnreadCount(r.Context(), a.Redis, userID)
-	writeJSON(w, http.StatusOK, map[string]any{"count": count})
+	writeJSON(w, http.StatusOK, apitypes.UnreadCountResponse{Count: count})
 }
 
 // MarkEventRead handles PATCH /api/v1/events/{eventID}/read
@@ -61,7 +65,7 @@ func (a *App) MarkEventRead(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	syncPayload, _ := json.Marshal(map[string]string{"action": "read", "event_id": eventID})
+	syncPayload, _ := json.Marshal(apitypes.EventsSyncPayload{Action: "read", EventID: eventID})
 	a.Redis.Publish(ctx, fmt.Sprintf("events_sync:%s", userID), syncPayload)
 
 	w.WriteHeader(http.StatusOK)
@@ -78,7 +82,7 @@ func (a *App) MarkAllEventsRead(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	redis.MarkAllRead(ctx, a.Redis, userID)
 
-	syncPayload, _ := json.Marshal(map[string]string{"action": "read_all"})
+	syncPayload, _ := json.Marshal(apitypes.EventsSyncPayload{Action: "read_all"})
 	a.Redis.Publish(ctx, fmt.Sprintf("events_sync:%s", userID), syncPayload)
 
 	w.WriteHeader(http.StatusOK)
@@ -96,7 +100,7 @@ func (a *App) DismissEvent(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	redis.DismissEvent(ctx, a.Redis, userID, eventID)
 
-	syncPayload, _ := json.Marshal(map[string]string{"action": "dismiss", "event_id": eventID})
+	syncPayload, _ := json.Marshal(apitypes.EventsSyncPayload{Action: "dismiss", EventID: eventID})
 	a.Redis.Publish(ctx, fmt.Sprintf("events_sync:%s", userID), syncPayload)
 
 	w.WriteHeader(http.StatusOK)

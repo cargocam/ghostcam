@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cargocam/ghostcam/common"
+	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/cargocam/ghostcam/server/auth"
 	"github.com/cargocam/ghostcam/server/db"
 	"github.com/cargocam/ghostcam/server/redis"
@@ -13,23 +15,6 @@ import (
 )
 
 const provisionTokenTTLSecs = 24 * 3600 // 24 hours
-
-type cameraResponse struct {
-	DeviceID      string                `json:"device_id"`
-	DisplayName   string                `json:"display_name"`
-	EnrolledAt    uint64                `json:"enrolled_at"`
-	LastSeenAt    *int64                `json:"last_seen_at,omitempty"`
-	Provisioned   bool                  `json:"provisioned"`
-	Notes         *string               `json:"notes,omitempty"`
-	Resolution    string                `json:"resolution"`
-	RecordingMode string                `json:"recording_mode"`
-	Telemetry     *redis.TelemetryEntry `json:"telemetry,omitempty"`
-}
-
-type enrollResponse struct {
-	Token     string `json:"token"`
-	ExpiresAt uint64 `json:"expires_at"`
-}
 
 // ListCameras handles GET /api/v1/cameras.
 func (a *App) ListCameras(w http.ResponseWriter, r *http.Request) {
@@ -43,9 +28,9 @@ func (a *App) ListCameras(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	resp := make([]cameraResponse, 0, len(cameras))
+	resp := make([]apitypes.CameraResponse, 0, len(cameras))
 	for _, c := range cameras {
-		cr := cameraResponse{
+		cr := apitypes.CameraResponse{
 			DeviceID:      c.DeviceID,
 			DisplayName:   c.DisplayName,
 			EnrolledAt:    uint64(c.EnrolledAt),
@@ -102,7 +87,7 @@ func (a *App) Enroll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("audit", "event_type", "enrollment_started", "user_id", userID)
-	writeJSON(w, http.StatusOK, enrollResponse{Token: rawToken, ExpiresAt: expiresAt})
+	writeJSON(w, http.StatusOK, apitypes.EnrollResponse{Token: rawToken, ExpiresAt: expiresAt})
 }
 
 // ownedCamera looks up `deviceID` and verifies the authenticated viewer owns
@@ -134,7 +119,7 @@ func (a *App) GetCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, cameraResponse{
+	writeJSON(w, http.StatusOK, apitypes.CameraResponse{
 		DeviceID:      camera.DeviceID,
 		DisplayName:   camera.DisplayName,
 		EnrolledAt:    uint64(camera.EnrolledAt),
@@ -146,13 +131,6 @@ func (a *App) GetCamera(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-type updateCameraRequest struct {
-	DisplayName   *string `json:"display_name,omitempty"`
-	Notes         *string `json:"notes,omitempty"`
-	Resolution    *string `json:"resolution,omitempty"`
-	RecordingMode *string `json:"recording_mode,omitempty"`
-}
-
 // UpdateCamera handles PATCH /api/v1/cameras/{deviceID}.
 func (a *App) UpdateCamera(w http.ResponseWriter, r *http.Request) {
 	deviceID := chi.URLParam(r, "deviceID")
@@ -161,7 +139,7 @@ func (a *App) UpdateCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var body updateCameraRequest
+	var body apitypes.UpdateCameraRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -198,15 +176,16 @@ func (a *App) UpdateCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Enqueue commands for settings that require camera restart.
+	// Enqueue commands for settings that require camera restart. These use
+	// the camera-server command contract in common.CameraCommand.
 	if body.Resolution != nil && *body.Resolution != camera.Resolution {
-		cmd, _ := json.Marshal(map[string]string{"type": "set_resolution", "resolution": *body.Resolution})
+		cmd, _ := json.Marshal(common.CameraCommand{Type: "set_resolution", Resolution: *body.Resolution})
 		if err := a.DB.EnqueueCommand(ctx, deviceID, cmd); err != nil {
 			slog.Error("enqueue set_resolution failed", "error", err)
 		}
 	}
 	if body.RecordingMode != nil && *body.RecordingMode != camera.RecordingMode {
-		cmd, _ := json.Marshal(map[string]string{"type": "set_recording_mode", "mode": *body.RecordingMode})
+		cmd, _ := json.Marshal(common.CameraCommand{Type: "set_recording_mode", Mode: *body.RecordingMode})
 		if err := a.DB.EnqueueCommand(ctx, deviceID, cmd); err != nil {
 			slog.Error("enqueue set_recording_mode failed", "error", err)
 		}

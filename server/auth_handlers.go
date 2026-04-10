@@ -7,20 +7,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/cargocam/ghostcam/server/auth"
 )
 
 const jwtTTL = 30 * 24 * time.Hour // 30 days
 const cookieMaxAge = 30 * 86400
-
-type loginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-}
-
-type loginResponse struct {
-	UserID string `json:"user_id"`
-}
 
 func (a *App) setAuthCookie(w http.ResponseWriter, userID, email string) {
 	token := auth.SignJWT(userID, email, a.HMACSecret, jwtTTL)
@@ -36,7 +28,7 @@ func (a *App) setAuthCookie(w http.ResponseWriter, userID, email string) {
 
 // Login handles POST /api/v1/auth/login.
 func (a *App) Login(w http.ResponseWriter, r *http.Request) {
-	var body loginRequest
+	var body apitypes.LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -80,7 +72,7 @@ func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 	slog.Info("audit", "event_type", "auth_success", "user_id", user.UserID)
 
 	a.setAuthCookie(w, user.UserID, user.Email)
-	writeJSON(w, http.StatusOK, loginResponse{UserID: user.UserID})
+	writeJSON(w, http.StatusOK, apitypes.LoginResponse{UserID: user.UserID})
 }
 
 // Register handles POST /api/v1/auth/register.
@@ -100,16 +92,11 @@ func (a *App) Logout(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
-type changePasswordRequest struct {
-	CurrentPassword string `json:"current_password"`
-	NewPassword     string `json:"new_password"`
-}
-
 // ChangePassword handles PATCH /api/v1/auth/password.
 func (a *App) ChangePassword(w http.ResponseWriter, r *http.Request) {
 	userID := getUserID(r)
 
-	var body changePasswordRequest
+	var body apitypes.ChangePasswordRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return

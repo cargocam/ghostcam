@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/cargocam/ghostcam/server/billing"
 	"github.com/cargocam/ghostcam/server/db"
 	"github.com/cargocam/ghostcam/server/redis"
@@ -23,33 +24,25 @@ func (a *App) GetSubscription(w http.ResponseWriter, r *http.Request) {
 	sub, _ := a.DB.GetSubscription(r.Context(), userID)
 	tierID := effectiveTier(sub, a.stripeConfigured())
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"billing_enabled": a.stripeConfigured(),
-		"tier":            tierID,
+	writeJSON(w, http.StatusOK, apitypes.SubscriptionResponse{
+		BillingEnabled: a.stripeConfigured(),
+		Tier:           tierID,
 	})
 }
 
 // ListTiers handles GET /api/v1/billing/tiers.
 func (a *App) ListTiers(w http.ResponseWriter, _ *http.Request) {
 	tiers := billing.AllTiers()
-	result := make([]map[string]any, 0, len(tiers))
+	result := make([]apitypes.TierInfo, 0, len(tiers))
 	for _, t := range tiers {
-		result = append(result, map[string]any{
-			"id":           t.ID,
-			"name":         t.Name,
-			"camera_limit": t.CameraLimit,
-			"storage_gb":   t.StorageLimitGB,
+		result = append(result, apitypes.TierInfo{
+			ID:          t.ID,
+			Name:        t.Name,
+			CameraLimit: t.CameraLimit,
+			StorageGB:   t.StorageLimitGB,
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"tiers": result,
-	})
-}
-
-type checkoutRequest struct {
-	Tier       string `json:"tier"`
-	SuccessURL string `json:"success_url"`
-	CancelURL  string `json:"cancel_url"`
+	writeJSON(w, http.StatusOK, apitypes.ListTiersResponse{Tiers: result})
 }
 
 // CreateCheckout handles POST /api/v1/billing/checkout.
@@ -62,7 +55,7 @@ func (a *App) CreateCheckout(w http.ResponseWriter, r *http.Request) {
 
 	userID := getUserID(r)
 
-	var body checkoutRequest
+	var body apitypes.CheckoutRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -101,11 +94,7 @@ func (a *App) CreateCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"url": session.URL})
-}
-
-type portalRequest struct {
-	ReturnURL string `json:"return_url"`
+	writeJSON(w, http.StatusOK, apitypes.CheckoutResponse{URL: session.URL})
 }
 
 // CreatePortal handles POST /api/v1/billing/portal.
@@ -117,7 +106,7 @@ func (a *App) CreatePortal(w http.ResponseWriter, r *http.Request) {
 
 	userID := getUserID(r)
 
-	var body portalRequest
+	var body apitypes.PortalRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -146,7 +135,7 @@ func (a *App) CreatePortal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"url": session.URL})
+	writeJSON(w, http.StatusOK, apitypes.PortalResponse{URL: session.URL})
 }
 
 // GetUsage handles GET /api/v1/billing/usage.
@@ -169,11 +158,11 @@ func (a *App) GetUsage(w http.ResponseWriter, r *http.Request) {
 	sub, _ := a.DB.GetSubscription(ctx, userID)
 	tier := resolveTier(effectiveTier(sub, a.stripeConfigured()))
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"cameras_count":    cameraCount,
-		"storage_bytes":    storageBytes,
-		"camera_limit":     tier.CameraLimit,
-		"storage_limit_gb": tier.StorageLimitGB,
+	writeJSON(w, http.StatusOK, apitypes.UsageResponse{
+		CamerasCount:   cameraCount,
+		StorageBytes:   storageBytes,
+		CameraLimit:    tier.CameraLimit,
+		StorageLimitGB: tier.StorageLimitGB,
 	})
 }
 
@@ -426,20 +415,17 @@ func (a *App) notifyCameraLimitExceeded(ctx context.Context, userID, tierID stri
 	if a.Redis == nil {
 		return
 	}
-	payload, _ := json.Marshal(map[string]any{
-		"user_id":      userID,
-		"camera_count": count,
-		"camera_limit": *tier.CameraLimit,
-		"tier":         tierID,
-	})
+	stored := apitypes.CameraLimitExceededEvent{
+		UserID:      userID,
+		CameraCount: count,
+		CameraLimit: *tier.CameraLimit,
+		Tier:        tierID,
+	}
+	payload, _ := json.Marshal(stored)
 	eventID, _ := redis.WriteEvent(ctx, a.Redis, userID, "", "camera_limit_exceeded", string(payload))
-	withID, _ := json.Marshal(map[string]any{
-		"event_id":     eventID,
-		"user_id":      userID,
-		"camera_count": count,
-		"camera_limit": *tier.CameraLimit,
-		"tier":         tierID,
-	})
+	live := stored
+	live.EventID = eventID
+	withID, _ := json.Marshal(live)
 	a.Redis.Publish(ctx, fmt.Sprintf("storage_capped:%s", userID), withID)
 	slog.Info("camera limit exceeded after tier change", "user_id", userID, "count", count, "limit", *tier.CameraLimit, "tier", tierID)
 }

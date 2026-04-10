@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/cargocam/ghostcam/server/s3"
 	"github.com/go-chi/chi/v5"
 )
@@ -178,17 +179,6 @@ func (a *App) GetSegment(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, url, http.StatusFound)
 }
 
-type coverageSegment struct {
-	ID        string `json:"id"`
-	StartMs   uint64 `json:"start_ms"`
-	EndMs     uint64 `json:"end_ms"`
-	HasMotion bool   `json:"has_motion"`
-}
-
-type coverageResponse struct {
-	Segments []coverageSegment `json:"segments"`
-}
-
 // GetCoverage handles GET /hls/{deviceID}/coverage.
 func (a *App) GetCoverage(w http.ResponseWriter, r *http.Request) {
 	deviceID := chi.URLParam(r, "deviceID")
@@ -210,9 +200,9 @@ func (a *App) GetCoverage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	coverage := make([]coverageSegment, 0, len(segments))
+	coverage := make([]apitypes.CoverageSegment, 0, len(segments))
 	for _, s := range segments {
-		coverage = append(coverage, coverageSegment{
+		coverage = append(coverage, apitypes.CoverageSegment{
 			ID:        s.SegmentID,
 			StartMs:   s.StartTS,
 			EndMs:     s.EndTS,
@@ -220,7 +210,7 @@ func (a *App) GetCoverage(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	writeJSON(w, http.StatusOK, coverageResponse{Segments: coverage})
+	writeJSON(w, http.StatusOK, apitypes.CoverageResponse{Segments: coverage})
 }
 
 func parseQueryUint64(r *http.Request, key string, def uint64) uint64 {

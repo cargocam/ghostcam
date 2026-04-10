@@ -8,14 +8,10 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/cargocam/ghostcam/server/redis"
 	goredis "github.com/redis/go-redis/v9"
 )
-
-type telemetryEvent struct {
-	DeviceID  string                `json:"device_id"`
-	Telemetry *redis.TelemetryEntry `json:"telemetry"`
-}
 
 // SSE handles GET /events — Server-Sent Events stream for realtime telemetry.
 //
@@ -69,7 +65,7 @@ func (a *App) SSE(w http.ResponseWriter, r *http.Request) {
 		deviceID := keyToDevice[k]
 		entry, err := redis.QueryTelemetryLatest(ctx, rdb, deviceID)
 		if err == nil && entry != nil {
-			payload := telemetryEvent{DeviceID: deviceID, Telemetry: entry}
+			payload := apitypes.TelemetryStreamEvent{DeviceID: deviceID, Telemetry: entry}
 			jsonBytes, _ := json.Marshal(payload)
 			fmt.Fprintf(w, "event: telemetry\ndata: %s\n\n", jsonBytes)
 		}
@@ -176,7 +172,7 @@ func (a *App) SSE(w http.ResponseWriter, r *http.Request) {
 					continue
 				}
 
-				payload := telemetryEvent{
+				payload := apitypes.TelemetryStreamEvent{
 					DeviceID:  deviceID,
 					Telemetry: entry,
 				}

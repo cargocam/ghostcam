@@ -7,29 +7,12 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/cargocam/ghostcam/server/auth"
 	"github.com/cargocam/ghostcam/server/db"
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 )
-
-type tokenResponse struct {
-	TokenID    string `json:"token_id"`
-	Label      string `json:"label"`
-	CreatedAt  int64  `json:"created_at"`
-	ExpiresAt  *int64 `json:"expires_at,omitempty"`
-	LastUsedAt *int64 `json:"last_used_at,omitempty"`
-}
-
-type createTokenRequest struct {
-	Label     string `json:"label"`
-	ExpiresAt *int64 `json:"expires_at,omitempty"`
-}
-
-type createTokenResponse struct {
-	TokenID  string `json:"token_id"`
-	RawToken string `json:"token"`
-}
 
 // ListTokens handles GET /api/v1/tokens.
 func (a *App) ListTokens(w http.ResponseWriter, r *http.Request) {
@@ -42,9 +25,9 @@ func (a *App) ListTokens(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := make([]tokenResponse, 0, len(tokens))
+	resp := make([]apitypes.TokenInfo, 0, len(tokens))
 	for _, t := range tokens {
-		resp = append(resp, tokenResponse{
+		resp = append(resp, apitypes.TokenInfo{
 			TokenID:    t.TokenID,
 			Label:      t.Label,
 			CreatedAt:  t.CreatedAt,
@@ -59,7 +42,7 @@ func (a *App) ListTokens(w http.ResponseWriter, r *http.Request) {
 func (a *App) CreateToken(w http.ResponseWriter, r *http.Request) {
 	userID := getUserID(r)
 
-	var body createTokenRequest
+	var body apitypes.CreateTokenRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -92,7 +75,7 @@ func (a *App) CreateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, createTokenResponse{
+	writeJSON(w, http.StatusCreated, apitypes.CreateTokenResponse{
 		TokenID:  tokenID,
 		RawToken: rawToken,
 	})

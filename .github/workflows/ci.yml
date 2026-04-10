@@ -46,6 +46,12 @@ jobs:
         if: needs.changes.outputs.camera == 'true'
         run: go build ./camera
       - run: go test ./...
+      # Hard-fail drift check: regenerate TypeScript types from the Go
+      # source of truth (common/ + server/apitypes/) and fail if the
+      # checked-in ui/src/lib/api-types/ files no longer match. Run
+      # `make generate-types` locally and commit the diff to fix.
+      - name: Check api-types are in sync with Go source
+        run: make check-types
 
   ui:
     needs: changes

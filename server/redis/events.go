@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/cargocam/ghostcam/server/apitypes"
 	goredis "github.com/redis/go-redis/v9"
 )
 
@@ -17,17 +18,6 @@ const (
 	eventRetentionMs   = 7 * 24 * 60 * 60 * 1000 // 7 days
 	eventSetTTL        = 7 * 24 * time.Hour
 )
-
-// EventEntry represents a persisted event from a Redis Stream.
-type EventEntry struct {
-	ID        string `json:"id"`
-	Type      string `json:"type"`
-	DeviceID  string `json:"device_id"`
-	Data      string `json:"data"` // raw JSON string
-	CreatedAt uint64 `json:"created_at"`
-	Read      bool   `json:"read"`
-	Dismissed bool   `json:"dismissed"`
-}
 
 // WriteEvent persists an event to the user's event stream.
 // Returns the Redis stream entry ID.
@@ -59,7 +49,7 @@ func WriteEvent(ctx context.Context, rdb *goredis.Client, userID, deviceID, even
 // ListEvents returns recent events for a user, newest first.
 // Pass "+" for beforeID to start from the latest.
 // Dismissed events are excluded from results.
-func ListEvents(ctx context.Context, rdb *goredis.Client, userID string, count int64, beforeID string) ([]EventEntry, error) {
+func ListEvents(ctx context.Context, rdb *goredis.Client, userID string, count int64, beforeID string) ([]apitypes.EventEntry, error) {
 	key := eventKeyPrefix + userID
 	if beforeID == "" {
 		beforeID = "+"
@@ -83,14 +73,14 @@ func ListEvents(ctx context.Context, rdb *goredis.Client, userID string, count i
 		dismissMap[id] = true
 	}
 
-	entries := make([]EventEntry, 0, len(results))
+	entries := make([]apitypes.EventEntry, 0, len(results))
 	for _, msg := range results {
 		if dismissMap[msg.ID] {
 			continue
 		}
 		// Parse stream entry ID to get timestamp
 		ts := parseStreamIDTimestamp(msg.ID)
-		entries = append(entries, EventEntry{
+		entries = append(entries, apitypes.EventEntry{
 			ID:        msg.ID,
 			Type:      fieldStr(msg.Values, "type"),
 			DeviceID:  fieldStr(msg.Values, "device_id"),

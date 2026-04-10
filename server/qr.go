@@ -7,27 +7,17 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/cargocam/ghostcam/common"
+	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/cargocam/ghostcam/server/auth"
 )
-
-type qrRequest struct {
-	WifiSSID     string `json:"wifi_ssid,omitempty"`
-	WifiPassword string `json:"wifi_password,omitempty"`
-	TTLHours     uint64 `json:"ttl_hours,omitempty"`
-}
-
-type qrResponse struct {
-	Payload   string `json:"payload"`
-	Token     string `json:"token"`
-	ExpiresAt int64  `json:"expires_at"`
-}
 
 // EnrollmentQR handles GET/POST /api/v1/cameras/enroll/qr.
 // Returns JSON with the QR payload string for client-side QR rendering.
 func (a *App) EnrollmentQR(w http.ResponseWriter, r *http.Request) {
 	userID := getUserID(r)
 
-	var body qrRequest
+	var body apitypes.QRRequest
 	if r.Method == http.MethodPost && r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
@@ -56,22 +46,24 @@ func (a *App) EnrollmentQR(w http.ResponseWriter, r *http.Request) {
 	if serverURL == "" {
 		serverURL = fmt.Sprintf("https://%s", r.Host)
 	}
-	payload := map[string]string{
-		"s": serverURL,
-		"t": rawToken,
+	payload := common.QRPayload{
+		Server:       serverURL,
+		Token:        rawToken,
+		WifiSSID:     body.WifiSSID,
+		WifiPassword: body.WifiPassword,
 	}
-	if body.WifiSSID != "" {
-		payload["w"] = body.WifiSSID
-		if body.WifiPassword != "" {
-			payload["p"] = body.WifiPassword
-		}
+	// Only the password is dropped when the SSID is empty — WifiPassword on
+	// its own is meaningless. common.QRPayload's omitempty tags handle the
+	// rest.
+	if payload.WifiSSID == "" {
+		payload.WifiPassword = ""
 	}
 
 	payloadBytes, _ := json.Marshal(payload)
 
 	slog.Info("audit", "event_type", "enrollment_started", "user_id", userID)
 
-	writeJSON(w, http.StatusOK, qrResponse{
+	writeJSON(w, http.StatusOK, apitypes.QRResponse{
 		Payload:   string(payloadBytes),
 		Token:     rawToken,
 		ExpiresAt: expiresAt,

@@ -4,7 +4,7 @@
 	import { transportStore } from '$lib/stores/transport.svelte.js';
 	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 	import { alertsStore } from '$lib/stores/alerts.svelte.js';
-	import { type TelemetryEntry } from '$lib/signaling.js';
+	import type { TelemetryEntry } from '$lib/api-types';
 	import { fetchTelemetryRangeCached, nearestTelemetryEntryWithin } from '$lib/telemetry-history.js';
 	import Sparkline from '$lib/components/ui/Sparkline.svelte';
 	import { cn } from '$lib/utils.js';

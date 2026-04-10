@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/cargocam/ghostcam/common"
+	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/cargocam/ghostcam/server/billing"
 	"github.com/cargocam/ghostcam/server/db"
 	"github.com/cargocam/ghostcam/server/redis"
@@ -123,37 +124,34 @@ func (a *App) Presign(w http.ResponseWriter, r *http.Request) {
 				a.Redis.Expire(ctx, storageKey, 5*time.Minute)
 			}
 
-			covSegments := make([]map[string]any, 0, len(body.Uploaded))
+			covSegments := make([]apitypes.CoverageSegment, 0, len(body.Uploaded))
 			for _, u := range body.Uploaded {
-				covSegments = append(covSegments, map[string]any{
-					"id":         u.SegmentID,
-					"start_ms":   u.StartTS,
-					"end_ms":     u.EndTS,
-					"has_motion": u.HasMotion,
+				covSegments = append(covSegments, apitypes.CoverageSegment{
+					ID:        u.SegmentID,
+					StartMs:   u.StartTS,
+					EndMs:     u.EndTS,
+					HasMotion: u.HasMotion,
 				})
 				if u.HasMotion {
-					motionPayload, _ := json.Marshal(map[string]any{
-						"device_id":  deviceID,
-						"segment_id": u.SegmentID,
-						"start_ts":   u.StartTS,
-						"end_ts":     u.EndTS,
-					})
+					stored := apitypes.MotionEvent{
+						DeviceID:  deviceID,
+						SegmentID: u.SegmentID,
+						StartTS:   u.StartTS,
+						EndTS:     u.EndTS,
+					}
+					motionPayload, _ := json.Marshal(stored)
 					eventID, _ := redis.WriteEvent(ctx, a.Redis, userID, deviceID, "motion_detected", string(motionPayload))
-					motionWithID, _ := json.Marshal(map[string]any{
-						"event_id":   eventID,
-						"device_id":  deviceID,
-						"segment_id": u.SegmentID,
-						"start_ts":   u.StartTS,
-						"end_ts":     u.EndTS,
-					})
+					live := stored
+					live.EventID = eventID
+					motionWithID, _ := json.Marshal(live)
 					if err := a.Redis.Publish(ctx, fmt.Sprintf("motion:%s", userID), motionWithID).Err(); err != nil {
 						slog.Debug("failed to publish motion event", "error", err)
 					}
 				}
 			}
-			covPayload, _ := json.Marshal(map[string]any{
-				"device_id": deviceID,
-				"segments":  covSegments,
+			covPayload, _ := json.Marshal(apitypes.CoveragePayload{
+				DeviceID: deviceID,
+				Segments: covSegments,
 			})
 			a.Redis.Publish(ctx, fmt.Sprintf("coverage:%s", userID), covPayload)
 		}
@@ -222,20 +220,17 @@ func (a *App) Presign(w http.ResponseWriter, r *http.Request) {
 				dedupeKey := "storage_capped_notified:" + deviceID
 				set, _ := a.Redis.SetNX(ctx, dedupeKey, "1", 5*time.Minute).Result()
 				if set {
-					capPayload, _ := json.Marshal(map[string]any{
-						"user_id":       userID,
-						"device_id":     deviceID,
-						"storage_bytes": storageLimitBytes,
-						"limit_gb":      *tier.StorageLimitGB,
-					})
+					stored := apitypes.StorageCappedEvent{
+						UserID:       userID,
+						DeviceID:     deviceID,
+						StorageBytes: storageLimitBytes,
+						LimitGB:      *tier.StorageLimitGB,
+					}
+					capPayload, _ := json.Marshal(stored)
 					eventID, _ := redis.WriteEvent(ctx, a.Redis, userID, deviceID, "storage_capped", string(capPayload))
-					capWithID, _ := json.Marshal(map[string]any{
-						"event_id":      eventID,
-						"user_id":       userID,
-						"device_id":     deviceID,
-						"storage_bytes": storageLimitBytes,
-						"limit_gb":      *tier.StorageLimitGB,
-					})
+					live := stored
+					live.EventID = eventID
+					capWithID, _ := json.Marshal(live)
 					a.Redis.Publish(ctx, fmt.Sprintf("storage_capped:%s", userID), capWithID)
 				}
 			}

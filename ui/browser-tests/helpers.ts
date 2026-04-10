@@ -7,28 +7,39 @@
 // state, route transitions, DOM rendering against a known response shape —
 // and nothing downstream of the HTTP boundary.
 //
-// This means the fixtures can drift silently from the real server's response
-// shapes. Any check that depends on the actual camera-server contract
-// (tier enforcement, auth, segment confirmation, SSE delivery, HLS playback)
-// needs a real backend and does not belong here.
+// EVERY fixture body below is typed against the tygo-generated
+// $lib/api-types/ file. TypeScript refuses to compile a fixture that's
+// missing a required field, has an extra field, or uses the wrong type.
+// When a server struct changes, `make generate-types` regenerates the TS
+// types and this file stops compiling until the fixtures are updated.
+// That's the point — the type system is the drift detector.
 
 import type { Page } from '@playwright/test';
+import type {
+  CameraResponse,
+  CoverageResponse,
+  LoginResponse,
+  TelemetryRangeResponse,
+} from '../src/lib/api-types';
 
 /** Standard mock camera list returned by /api/v1/cameras */
-export const MOCK_CAMERAS = [
+export const MOCK_CAMERAS: CameraResponse[] = [
   {
     device_id: 'cam-001',
     display_name: 'Front Door',
-    group_id: 'default',
-    capabilities: ['video', 'audio'],
-    online: true,
+    enrolled_at: 1_700_000_000_000,
+    last_seen_at: 1_775_000_000,
+    provisioned: true,
+    resolution: '720p',
+    recording_mode: 'constant',
   },
   {
     device_id: 'cam-002',
     display_name: 'Backyard',
-    group_id: 'default',
-    capabilities: ['video'],
-    online: false,
+    enrolled_at: 1_700_000_000_000,
+    provisioned: false,
+    resolution: '720p',
+    recording_mode: 'constant',
   },
 ];
 
@@ -41,11 +52,12 @@ export async function mockApiRoutes(page: Page, { authenticated = false } = {}) 
   await page.route('**/api/v1/auth/login', async (route) => {
     const body = route.request().postDataJSON();
     if (body?.email === 'test@example.com' && body?.password === 'correct-password') {
+      const response: LoginResponse = { user_id: 'mock-user-1' };
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ ok: true }),
-        headers: { 'Set-Cookie': 'session=mock-session; Path=/' },
+        body: JSON.stringify(response),
+        headers: { 'Set-Cookie': 'ghostcam-token=mock-session; Path=/' },
       });
     } else {
       await route.fulfill({
@@ -78,36 +90,24 @@ export async function mockApiRoutes(page: Page, { authenticated = false } = {}) 
   await page.route('**/hls/**', async (route) => {
     const url = route.request().url();
     if (url.includes('/coverage')) {
+      const response: CoverageResponse = { segments: [] };
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify({ online: true, segments: [] }),
+        body: JSON.stringify(response),
       });
     } else {
       await route.fulfill({ status: 404, body: 'Not found' });
     }
   });
 
-  // Watch endpoint (WebRTC — return a minimal mock)
-  await page.route('**/api/v1/watch', async (route) => {
-    await route.fulfill({
-      status: 200,
-      contentType: 'application/json',
-      body: JSON.stringify({ session_id: 'mock-session-1', sdp_answer: '' }),
-    });
-  });
-
-  // Session teardown
-  await page.route('**/api/v1/session/*', async (route) => {
-    await route.fulfill({ status: 200, body: '{}' });
-  });
-
-  // Telemetry endpoints
+  // Telemetry endpoints — return an empty range response.
   await page.route('**/api/v1/telemetry/**', async (route) => {
+    const response: TelemetryRangeResponse = { entries: [] };
     await route.fulfill({
       status: 200,
       contentType: 'application/json',
-      body: JSON.stringify({ entries: [] }),
+      body: JSON.stringify(response),
     });
   });
 

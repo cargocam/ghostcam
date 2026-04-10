@@ -1,39 +1,20 @@
-import type { GroupInfo, CameraInfo, SubscriptionInfo, UsageInfo } from '$lib/types.js';
-
-interface CoverageSegment {
-	id: string;
-	start_ms: number;
-	end_ms: number;
-	has_motion?: boolean;
-}
-
-interface CoverageResponse {
-	online: boolean;
-	segments: CoverageSegment[];
-}
+import type {
+	CameraResponse,
+	CheckoutResponse,
+	CoverageResponse,
+	EventEntry,
+	ListEventsResponse,
+	PortalResponse,
+	PrepareClipResponse,
+	QRRequest,
+	QRResponse,
+	SubscriptionResponse,
+	TelemetryRangeResponse,
+	UnreadCountResponse,
+	UsageResponse,
+} from '$lib/api-types';
 
 const API_BASE = '/api/v1';
-
-export interface TelemetryEntry {
-	ts: number;
-	server_ts: number;
-	sig?: number;
-	temp?: number;
-	fps?: number;
-	kbps?: number;
-	cpu?: number;
-	mem?: number;
-	uptime?: number;
-	lat?: number;
-	lon?: number;
-	alt?: number;
-	gps_fix?: number;
-}
-
-interface TelemetryPage {
-	entries: TelemetryEntry[];
-	next_cursor?: string;
-}
 
 function headers(): HeadersInit {
 	return {
@@ -41,19 +22,13 @@ function headers(): HeadersInit {
 	};
 }
 
-export async function listCameras(): Promise<CameraInfo[]> {
+// --- Cameras ---
+
+export async function listCameras(): Promise<CameraResponse[]> {
 	const res = await fetch(`${API_BASE}/cameras`, {
 		credentials: 'include',
 	});
 	if (!res.ok) throw new Error(`listCameras failed: ${res.status}`);
-	return res.json();
-}
-
-export async function listGroups(): Promise<GroupInfo[]> {
-	const res = await fetch(`${API_BASE}/groups`, {
-		credentials: 'include',
-	});
-	if (!res.ok) throw new Error(`listGroups failed: ${res.status}`);
 	return res.json();
 }
 
@@ -67,19 +42,19 @@ export async function fetchCoverage(deviceId: string): Promise<CoverageResponse>
 
 // --- Billing ---
 
-export async function getSubscription(): Promise<SubscriptionInfo> {
+export async function getSubscription(): Promise<SubscriptionResponse> {
 	const res = await fetch(`${API_BASE}/billing/subscription`, { credentials: 'include' });
 	if (!res.ok) throw new Error(`getSubscription failed: ${res.status}`);
 	return res.json();
 }
 
-export async function getUsage(): Promise<UsageInfo> {
+export async function getUsage(): Promise<UsageResponse> {
 	const res = await fetch(`${API_BASE}/billing/usage`, { credentials: 'include' });
 	if (!res.ok) throw new Error(`getUsage failed: ${res.status}`);
 	return res.json();
 }
 
-export async function createPortal(returnUrl: string): Promise<{ url: string }> {
+export async function createPortal(returnUrl: string): Promise<PortalResponse> {
 	const res = await fetch(`${API_BASE}/billing/portal`, {
 		method: 'POST',
 		headers: headers(),
@@ -87,6 +62,21 @@ export async function createPortal(returnUrl: string): Promise<{ url: string }> 
 		credentials: 'include',
 	});
 	if (!res.ok) throw new Error(`createPortal failed: ${res.status}`);
+	return res.json();
+}
+
+export async function createCheckout(
+	tier: string,
+	successUrl: string,
+	cancelUrl: string,
+): Promise<CheckoutResponse> {
+	const res = await fetch(`${API_BASE}/billing/checkout`, {
+		method: 'POST',
+		headers: headers(),
+		body: JSON.stringify({ tier, success_url: successUrl, cancel_url: cancelUrl }),
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`createCheckout failed: ${res.status}`);
 	return res.json();
 }
 
@@ -105,8 +95,6 @@ export async function updateCameraSettings(
 	if (!res.ok) throw new Error(`updateCameraSettings failed: ${res.status}`);
 }
 
-// --- Camera Delete ---
-
 export async function deleteCamera(deviceId: string): Promise<void> {
 	const res = await fetch(`${API_BASE}/cameras/${encodeURIComponent(deviceId)}`, {
 		method: 'DELETE',
@@ -115,37 +103,9 @@ export async function deleteCamera(deviceId: string): Promise<void> {
 	if (!res.ok) throw new Error(`deleteCamera failed: ${res.status}`);
 }
 
-// --- Billing Checkout ---
-
-export async function createCheckout(tier: string, successUrl: string, cancelUrl: string): Promise<{ url: string }> {
-	const res = await fetch(`${API_BASE}/billing/checkout`, {
-		method: 'POST',
-		headers: headers(),
-		body: JSON.stringify({ tier, success_url: successUrl, cancel_url: cancelUrl }),
-		credentials: 'include',
-	});
-	if (!res.ok) throw new Error(`createCheckout failed: ${res.status}`);
-	return res.json();
-}
-
 // --- Enrollment QR ---
 
-export interface EnrollQrRequest {
-	wifi_ssid?: string;
-	wifi_password?: string;
-	ttl_hours?: number;
-}
-
-export interface EnrollQrResponse {
-	payload: string;
-	token: string;
-	expires_at: number;
-}
-
-/**
- * Create a provision token and return the QR payload for client-side rendering.
- */
-export async function generateEnrollmentQr(opts?: EnrollQrRequest): Promise<EnrollQrResponse> {
+export async function generateEnrollmentQr(opts?: QRRequest): Promise<QRResponse> {
 	const body = opts ? JSON.stringify(opts) : '{}';
 	const res = await fetch(`${API_BASE}/cameras/enroll/qr`, {
 		method: 'POST',
@@ -167,7 +127,7 @@ export async function fetchTelemetryRange(
 	fromMs: number,
 	toMs: number,
 	limit = 600,
-): Promise<TelemetryPage> {
+): Promise<TelemetryRangeResponse> {
 	const from = Math.max(0, Math.floor(fromMs));
 	const to = Math.max(from, Math.floor(toMs));
 	const params = new URLSearchParams({
@@ -185,29 +145,19 @@ export async function fetchTelemetryRange(
 
 // --- Events / Notifications ---
 
-export interface ServerEvent {
-	id: string;
-	type: string;
-	device_id: string;
-	data: string; // JSON string
-	created_at: number;
-	read: boolean;
-	dismissed: boolean;
-}
-
-export async function fetchEvents(count = 50, before?: string): Promise<ServerEvent[]> {
+export async function fetchEvents(count = 50, before?: string): Promise<EventEntry[]> {
 	const params = new URLSearchParams({ count: String(count) });
 	if (before) params.set('before', before);
 	const res = await fetch(`${API_BASE}/events?${params}`, { credentials: 'include' });
 	if (!res.ok) throw new Error(`fetchEvents failed: ${res.status}`);
-	const data = await res.json();
+	const data: ListEventsResponse = await res.json();
 	return data.events ?? [];
 }
 
 export async function fetchUnreadCount(): Promise<number> {
 	const res = await fetch(`${API_BASE}/events/unread`, { credentials: 'include' });
 	if (!res.ok) return 0;
-	const data = await res.json();
+	const data: UnreadCountResponse = await res.json();
 	return data.count ?? 0;
 }
 
@@ -234,21 +184,11 @@ export async function dismissEvent(eventId: string): Promise<void> {
 
 // --- Clips / Export ---
 
-export interface ClipSegment {
-	id: string;
-	url: string;
-	start_ms: number;
-	end_ms: number;
-	size_bytes: number;
-}
-
-export interface PrepareClipResponse {
-	segments: ClipSegment[];
-	total_bytes: number;
-	duration_ms: number;
-}
-
-export async function prepareClip(deviceId: string, fromMs: number, toMs: number): Promise<PrepareClipResponse> {
+export async function prepareClip(
+	deviceId: string,
+	fromMs: number,
+	toMs: number,
+): Promise<PrepareClipResponse> {
 	const res = await fetch(`${API_BASE}/clips/prepare`, {
 		method: 'POST',
 		headers: headers(),
@@ -259,11 +199,17 @@ export async function prepareClip(deviceId: string, fromMs: number, toMs: number
 	return res.json();
 }
 
-export async function exportTelemetry(deviceId: string, fromMs: number, toMs: number, format: 'csv' | 'json' = 'json'): Promise<Blob> {
+export async function exportTelemetry(
+	deviceId: string,
+	fromMs: number,
+	toMs: number,
+	format: 'csv' | 'json' = 'json',
+): Promise<Blob> {
 	const params = new URLSearchParams({ from: String(fromMs), to: String(toMs), format });
-	const res = await fetch(`${API_BASE}/telemetry/${encodeURIComponent(deviceId)}/export?${params}`, {
-		credentials: 'include',
-	});
+	const res = await fetch(
+		`${API_BASE}/telemetry/${encodeURIComponent(deviceId)}/export?${params}`,
+		{ credentials: 'include' },
+	);
 	if (!res.ok) throw new Error(`exportTelemetry failed: ${res.status}`);
 	return res.blob();
 }

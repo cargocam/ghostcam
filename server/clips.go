@@ -6,35 +6,16 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/cargocam/ghostcam/server/redis"
 	"github.com/cargocam/ghostcam/server/s3"
 	"github.com/go-chi/chi/v5"
 )
 
-type prepareClipRequest struct {
-	DeviceID string `json:"device_id"`
-	FromMs   uint64 `json:"from_ms"`
-	ToMs     uint64 `json:"to_ms"`
-}
-
-type clipSegment struct {
-	ID        string `json:"id"`
-	URL       string `json:"url"`
-	StartMs   uint64 `json:"start_ms"`
-	EndMs     uint64 `json:"end_ms"`
-	SizeBytes uint64 `json:"size_bytes"`
-}
-
-type prepareClipResponse struct {
-	Segments   []clipSegment `json:"segments"`
-	TotalBytes uint64        `json:"total_bytes"`
-	DurationMs uint64        `json:"duration_ms"`
-}
-
 // PrepareClip handles POST /api/v1/clips/prepare.
 // Returns presigned GET URLs for all segments in the requested time range.
 func (a *App) PrepareClip(w http.ResponseWriter, r *http.Request) {
-	var body prepareClipRequest
+	var body apitypes.PrepareClipRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
@@ -63,11 +44,11 @@ func (a *App) PrepareClip(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(segments) == 0 {
-		writeJSON(w, http.StatusOK, prepareClipResponse{Segments: []clipSegment{}, TotalBytes: 0, DurationMs: 0})
+		writeJSON(w, http.StatusOK, apitypes.PrepareClipResponse{Segments: []apitypes.ClipSegment{}, TotalBytes: 0, DurationMs: 0})
 		return
 	}
 
-	result := make([]clipSegment, 0, len(segments))
+	result := make([]apitypes.ClipSegment, 0, len(segments))
 	var totalBytes uint64
 	for _, seg := range segments {
 		url, err := a.S3.PresignGet(ctx, s3.SegmentKey(body.DeviceID, seg.SegmentID))
@@ -75,7 +56,7 @@ func (a *App) PrepareClip(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("prepare clip: presign failed", "segment_id", seg.SegmentID, "error", err)
 			continue
 		}
-		result = append(result, clipSegment{
+		result = append(result, apitypes.ClipSegment{
 			ID:        seg.SegmentID,
 			URL:       url,
 			StartMs:   seg.StartTS,
@@ -87,7 +68,7 @@ func (a *App) PrepareClip(w http.ResponseWriter, r *http.Request) {
 
 	durationMs := segments[len(segments)-1].EndTS - segments[0].StartTS
 
-	writeJSON(w, http.StatusOK, prepareClipResponse{
+	writeJSON(w, http.StatusOK, apitypes.PrepareClipResponse{
 		Segments:   result,
 		TotalBytes: totalBytes,
 		DurationMs: durationMs,
@@ -135,11 +116,11 @@ func (a *App) ExportTelemetry(w http.ResponseWriter, r *http.Request) {
 	} else {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Content-Disposition", "attachment; filename=telemetry.json")
-		json.NewEncoder(w).Encode(map[string]any{"entries": entries})
+		json.NewEncoder(w).Encode(apitypes.TelemetryRangeResponse{Entries: entries})
 	}
 }
 
-func csvRow(e redis.TelemetryEntry) string {
+func csvRow(e apitypes.TelemetryEntry) string {
 	return csvFmt(e.TS) + "," +
 		csvFmt(e.ServerTS) + "," +
 		csvOptUint32(e.CPU) + "," +

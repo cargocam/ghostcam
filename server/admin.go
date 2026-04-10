@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/cargocam/ghostcam/server/s3"
 )
 
@@ -17,14 +18,14 @@ const maxFirmwareSize = 50 * 1024 * 1024 // 50MB
 // Returns the latest firmware version and a presigned download URL from Tigris.
 func (a *App) FirmwareLatest(w http.ResponseWriter, r *http.Request) {
 	if a.Redis == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"release": nil})
+		writeJSON(w, http.StatusOK, apitypes.FirmwareLatestResponse{Release: nil})
 		return
 	}
 
 	ctx := r.Context()
 	version, err := a.Redis.Get(ctx, "firmware:latest:version").Result()
 	if err != nil || version == "" {
-		writeJSON(w, http.StatusOK, map[string]any{"release": nil})
+		writeJSON(w, http.StatusOK, apitypes.FirmwareLatestResponse{Release: nil})
 		return
 	}
 
@@ -32,20 +33,19 @@ func (a *App) FirmwareLatest(w http.ResponseWriter, r *http.Request) {
 	downloadURL, err := a.S3.PresignGet(ctx, key)
 	if err != nil {
 		slog.Warn("firmware: presign GET failed", "version", version, "error", err)
-		writeJSON(w, http.StatusOK, map[string]any{"release": nil})
+		writeJSON(w, http.StatusOK, apitypes.FirmwareLatestResponse{Release: nil})
 		return
 	}
 
 	sha256hex, _ := a.Redis.Get(ctx, "firmware:latest:sha256").Result()
 
-	release := map[string]any{
-		"version":      version,
-		"download_url": downloadURL,
-	}
-	if sha256hex != "" {
-		release["sha256"] = sha256hex
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"release": release})
+	writeJSON(w, http.StatusOK, apitypes.FirmwareLatestResponse{
+		Release: &apitypes.FirmwareRelease{
+			Version:     version,
+			DownloadURL: downloadURL,
+			SHA256:      sha256hex,
+		},
+	})
 }
 
 // FirmwareUpload handles POST /api/v1/admin/firmware (admin only).
@@ -103,19 +103,19 @@ func (a *App) FirmwareUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	meta, _ := json.Marshal(map[string]any{
-		"version":    version,
-		"s3_key":     key,
-		"size_bytes": len(data),
-		"sha256":     sha256hex,
+	meta, _ := json.Marshal(apitypes.FirmwareMeta{
+		Version:   version,
+		S3Key:     key,
+		SizeBytes: len(data),
+		SHA256:    sha256hex,
 	})
 	a.Redis.Set(ctx, "firmware:latest:meta", meta, 0)
 
 	slog.Info("firmware published", "version", version, "size_bytes", len(data), "sha256", sha256hex)
-	writeJSON(w, http.StatusOK, map[string]any{
-		"version":    version,
-		"size_bytes": len(data),
-		"sha256":     sha256hex,
+	writeJSON(w, http.StatusOK, apitypes.FirmwareUploadResponse{
+		Version:   version,
+		SizeBytes: len(data),
+		SHA256:    sha256hex,
 	})
 }
 

@@ -64,3 +64,14 @@ type PresignResponse struct {
 	InitURL       *PresignedUrl  `json:"init_url,omitempty"`
 	StorageCapped bool           `json:"storage_capped,omitempty"`
 }
+
+// QRPayload is the JSON shape encoded inside a provisioning QR code. The
+// viewer UI builds it (via the server's EnrollmentQR handler), displays
+// it as a QR image, and the camera parses it on first boot after scan.
+// Field names are single letters to keep the QR code compact.
+type QRPayload struct {
+	Server       string `json:"s"`           // server base URL
+	Token        string `json:"t"`           // one-time provision token
+	WifiSSID     string `json:"w,omitempty"` // optional Wi-Fi SSID to join
+	WifiPassword string `json:"p,omitempty"` // optional Wi-Fi password
+}

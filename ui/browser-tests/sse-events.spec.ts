@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import type { CameraResponse } from '../src/lib/api-types';
 import { mockAuthenticatedSession, MOCK_CAMERAS } from './helpers.js';
 
 test.describe('SSE camera events', () => {
@@ -25,20 +26,22 @@ test.describe('SSE camera events', () => {
     await expect(cameraCards).toHaveCount(2);
 
     // Update the camera list to include a new camera, then reload
+    const withGarage: CameraResponse[] = [
+      ...MOCK_CAMERAS,
+      {
+        device_id: 'cam-003',
+        display_name: 'Garage',
+        enrolled_at: 1_700_000_000_000,
+        provisioned: true,
+        resolution: '720p',
+        recording_mode: 'constant',
+      },
+    ];
     await page.route('**/api/v1/cameras', async (route) => {
       await route.fulfill({
         status: 200,
         contentType: 'application/json',
-        body: JSON.stringify([
-          ...MOCK_CAMERAS,
-          {
-            device_id: 'cam-003',
-            display_name: 'Garage',
-            group_id: 'default',
-            capabilities: ['video'],
-            online: true,
-          },
-        ]),
+        body: JSON.stringify(withGarage),
       });
     });
 
@@ -58,8 +61,14 @@ test.describe('SSE camera events', () => {
     // Initially: Front Door is LIVE, Backyard is OFF
     await expect(cameraCardBadges).toHaveCount(2);
 
-    // Update cameras to all offline and reload
-    const offlineCameras = MOCK_CAMERAS.map((c) => ({ ...c, online: false }));
+    // Update cameras to all offline and reload. Offline is derived client-side
+    // from the staleness of server_ts — by omitting last_seen_at the UI treats
+    // the camera as having never reported telemetry recently.
+    const offlineCameras: CameraResponse[] = MOCK_CAMERAS.map((c) => ({
+      ...c,
+      last_seen_at: undefined,
+      provisioned: false,
+    }));
     await page.route('**/api/v1/cameras', async (route) => {
       await route.fulfill({
         status: 200,
