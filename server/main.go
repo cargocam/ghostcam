@@ -109,13 +109,6 @@ func run() error {
 			slog.Warn("S3 client init failed (segment uploads disabled)", "error", err)
 		} else {
 			slog.Info("S3/Tigris client initialized", "bucket", cfg.S3Bucket)
-			// Push a lifecycle rule that expires objects after the retention
-			// window. This replaces the hourly segment-retention cleanup loop
-			// the server used to run — object expiry becomes a property of
-			// the bucket, not a periodic Go task.
-			if err := s3Client.EnsureRetentionLifecycle(ctx, cfg.retentionDays()); err != nil {
-				slog.Warn("S3 lifecycle rule not applied", "error", err)
-			}
 		}
 	}
 

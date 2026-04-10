@@ -48,7 +48,7 @@ Both server and camera support TOML config files with layered resolution. Enviro
 | `GHOSTCAM_S3_ENDPOINT` | _(none)_ | S3 endpoint URL (Tigris, MinIO, etc.) |
 | `GHOSTCAM_S3_PRESIGN_TTL_SECS` | `3600` | Presigned URL TTL in seconds |
 | `GHOSTCAM_HMAC_KEY` | `dev-hmac-key` | HMAC key for audit log signing |
-| `GHOSTCAM_SEGMENT_RETENTION_DAYS` | `30` | Segment retention in days. Applied to the S3 bucket lifecycle on startup and used as the read cutoff for manifest / coverage queries. |
+| `GHOSTCAM_SEGMENT_RETENTION_DAYS` | `30` | Segment retention in days. Used as the cutoff for opportunistic prune in the presign handler and as the read cutoff for manifest / coverage queries. |
 | `STRIPE_SECRET_KEY` | _(none)_ | Stripe API key |
 | `STRIPE_WEBHOOK_SECRET` | _(none)_ | Stripe webhook signing secret |
 | `STRIPE_PRICE_ID_STARTER` | _(none)_ | Stripe Price ID for starter tier |
@@ -93,8 +93,7 @@ normal request activity or by the storage layer itself:
 | Concern | Mechanism |
 |---------|-----------|
 | Sessions | Removed — auth is stateless (JWT cookies + API tokens). |
-| S3 segment objects | An S3 bucket lifecycle rule (`ghostcam-segments-expiry`) is pushed on server startup that expires objects after `GHOSTCAM_SEGMENT_RETENTION_DAYS`. Object expiry is a property of the bucket, not a cron task. |
-| DB segment rows | Pruned opportunistically inside the presign handler whenever a camera confirms uploads (LIMIT 100 per call). |
+| S3 segment objects + DB rows | Pruned together, opportunistically, inside the presign handler whenever a camera confirms uploads. `PruneSegments` deletes DB rows `WHERE device_id = $1 AND created_at < cutoff LIMIT 100` and returns the deleted rows so the handler can issue matching S3 deletes. We deliberately do **not** use an S3 bucket lifecycle rule because firmware binaries live in the same bucket under `firmware/` and must not be auto-expired — a camera that stays offline beyond the retention window would otherwise lose its OTA update path. |
 | HLS / coverage reads | `ListSegments` / `ListSegmentCoverage` clamp their `from` parameter to `now - retentionMs`, so rows that haven't been pruned yet never surface through the API. |
 | Expired provision tokens | Deleted in the same transaction that creates a new token for the same user. |
 | Camera commands | `ClaimCommands` uses `DELETE ... RETURNING`, so the queue can't grow past what's claimed on the next telemetry poll. |

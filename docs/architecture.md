@@ -64,8 +64,7 @@ Runtime override files (`{dataDir}/resolution`, `{dataDir}/recording_mode`) are 
 
 ```
 server/            (package main — binary builds from this directory)
-  main.go         Entrypoint: config load, DB connect, Redis/S3 init (including the
-                  S3 bucket lifecycle rule that handles retention), App wiring,
+  main.go         Entrypoint: config load, DB connect, Redis/S3 init, App wiring,
                   chi router construction, HTTP server with timeouts + graceful
                   shutdown. No background cleanup goroutines.
                   HTTP timeouts: Read 30s, Write 60s, Idle 120s
@@ -83,10 +82,13 @@ server/            (package main — binary builds from this directory)
   cameras.go        ListCameras / Enroll / GetCamera / UpdateCamera / DeleteCamera.
                     Enroll enforces tier camera limit (402 on exceed), UpdateCamera
                     enqueues commands for resolution/recording_mode changes.
-  presign.go        effectiveTier() + Presign handler. After confirming uploads,
-                    opportunistically prunes expired segment rows for this device
-                    (PruneSegments LIMIT 100) so there is no retention sweeper goroutine.
-                    Storage counter cached in Redis (INCRBY/DECRBY).
+  presign.go        effectiveTier() (fail-closed — unknown tier strings fall
+                    back to free, never escalate to a paid tier), resolveTier()
+                    (panics on unknown — fed only by already-validated IDs), and
+                    the Presign handler. After confirming uploads, opportunistically
+                    prunes expired segment rows **and their S3 objects** for this
+                    device (PruneSegments LIMIT 100) so there is no retention
+                    sweeper goroutine. Storage counter cached in Redis (INCRBY/DECRBY).
   hls.go            GetLiveManifest (90s sliding window, no ENDLIST),
                     GetVodManifest (max 24h range with ENDLIST),
                     GetSegment (302 redirect to S3), GetInit, GetCoverage.
@@ -113,9 +115,10 @@ server/            (package main — binary builds from this directory)
   redis/          Telemetry write (XADD) and query (XREAD), per-user pub/sub channels
                   for motion, storage_capped, and coverage events. Redis-cached storage
                   counter storage_bytes:{user_id} (5-min TTL). Event storage (events.go).
-  s3/             S3/Tigris client, presigned GET/PUT, bucket lifecycle setup
-                  (EnsureRetentionLifecycle — applied on startup so object expiry is
-                  a bucket property, not a Go cron)
+  s3/             S3/Tigris client: presigned GET/PUT, Upload (for firmware),
+                  Delete (used by the opportunistic prune path in presign.go).
+                  No bucket-level lifecycle rules — firmware lives in the same
+                  bucket and must not be auto-expired.
 ```
 
 ### Database Migrations

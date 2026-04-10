@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/cargocam/ghostcam/server/auth"
-	"github.com/cargocam/ghostcam/server/billing"
 	"github.com/cargocam/ghostcam/server/db"
 	"github.com/cargocam/ghostcam/server/redis"
 	"github.com/go-chi/chi/v5"
@@ -72,7 +71,7 @@ func (a *App) Enroll(w http.ResponseWriter, r *http.Request) {
 
 	// Enforce camera limit based on tier.
 	sub, _ := a.DB.GetSubscription(ctx, userID)
-	tier := billing.GetTier(effectiveTier(sub, a.stripeConfigured()))
+	tier := resolveTier(effectiveTier(sub, a.stripeConfigured()))
 	if tier.CameraLimit != nil {
 		count, err := a.DB.GetCameraCount(ctx, userID)
 		if err != nil {
@@ -107,11 +106,19 @@ func (a *App) Enroll(w http.ResponseWriter, r *http.Request) {
 }
 
 // ownedCamera looks up `deviceID` and verifies the authenticated viewer owns
-// it. On any failure — DB error, missing row, wrong owner — it writes a 404
-// and returns (nil, false). Callers use `if !ok { return }`. Presign uses a
-// different check (camera auth, not viewer auth) and does not go through here.
+// it. On any failure — DB error, missing row, wrong owner, or missing auth
+// context — it writes a 404 and returns (nil, false). Callers use
+// `if !ok { return }`. Presign uses a different check (camera auth, not
+// viewer auth) and does not go through here.
 func (a *App) ownedCamera(w http.ResponseWriter, r *http.Request, deviceID string) (*db.CameraRecord, bool) {
 	userID := getUserID(r)
+	// Defensive: routes are gated by viewerAuth, but refuse to accept an
+	// empty userID so a misconfigured route can never let an unauthenticated
+	// request match a camera whose user_id happens to be "".
+	if userID == "" {
+		http.Error(w, "", http.StatusUnauthorized)
+		return nil, false
+	}
 	camera, err := a.DB.GetCamera(r.Context(), deviceID)
 	if err != nil || camera == nil || camera.UserID == nil || *camera.UserID != userID {
 		http.Error(w, "", http.StatusNotFound)

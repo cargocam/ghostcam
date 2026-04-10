@@ -21,7 +21,7 @@ ghostcam/
 │   ├── billing/     Tier definitions and storage limit enforcement
 │   ├── db/          PostgreSQL (pgx), migrations, record types (concrete *DB, no interface)
 │   ├── redis/       Telemetry streams (XADD/XREAD), pub/sub for SSE, event storage
-│   └── s3/          S3/Tigris presigned URL generation + bucket lifecycle setup
+│   └── s3/          S3/Tigris presigned URL generation, Upload, Delete
 ├── ui/              Svelte 5 SPA: HLS playback (hls.js), timeline scrubber, GPS map
 ├── pi/              Pi system files: systemd services, GPS, NetworkManager configs
 │   └── image/       rpi-image-gen build system: device configs, layer, files for flashable .img
@@ -141,7 +141,8 @@ Server (Go) ← presigned URLs → Browser (hls.js)
 - **No persistent connections** -- cameras POST telemetry every 10s, upload segments via presigned PUT URLs
 - **Stateless server** -- JWT auth, no sessions table, horizontally scalable
 - **S3-native** -- segments served directly from Tigris edge via 302 redirect, no proxy
-- **No cleanup daemons** -- retention is enforced by an S3 bucket lifecycle rule (applied on startup) plus opportunistic DB pruning in the presign handler; there are no hourly session/segment/stale-camera sweep goroutines
+- **No cleanup daemons** -- retention is enforced by opportunistic prune in the presign handler (DB rows + matching S3 objects, bounded LIMIT 100 per call); there are no hourly session/segment/stale-camera sweep goroutines. We do not use an S3 bucket lifecycle rule because firmware binaries share the bucket and must not be auto-expired.
+- **Fail-closed tier handling** -- `billing.GetTier` returns `(Tier, bool)`; unknown tier IDs never fall back to an unlimited tier. `effectiveTier` validates the DB-stored tier string and falls back to free on unknown. Stripe webhooks log loudly and refuse to escalate the user to a paid tier if the price ID is unrecognised.
 - **Single-instance deployment** -- one server behind Fly.io, one Postgres, one Redis (not designed for horizontal scaling)
 
 For detailed subsystem documentation see:

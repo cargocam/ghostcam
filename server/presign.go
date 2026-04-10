@@ -26,10 +26,15 @@ const pruneBatchSize = 100
 // defaultTierID is the tier assigned to users without a paid Stripe subscription.
 const defaultTierID = "free"
 
-// effectiveTier returns the user's billing tier. Paid tiers require an active
-// Stripe subscription — a tier column alone is not enough. When Stripe is not
-// configured (dev/local), returns "enterprise" (unlimited) so testing works
-// without payment infrastructure.
+// effectiveTier returns the user's billing tier ID. The returned string is
+// guaranteed to be a key in billing.Tiers — if a subscription row contains
+// an unknown tier name (typo, migration bug, tampering) we log loudly and
+// fall back to the free tier. This is fail-closed on purpose: never grant
+// unlimited resources because of an unrecognized string.
+//
+// Paid tiers require an active Stripe subscription — a tier column alone is
+// not enough. When Stripe is not configured (dev/local), we return
+// "enterprise" so testing works without payment infrastructure.
 func effectiveTier(sub *db.SubscriptionRecord, stripeConfigured bool) string {
 	if !stripeConfigured {
 		return "enterprise" // dev mode: unlimited
@@ -40,7 +45,25 @@ func effectiveTier(sub *db.SubscriptionRecord, stripeConfigured bool) string {
 	if sub.Tier != defaultTierID && (sub.StripeSubscriptionID == nil || sub.Status != "active") {
 		return defaultTierID
 	}
+	if _, ok := billing.GetTier(sub.Tier); !ok {
+		slog.Error("unknown tier in subscription row, falling back to free",
+			"user_id", sub.UserID, "tier", sub.Tier)
+		return defaultTierID
+	}
 	return sub.Tier
+}
+
+// resolveTier looks up the Tier struct for a known-valid tier ID. It's a
+// thin wrapper that panics on unknown input — effectiveTier and
+// billing.AllTiers are the only sources that feed into it, and both
+// guarantee the ID is present in billing.Tiers. A panic here would
+// indicate a programming error, not untrusted input.
+func resolveTier(tierID string) billing.Tier {
+	t, ok := billing.GetTier(tierID)
+	if !ok {
+		panic("resolveTier called with unknown tier: " + tierID)
+	}
+	return t
 }
 
 // Presign handles POST /api/v1/cameras/{deviceID}/presign.
@@ -135,22 +158,34 @@ func (a *App) Presign(w http.ResponseWriter, r *http.Request) {
 			a.Redis.Publish(ctx, fmt.Sprintf("coverage:%s", userID), covPayload)
 		}
 
-		// Opportunistically prune expired segment rows for this device.
-		// Tied to upload activity so no background loop is needed; the S3
-		// lifecycle rule handles the corresponding object expiry on the
-		// bucket side, so we only need to drop the DB rows here.
+		// Opportunistically prune expired segment rows and their S3 objects
+		// for this device. Tied to upload activity so no background loop
+		// is needed. We deliberately do NOT use an S3 bucket lifecycle
+		// rule here: firmware binaries live in the same bucket under
+		// `firmware/` and must not be auto-expired or cameras that stay
+		// offline beyond the retention window would lose their update
+		// path.
 		cutoff := uint64(time.Now().Add(-time.Duration(a.Config.retentionDays())*24*time.Hour).UnixMilli())
-		prunedBytes, err := a.DB.PruneSegments(ctx, deviceID, cutoff, pruneBatchSize)
+		pruned, err := a.DB.PruneSegments(ctx, deviceID, cutoff, pruneBatchSize)
 		if err != nil {
 			slog.Warn("presign: segment prune failed", "device_id", deviceID, "error", err)
-		} else if prunedBytes > 0 && a.Redis != nil {
-			a.Redis.DecrBy(ctx, "storage_bytes:"+userID, prunedBytes)
+		} else if len(pruned) > 0 {
+			var prunedBytes int64
+			for _, seg := range pruned {
+				if delErr := a.S3.Delete(ctx, seg.S3Key); delErr != nil {
+					slog.Warn("presign: S3 delete failed", "s3_key", seg.S3Key, "error", delErr)
+				}
+				prunedBytes += int64(seg.SizeBytes)
+			}
+			if a.Redis != nil {
+				a.Redis.DecrBy(ctx, "storage_bytes:"+userID, prunedBytes)
+			}
 		}
 	}
 
 	// 3. Check tier limits.
 	sub, _ := a.DB.GetSubscription(ctx, userID)
-	tier := billing.GetTier(effectiveTier(sub, a.stripeConfigured()))
+	tier := resolveTier(effectiveTier(sub, a.stripeConfigured()))
 
 	// Camera limit: only the N oldest cameras (by enrolled_at) may upload.
 	if tier.CameraLimit != nil {

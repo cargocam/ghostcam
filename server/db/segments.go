@@ -109,28 +109,40 @@ func (db *DB) ListSegmentCoverage(ctx context.Context, deviceID string, fromTS, 
 }
 
 // PruneSegments deletes segments older than olderThanMs for the given device
-// and returns the total size of the deleted rows. Bounded by LIMIT so it is
-// safe to call synchronously from hot paths. Cleanup is amortized across
-// normal presign requests instead of a dedicated background loop.
-func (db *DB) PruneSegments(ctx context.Context, deviceID string, olderThanMs uint64, limit int) (int64, error) {
-	var totalBytes int64
-	err := db.pool.QueryRow(ctx,
-		`WITH deleted AS (
-		   DELETE FROM segments
-		   WHERE segment_id IN (
-		     SELECT segment_id FROM segments
-		     WHERE device_id = $1 AND created_at < $2
-		     ORDER BY created_at
-		     LIMIT $3
-		   )
-		   RETURNING size_bytes
+// and returns the full deleted rows so the caller can reap the matching S3
+// objects. Bounded by LIMIT so it is safe to call synchronously from hot
+// paths. Cleanup is amortized across normal presign requests instead of a
+// dedicated background loop.
+func (db *DB) PruneSegments(ctx context.Context, deviceID string, olderThanMs uint64, limit int) ([]SegmentRecord, error) {
+	rows, err := db.pool.Query(ctx,
+		`DELETE FROM segments
+		 WHERE segment_id IN (
+		   SELECT segment_id FROM segments
+		   WHERE device_id = $1 AND created_at < $2
+		   ORDER BY created_at
+		   LIMIT $3
 		 )
-		 SELECT COALESCE(SUM(size_bytes), 0) FROM deleted`,
-		deviceID, int64(olderThanMs), limit).Scan(&totalBytes)
+		 RETURNING segment_id, device_id, s3_key, start_ts, end_ts, size_bytes, resolution, created_at, has_motion`,
+		deviceID, int64(olderThanMs), limit)
 	if err != nil {
-		return 0, fmt.Errorf("prune segments: %w", err)
+		return nil, fmt.Errorf("prune segments: %w", err)
 	}
-	return totalBytes, nil
+	defer rows.Close()
+
+	var deleted []SegmentRecord
+	for rows.Next() {
+		var s SegmentRecord
+		var startTS, endTS, sizeBytes, createdAt int64
+		if err := rows.Scan(&s.SegmentID, &s.DeviceID, &s.S3Key, &startTS, &endTS, &sizeBytes, &s.Resolution, &createdAt, &s.HasMotion); err != nil {
+			return nil, fmt.Errorf("scanning pruned segment: %w", err)
+		}
+		s.StartTS = uint64(startTS)
+		s.EndTS = uint64(endTS)
+		s.SizeBytes = uint64(sizeBytes)
+		s.CreatedAt = uint64(createdAt)
+		deleted = append(deleted, s)
+	}
+	return deleted, rows.Err()
 }
 
 func (db *DB) LatestSegment(ctx context.Context, deviceID string) (*SegmentRecord, error) {

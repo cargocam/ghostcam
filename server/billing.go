@@ -167,7 +167,7 @@ func (a *App) GetUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sub, _ := a.DB.GetSubscription(ctx, userID)
-	tier := billing.GetTier(effectiveTier(sub, a.stripeConfigured()))
+	tier := resolveTier(effectiveTier(sub, a.stripeConfigured()))
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"cameras_count":    cameraCount,
@@ -254,10 +254,19 @@ func (a *App) handleCheckoutCompleted(ctx context.Context, event *stripe.Event) 
 		return
 	}
 
-	tier := a.priceIDToTier(session.Subscription.ID)
+	// Resolve the tier from the subscription's price. If we don't recognise
+	// the price ID (misconfigured env var, unknown product) we do NOT set
+	// the user to a paid tier — leaving the subscription at "free" is the
+	// fail-closed default and surfaces the misconfiguration via the log.
+	tier, ok := a.stripeTierFromSubscription(session.Subscription)
+	if !ok {
+		slog.Error("stripe: checkout with unknown price ID, keeping user on free",
+			"user_id", userID, "subscription_id", stripeSubID(session.Subscription))
+		tier = "free"
+	}
 
 	customerID := session.Customer.ID
-	subID := session.Subscription.ID
+	subID := stripeSubID(session.Subscription)
 
 	if err := a.DB.UpdateSubscription(ctx, userID, &db.SubscriptionUpdate{
 		Tier:                 &tier,
@@ -285,7 +294,21 @@ func (a *App) handleSubscriptionUpdated(ctx context.Context, event *stripe.Event
 		return
 	}
 
-	tier := a.stripeTierFromSubscription(&sub)
+	// Fail-closed: unrecognised prices must not escalate the user to a paid
+	// tier. Keep the stored tier unchanged and log loudly so the
+	// configuration drift is visible.
+	tier, ok := a.stripeTierFromSubscription(&sub)
+	if !ok {
+		slog.Error("stripe: subscription.updated with unknown price ID, leaving tier unchanged",
+			"user_id", existing.UserID, "subscription_id", sub.ID)
+		status := string(sub.Status)
+		if err := a.DB.UpdateSubscription(ctx, existing.UserID, &db.SubscriptionUpdate{
+			Status: &status,
+		}); err != nil {
+			slog.Error("stripe: failed to update subscription status", "user_id", existing.UserID, "error", err)
+		}
+		return
+	}
 	status := string(sub.Status)
 
 	if err := a.DB.UpdateSubscription(ctx, existing.UserID, &db.SubscriptionUpdate{
@@ -296,6 +319,15 @@ func (a *App) handleSubscriptionUpdated(ctx context.Context, event *stripe.Event
 	}
 
 	a.notifyCameraLimitExceeded(ctx, existing.UserID, tier)
+}
+
+// stripeSubID safely extracts the subscription ID from a possibly-nil
+// *stripe.Subscription returned on a CheckoutSession.
+func stripeSubID(sub *stripe.Subscription) string {
+	if sub == nil {
+		return ""
+	}
+	return sub.ID
 }
 
 func (a *App) handleSubscriptionDeleted(ctx context.Context, event *stripe.Event) {
@@ -339,31 +371,51 @@ func (a *App) tierToPriceID(tier string) string {
 	}
 }
 
-func (a *App) priceIDToTier(priceID string) string {
+// priceIDToTier maps a Stripe price ID to a known tier string. It returns
+// ok=false on unknown input — callers must fail closed (log loudly and
+// refuse to escalate the user to a paid tier). Silently defaulting to a
+// paid tier would let a misconfigured Stripe price grant entitlements.
+func (a *App) priceIDToTier(priceID string) (string, bool) {
+	// Unset env vars would match any empty priceID, so guard explicitly.
+	if priceID == "" {
+		return "", false
+	}
 	switch priceID {
 	case a.Config.StripePriceIDStarter:
-		return "starter"
+		return "starter", true
 	case a.Config.StripePriceIDPro:
-		return "pro"
+		return "pro", true
 	case a.Config.StripePriceIDEnterprise:
-		return "enterprise"
+		return "enterprise", true
 	default:
-		return "starter"
+		return "", false
 	}
 }
 
-func (a *App) stripeTierFromSubscription(sub *stripe.Subscription) string {
-	if sub.Items != nil && len(sub.Items.Data) > 0 {
-		priceID := sub.Items.Data[0].Price.ID
-		return a.priceIDToTier(priceID)
+// stripeTierFromSubscription derives the tier from the first line item's
+// price. Returns ok=false if the subscription has no items or the price
+// doesn't match any configured tier.
+func (a *App) stripeTierFromSubscription(sub *stripe.Subscription) (string, bool) {
+	if sub == nil || sub.Items == nil || len(sub.Items.Data) == 0 {
+		return "", false
 	}
-	return "starter"
+	item := sub.Items.Data[0]
+	if item == nil || item.Price == nil {
+		return "", false
+	}
+	return a.priceIDToTier(item.Price.ID)
 }
 
 // notifyCameraLimitExceeded emits a camera_limit_exceeded SSE event if the
-// user's camera count exceeds the new tier limit.
+// user's camera count exceeds the new tier limit. Unknown tier IDs are a
+// programming error (callers guarantee validity) but we bail out silently
+// rather than panic — this is notification code, not an auth decision.
 func (a *App) notifyCameraLimitExceeded(ctx context.Context, userID, tierID string) {
-	tier := billing.GetTier(tierID)
+	tier, ok := billing.GetTier(tierID)
+	if !ok {
+		slog.Error("notifyCameraLimitExceeded: unknown tier", "user_id", userID, "tier", tierID)
+		return
+	}
 	if tier.CameraLimit == nil {
 		return
 	}

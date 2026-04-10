@@ -79,7 +79,10 @@ func TestCameraLimitAllowed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tier := billing.GetTier(tt.tierID)
+			tier, ok := billing.GetTier(tt.tierID)
+			if !ok {
+				t.Fatalf("billing.GetTier(%q) not found", tt.tierID)
+			}
 			got := isCameraAllowed(tier, tt.cameras, tt.deviceID)
 			if got != tt.wantAllow {
 				t.Errorf("isCameraAllowed() = %v, want %v", got, tt.wantAllow)
@@ -166,6 +169,21 @@ func TestEffectiveTier(t *testing.T) {
 			sub:              &db.SubscriptionRecord{Tier: "free", Status: "active"},
 			stripeConfigured: false,
 			want:             "enterprise",
+		},
+		{
+			// SECURITY: unknown tier strings in the DB must not grant
+			// unlimited resources via a fall-through to "enterprise". The
+			// safest default is the most restrictive tier ("free").
+			name:             "unknown tier string falls back to free (fail-closed)",
+			sub:              &db.SubscriptionRecord{Tier: "godmode", Status: "active", StripeSubscriptionID: strPtr("sub_999")},
+			stripeConfigured: true,
+			want:             "free",
+		},
+		{
+			name:             "empty tier string falls back to free (fail-closed)",
+			sub:              &db.SubscriptionRecord{Tier: "", Status: "active", StripeSubscriptionID: strPtr("sub_000")},
+			stripeConfigured: true,
+			want:             "free",
 		},
 	}
 

@@ -47,7 +47,7 @@ server/                  Server binary (package main): chi router + HTTP handler
   billing/               Tier definitions (free/starter/pro/enterprise)
   db/                    PostgreSQL (pgx), migrations
   redis/                 Telemetry streams (XADD/XREAD), pub/sub
-  s3/                    Presigned URL generation + bucket lifecycle setup
+  s3/                    Presigned URL generation, Upload, Delete
 ui/                      Svelte 5 SPA (hls.js, Leaflet, Tailwind)
 pi/                      Pi system files (systemd, GPS, NetworkManager)
 scripts/                 Developer tools (pi.sh)
@@ -104,9 +104,15 @@ Key features:
 - **Failed login logging** with email + IP
 - **HLS manifest**: `#EXT-X-INDEPENDENT-SEGMENTS` tag; segments via 302 redirect to S3
 - **Auto-create** "free" subscription on user creation
-- **No cleanup daemons**: segment retention is enforced by an S3 bucket
-  lifecycle rule (applied on startup) plus opportunistic DB row pruning in
-  the presign handler — no hourly retention / session / stale-camera loops
+- **No cleanup daemons**: segment retention is enforced by opportunistic
+  prune in the presign handler — DB rows and their matching S3 objects
+  are deleted together (LIMIT 100 per call), tied to normal upload
+  activity. Firmware binaries share the bucket and are intentionally
+  excluded.
+- **Fail-closed billing**: `billing.GetTier` returns `(Tier, bool)`;
+  unknown tier strings never grant unlimited resources. `effectiveTier`
+  validates DB-stored tiers and Stripe webhooks refuse to escalate to a
+  paid tier on unrecognised price IDs.
 
 ```bash
 go build -o ghostcam-server ./server
@@ -143,7 +149,7 @@ go build -o ghostcam-server ./server
 | `GHOSTCAM_S3_ENDPOINT` | S3 endpoint URL (Tigris, MinIO) |
 | `GHOSTCAM_ADMIN_EMAIL` | Admin user email |
 | `GHOSTCAM_ADMIN_PASSWORD` | Preset admin password |
-| `GHOSTCAM_SEGMENT_RETENTION_DAYS` | Segment retention (default 30); applied to S3 bucket lifecycle on startup and used as the read cutoff for manifest/coverage queries |
+| `GHOSTCAM_SEGMENT_RETENTION_DAYS` | Segment retention (default 30); drives the opportunistic prune in the presign handler and the read cutoff for manifest/coverage queries |
 
 ## Infrastructure
 
