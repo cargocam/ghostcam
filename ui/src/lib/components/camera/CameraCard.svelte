@@ -3,6 +3,8 @@
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
+	import { clipStore } from '$lib/stores/clip.svelte.js';
+	import { untrack } from 'svelte';
 	import { cn } from '$lib/utils.js';
 	import { Camera, PictureInPicture2, Volume2, VolumeOff, VideoOff, Settings } from 'lucide-svelte';
 	import CameraSettingsDialog from '$lib/components/camera/CameraSettingsDialog.svelte';
@@ -33,11 +35,37 @@
 		return coverage.some((s) => target >= s.start && target <= s.end);
 	});
 
+	// Stable clip manifest range — only updates when clip mode toggles on, not on handle drag.
+	// Covers a 10-minute window centered on the initial clip to allow handle movement without reload.
+	// Snapshot clip state on mode enter — stable across handle drags to avoid HLS reloads.
+	let clipSnapshot = $state<{ from: number; to: number; seekTo: number } | null>(null);
+	let prevClipEnabled = false;
+	$effect(() => {
+		const enabled = clipStore.enabled;
+		if (enabled && !prevClipEnabled) {
+			untrack(() => {
+				const mid = (clipStore.startTime + clipStore.endTime) / 2;
+				clipSnapshot = {
+					from: Math.floor((mid - 5 * 60) * 1000),
+					to: Math.floor((mid + 5 * 60) * 1000),
+					seekTo: clipStore.startTime,
+				};
+			});
+		} else if (!enabled) {
+			clipSnapshot = null;
+		}
+		prevClipEnabled = enabled;
+	});
+
 	// Live: sliding window manifest, hls.js polls for new segments.
 	// VOD: 30-min window from seek point for continuous archive playback.
+	// Clip mode: wide VOD manifest, loop boundaries handle precise range.
 	// Empty string when no coverage at seek time — HlsPlayer won't load.
 	let hlsSrc = $derived.by(() => {
 		const id = encodeURIComponent(deviceId);
+		if (clipSnapshot) {
+			return `/hls/${id}/vod.m3u8?from=${clipSnapshot.from}&to=${clipSnapshot.to}`;
+		}
 		const target = scrubberStore.seekTarget;
 		if (target === null) return `/hls/${id}/live.m3u8`;
 		if (!hasCoverageAtSeek) return '';
@@ -103,7 +131,9 @@
 			<HlsPlayer
 				src={hlsSrc}
 				muted={isMuted}
-				seekTo={scrubberStore.seekTarget ?? -1}
+				seekTo={clipSnapshot ? clipSnapshot.seekTo : (scrubberStore.seekTarget ?? -1)}
+				loopStart={clipStore.enabled ? clipStore.startTime : -1}
+				loopEnd={clipStore.enabled ? clipStore.endTime : -1}
 				onError={(err) => console.warn(`HLS error for ${deviceId}:`, err)}
 			/>
 		{:else}
@@ -128,9 +158,9 @@
 			</div>
 			<span class={cn(
 				"text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded",
-				isPlayback ? "bg-sky-400/20 text-sky-400" : isOnline ? "bg-primary/20 text-primary" : "bg-white/10 text-white/40"
+				clipStore.enabled ? "bg-yellow-400/20 text-yellow-400" : isPlayback ? "bg-sky-400/20 text-sky-400" : isOnline ? "bg-primary/20 text-primary" : "bg-white/10 text-white/40"
 			)}>
-				{isPlayback ? 'PLAYBACK' : isOnline ? 'LIVE' : 'OFFLINE'}
+				{clipStore.enabled ? 'CLIP' : isPlayback ? 'PLAYBACK' : isOnline ? 'LIVE' : 'OFFLINE'}
 			</span>
 		</div>
 	</div>

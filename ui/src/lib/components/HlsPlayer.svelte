@@ -7,12 +7,17 @@
 		src,
 		muted = false,
 		seekTo = -1,
+		loopStart = -1,
+		loopEnd = -1,
 		class: className = '',
 		onError = undefined,
 	}: {
 		src: string;
 		muted?: boolean;
 		seekTo?: number;
+		/** Epoch seconds — loop boundaries. When both > 0, video loops within this range. */
+		loopStart?: number;
+		loopEnd?: number;
 		class?: string;
 		onError?: (error: string) => void;
 	} = $props();
@@ -21,13 +26,17 @@
 	let hls: Hls | null = null;
 	let loading = $state<boolean>(false);
 	let noFootage = $state<boolean>(false);
+	/** PDT of first fragment in ms — used to map currentTime ↔ epoch time for looping. */
+	let firstPDTMs = $state(0);
 
+	// HLS setup — only re-runs when src or seekTo changes
 	$effect(() => {
 		if (!videoEl || !src) return;
 		const mediaEl = videoEl;
 		const targetSeek = seekTo;
 		loading = false;
 		noFootage = false;
+		firstPDTMs = 0;
 
 		if (Hls.isSupported()) {
 			const instance = new Hls({
@@ -41,16 +50,12 @@
 			instance.on(Hls.Events.MANIFEST_PARSED, () => {
 				noFootage = false;
 
-				// For VOD playback: seek to the exact time within the manifest
-				// using program date time. hls.js exposes playingDate after
-				// attaching, but the simplest approach is to compute the offset
-				// from the manifest start and set currentTime.
 				if (targetSeek > 0 && instance.levels?.[0]?.details) {
 					const details = instance.levels[0].details;
-					// programDateTime of the first fragment (ms)
-					const firstPDT = details.fragments[0]?.programDateTime;
-					if (firstPDT) {
-						const offsetSec = targetSeek - firstPDT / 1000;
+					const pdt = details.fragments[0]?.programDateTime;
+					if (pdt) {
+						firstPDTMs = pdt;
+						const offsetSec = targetSeek - pdt / 1000;
 						if (offsetSec > 0) {
 							mediaEl.currentTime = offsetSec;
 						}
@@ -87,6 +92,28 @@
 
 		return () => {
 			if (hls) { hls.destroy(); hls = null; }
+		};
+	});
+
+	// Loop logic — separate effect so loopStart/loopEnd changes don't reload HLS
+	$effect(() => {
+		if (!videoEl || loopStart <= 0 || loopEnd <= 0) return;
+		const mediaEl = videoEl;
+		const ls = loopStart;
+		const le = loopEnd;
+
+		const onTimeUpdate = () => {
+			if (!firstPDTMs) return;
+			const epochNow = firstPDTMs / 1000 + mediaEl.currentTime;
+			if (epochNow >= le) {
+				const startOffset = ls - firstPDTMs / 1000;
+				mediaEl.currentTime = Math.max(0, startOffset);
+			}
+		};
+		mediaEl.addEventListener('timeupdate', onTimeUpdate);
+
+		return () => {
+			mediaEl.removeEventListener('timeupdate', onTimeUpdate);
 		};
 	});
 </script>
