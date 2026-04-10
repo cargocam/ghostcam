@@ -10,7 +10,7 @@ Camera (rpicam-vid | ffmpeg) → MPEG-TS segments → S3 (Tigris)
 Server (Go) ← 302 redirect → Browser (hls.js)
      ↓
   Postgres (segments, users, cameras, billing)
-  Redis (telemetry streams, SSE pub/sub)
+  Redis (telemetry streams, SSE pub/sub, events)
 ```
 
 - **No persistent connections** -- cameras POST telemetry every 10s, upload segments via presigned PUT URLs
@@ -32,6 +32,8 @@ docker compose --profile test up -d
 # Open http://localhost:5173
 # Login: admin@ghostcam.dev / dev-password
 ```
+
+For camera setup and a full walkthrough of the viewer, see **[docs/usage.md](docs/usage.md)**.
 
 ## Project Structure
 
@@ -119,6 +121,7 @@ go build -o ghostcam-server ./cmd/ghostcam-server
 | `POST /api/v1/clips/prepare` | Viewer | Presigned segment URLs for clip download |
 | `GET /api/v1/telemetry/:id/export` | Viewer | Telemetry export (CSV/JSON) |
 | `GET /events` | Viewer | SSE stream (telemetry, motion, storage_capped, coverage) |
+| `GET /api/v1/events` | Viewer | List events with pagination |
 | `GET /api/v1/billing/subscription` | Viewer | Always returns `billing_enabled: true` |
 | `POST /api/v1/cameras` | Viewer | Returns 402 when tier camera limit reached |
 | `POST /api/v1/admin/firmware` | Admin | Upload firmware binary to Tigris |
@@ -161,94 +164,6 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
-## Camera Setup
+## Camera Setup & Usage
 
-Three ways to set up a camera, from easiest to most flexible.
-
-### Option 1: Flash a Pi Image (recommended for new hardware)
-
-Download the `.img.xz` for your Pi model from the [latest release](../../releases/latest) and flash it to an SD card:
-
-```bash
-# macOS
-xzcat ghostcam-zero2w-v0.1.0.img.xz | sudo dd of=/dev/diskN bs=4M
-
-# Linux
-xzcat ghostcam-zero2w-v0.1.0.img.xz | sudo dd of=/dev/sdX bs=4M status=progress
-```
-
-The image comes pre-configured with all dependencies (ffmpeg, gpsd, modemmanager, ALSA, NetworkManager) and the camera service enabled. On first boot:
-
-1. SSH in (user: `ghostcam`, password: `ghostcam`)
-2. Set the server URL: `echo "GHOSTCAM_SERVER_URL=https://your-server.example.com" >> /etc/ghostcam/env`
-3. Provision the camera from the web UI (generates a one-time token), then write it: `echo "<token>" > /var/ghostcam/provision_token`
-4. Restart: `sudo systemctl restart ghostcam-camera`
-
-The camera provisions itself on the next start and begins streaming. Subsequent boots are automatic.
-
-### Option 2: Install the .deb Package (existing Pi with Raspberry Pi OS)
-
-For Pis already running Raspberry Pi OS (Bookworm, arm64):
-
-```bash
-# Download and install
-curl -LO https://github.com/<owner>/ghostcam/releases/latest/download/ghostcam-camera_<version>_arm64.deb
-sudo dpkg -i ghostcam-camera_<version>_arm64.deb
-
-# Install remaining dependencies
-sudo apt install -y rpicam-apps gpsd gpsd-clients modemmanager alsa-utils
-
-# Create data directory
-sudo mkdir -p /var/ghostcam /etc/ghostcam
-sudo chown $USER:$USER /var/ghostcam
-
-# Configure environment
-sudo tee /etc/ghostcam/env << EOF
-GHOSTCAM_DATA_DIR=/var/ghostcam
-GHOSTCAM_SERVER_URL=https://your-server.example.com
-GHOSTCAM_VIDEO_PROFILE=pi4
-EOF
-
-# Install and enable the systemd service
-sudo cp pi/systemd/ghostcam-camera.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now ghostcam-camera
-```
-
-Set `GHOSTCAM_VIDEO_PROFILE` to match your hardware: `zero2w` (480p), `pi4` (720p), or `pi5` (1080p).
-
-Provision the camera the same way as Option 1 (write a provision token, or use `pi.sh setup` for full automated provisioning).
-
-### Option 3: Deploy the Raw Binary (any Linux/arm64 or amd64)
-
-Download the standalone binary from the [latest release](../../releases/latest). This is useful for non-Pi Linux systems or custom setups:
-
-```bash
-curl -LO https://github.com/<owner>/ghostcam/releases/latest/download/ghostcam-camera-aarch64
-chmod +x ghostcam-camera-aarch64
-sudo mv ghostcam-camera-aarch64 /usr/local/bin/ghostcam-camera
-
-# Requires ffmpeg on PATH
-sudo apt install -y ffmpeg
-
-# Create data directory
-sudo mkdir -p /var/ghostcam
-sudo chown $USER:$USER /var/ghostcam
-
-# Run with environment variables
-GHOSTCAM_SERVER_URL=https://your-server.example.com \
-GHOSTCAM_DATA_DIR=/var/ghostcam \
-GHOSTCAM_VIDEO_PROFILE=pi4 \
-  ghostcam-camera
-```
-
-For production use, set up a systemd service (see `pi/systemd/ghostcam-camera.service` as a template).
-
-## Pi Development
-
-```bash
-./scripts/pi.sh setup    # First-time Pi provisioning (installs deps, deploys config + binary)
-./scripts/pi.sh deploy   # Build + deploy camera binary
-./scripts/pi.sh logs     # Stream camera logs
-./scripts/pi.sh status   # Health check
-```
+For camera setup (flashing Pi images, installing the .deb, running the raw binary), Pi developer workflow, and a walkthrough of the viewer (enrolling cameras, playback, clip downloads, billing), see **[docs/usage.md](docs/usage.md)**.
