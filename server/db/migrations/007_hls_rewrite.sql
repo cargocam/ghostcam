@@ -51,5 +51,16 @@ CREATE TABLE IF NOT EXISTS camera_commands (
 
 CREATE INDEX IF NOT EXISTS idx_camera_commands_device ON camera_commands(device_id, claimed_at);
 
--- cert_fingerprint is no longer required (cameras auth via API key now)
-ALTER TABLE cameras ALTER COLUMN cert_fingerprint DROP NOT NULL;
+-- cert_fingerprint is no longer required (cameras auth via API key now).
+-- Guarded by a column-existence check so re-runs after 010_cleanup.sql
+-- dropped the column entirely don't fail.
+DO $$ BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'cameras'
+          AND column_name = 'cert_fingerprint'
+    ) THEN
+        ALTER TABLE cameras ALTER COLUMN cert_fingerprint DROP NOT NULL;
+    END IF;
+END $$;
