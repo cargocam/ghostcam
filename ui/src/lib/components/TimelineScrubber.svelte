@@ -324,6 +324,49 @@
 		return dots;
 	});
 
+	// Latest timestamp covered by any camera (or the selected camera
+	// specifically). Used to snap clip mode onto real footage rather than
+	// the "now" window when the camera has stopped uploading — otherwise
+	// a user in live mode clicking the scissors would get a clip range
+	// that the server 404's because it falls entirely inside a gap.
+	function latestCoverageEnd(): number | null {
+		let best: number | null = null;
+		const selectedId = cameraStore.selectedId;
+		const iter = selectedId
+			? [[selectedId, scrubberStore.cameraCoverage.get(selectedId) ?? []] as const]
+			: scrubberStore.cameraCoverage;
+		for (const [, spans] of iter) {
+			for (const s of spans) {
+				if (best === null || s.end > best) best = s.end;
+			}
+		}
+		return best;
+	}
+
+	function enterClipMode() {
+		if (clipStore.enabled) {
+			clipStore.toggle(windowStart, windowEnd);
+			return;
+		}
+		const latest = latestCoverageEnd();
+		// If the default scrubber window has no real footage in it but we
+		// do have older coverage, anchor the clip to the end of that
+		// older coverage instead. If we have no coverage at all, fall
+		// back to the scrubber window (server will 404 but the user
+		// gets clear feedback via the "No recording" overlay).
+		if (latest !== null && latest < windowStart) {
+			const end = latest + 5; // +5s so the last frame is inside the clip
+			const start = end - 300; // default clip = 5 min
+			clipStore.toggle(start, end);
+			// Move the scrubber playhead to the clip start so the zoom
+			// animation lands on real footage.
+			scrubberStore.playheadTime = start;
+			scrubberStore.isLive = false;
+			return;
+		}
+		clipStore.toggle(windowStart, windowEnd);
+	}
+
 	// Clip handles
 	let clipStartPct = $derived.by(() => {
 		const range = windowEnd - windowStart;
@@ -516,7 +559,7 @@
 				? "bg-yellow-400/20 text-yellow-400"
 				: "text-muted-foreground hover:text-foreground hover:bg-accent",
 		)}
-		onclick={() => clipStore.toggle(windowStart, windowEnd)}
+		onclick={() => enterClipMode()}
 		title="Clip mode"
 	>
 		<Scissors class="h-3.5 w-3.5" />

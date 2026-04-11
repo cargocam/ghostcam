@@ -2,6 +2,8 @@
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { cameraConfigStore } from '$lib/stores/cameraConfig.svelte.js';
+	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
+	import { clipStore } from '$lib/stores/clip.svelte.js';
 	import { reportClientLog } from '$lib/stores/dev.svelte.js';
 	import HlsPlayer from '$lib/components/HlsPlayer.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -13,6 +15,39 @@
 	let camera = $derived(cameraId ? cameraStore.cameras.find((c) => c.device_id === cameraId) : null);
 	let displayName = $derived(camera ? cameraConfigStore.getDisplayName(camera.device_id, camera.device_name) : '');
 	let isMuted = $derived(cameraId ? settingsStore.isCameraMuted(cameraId) : true);
+	let isPlayback = $derived(scrubberStore.seekTarget !== null);
+
+	// Mirror CameraCard's stream-selection logic so double-tapping into the
+	// focused view doesn't reset a historical scrub or clip back to a
+	// (possibly empty) live manifest. Clip mode → clip VOD manifest,
+	// scrubbed seek → VOD manifest at the seek position, otherwise live.
+	const CLIP_PADDING_SEC = 5 * 60;
+	let clipSnapshot = $derived.by(() => {
+		if (!clipStore.enabled) return null;
+		const mid = (clipStore.startTime + clipStore.endTime) / 2;
+		return {
+			from: Math.floor((mid - CLIP_PADDING_SEC) * 1000),
+			to: Math.floor((mid + CLIP_PADDING_SEC) * 1000),
+			seekTo: clipStore.startTime,
+		};
+	});
+
+	let hlsSrc = $derived.by(() => {
+		if (!cameraId) return '';
+		const id = encodeURIComponent(cameraId);
+		if (clipSnapshot) {
+			return `/hls/${id}/vod.m3u8?from=${clipSnapshot.from}&to=${clipSnapshot.to}`;
+		}
+		const target = scrubberStore.seekTarget;
+		if (target === null) return `/hls/${id}/live.m3u8`;
+		const from = Math.floor(target * 1000);
+		const to = from + 30 * 60 * 1000;
+		return `/hls/${id}/vod.m3u8?from=${from}&to=${to}`;
+	});
+
+	let streamMode = $derived<'live' | 'vod' | 'clip'>(
+		clipStore.enabled ? 'clip' : isPlayback ? 'vod' : 'live'
+	);
 
 	let showOverlay = $state(true);
 	let overlayTimer: ReturnType<typeof setTimeout> | null = null;
@@ -139,8 +174,13 @@
 	>
 		<div class="absolute inset-0">
 			<HlsPlayer
-				src={`/hls/${encodeURIComponent(cameraId)}/live.m3u8`}
+				src={hlsSrc}
 				muted={isMuted}
+				seekTo={clipSnapshot ? clipSnapshot.seekTo : (scrubberStore.seekTarget ?? -1)}
+				loopStart={clipStore.enabled ? clipStore.startTime : -1}
+				loopEnd={clipStore.enabled ? clipStore.endTime : -1}
+				loopSeekRevision={clipStore.seekRevision}
+				mode={streamMode}
 				bind:videoEl={videoElement}
 				onError={(err) => {
 					console.warn(`HLS error (CameraView) for ${cameraId}:`, err);
@@ -148,7 +188,12 @@
 						level: 'error',
 						source: 'hls',
 						message: err,
-						context: { device_id: cameraId ?? '', mode: 'camera-view' },
+						context: {
+							device_id: cameraId ?? '',
+							mode: streamMode,
+							src: hlsSrc,
+							surface: 'camera-view',
+						},
 					});
 				}}
 			/>
