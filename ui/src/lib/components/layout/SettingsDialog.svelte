@@ -11,9 +11,10 @@
 		formatStorageLimit,
 		formatTierPrice,
 	} from '$lib/stores/billing.svelte.js';
+	import { devStore } from '$lib/stores/dev.svelte.js';
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { changePassword } from '$lib/auth.js';
-	import { Sun, Moon, Monitor, CreditCard, ExternalLink, Trash2 } from 'lucide-svelte';
+	import { Sun, Moon, Monitor, CreditCard, ExternalLink, Trash2, Bug } from 'lucide-svelte';
 
 	let {
 		open = $bindable(false),
@@ -221,6 +222,32 @@
 
 				<Separator />
 			{/if}
+
+			<!-- Developer -->
+			<div>
+				<h3 class="text-sm font-medium mb-3 flex items-center gap-1.5">
+					<Bug class="h-4 w-4" />
+					Developer
+				</h3>
+				<label class="flex items-start gap-3 text-sm cursor-pointer">
+					<input
+						type="checkbox"
+						checked={devStore.clientLogging}
+						onchange={(e) => devStore.setClientLogging(e.currentTarget.checked)}
+						class="mt-0.5 h-4 w-4 rounded border-border accent-primary"
+					/>
+					<span class="flex-1">
+						<span class="font-medium block">Client error logging</span>
+						<span class="block text-xs text-muted-foreground mt-0.5">
+							Forward video playback and HLS errors to the server log for
+							debugging. Only useful if you're actively diagnosing a problem.
+							Off by default.
+						</span>
+					</span>
+				</label>
+			</div>
+
+			<Separator />
 
 			<!-- Account -->
 			<div>

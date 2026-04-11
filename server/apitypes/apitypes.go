@@ -208,6 +208,31 @@ type PortalResponse struct {
 }
 
 // ====================================================================
+// Client diagnostics
+// ====================================================================
+
+// ClientLogEntry is the body of POST /api/v1/client-log. The endpoint is
+// gated behind an authenticated session and the UI only fires it when
+// the "Client error logging" developer setting is enabled, so there is no
+// privacy surprise — the user deliberately opts in when they need remote
+// debugging from a mobile browser.
+type ClientLogEntry struct {
+	// Level maps to slog levels: "debug", "info", "warn", "error".
+	// Unknown values fall back to "info".
+	Level string `json:"level"`
+	// Source is a free-form tag for grepping (e.g. "hls", "billing").
+	Source string `json:"source"`
+	// Message is the main log line.
+	Message string `json:"message"`
+	// UserAgent and URL are optional context captured by the client.
+	UserAgent string `json:"user_agent,omitempty"`
+	URL       string `json:"url,omitempty"`
+	// Context is an open-ended string map for structured extras
+	// (e.g. HLS error type / status code / device ID).
+	Context map[string]string `json:"context,omitempty"`
+}
+
+// ====================================================================
 // API Tokens
 // ====================================================================
 

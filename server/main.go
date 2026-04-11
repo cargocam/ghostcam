@@ -193,6 +193,7 @@ func (a *App) router() http.Handler {
 	loginRL := NewRateLimiter(10)
 	registerRL := NewRateLimiter(5)
 	provisionRL := NewRateLimiter(10)
+	clientLogRL := NewRateLimiter(60)
 
 	// Public
 	r.Get("/healthz", a.Healthz)
@@ -255,6 +256,12 @@ func (a *App) router() http.Handler {
 		r.Post("/api/v1/billing/checkout", a.CreateCheckout)
 		r.Post("/api/v1/billing/portal", a.CreatePortal)
 		r.Get("/api/v1/billing/usage", a.GetUsage)
+
+		// Client-side diagnostic logging. Off by default; the UI only
+		// posts here when the "Client error logging" developer toggle
+		// is enabled. Rate-limited separately to keep a buggy client
+		// from flooding slog.
+		r.With(clientLogRL.Middleware).Post("/api/v1/client-log", a.ClientLog)
 	})
 
 	// Admin

@@ -4,6 +4,7 @@
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 	import { clipStore } from '$lib/stores/clip.svelte.js';
+	import { reportClientLog } from '$lib/stores/dev.svelte.js';
 	import { untrack } from 'svelte';
 	import { cn } from '$lib/utils.js';
 	import { Camera, PictureInPicture2, Volume2, VolumeOff, VideoOff, Settings } from 'lucide-svelte';
@@ -164,7 +165,19 @@
 				loopEnd={clipStore.enabled ? clipStore.endTime : -1}
 				loopSeekRevision={clipStore.seekRevision}
 				bind:videoEl={videoElement}
-				onError={(err) => console.warn(`HLS error for ${deviceId}:`, err)}
+				onError={(err) => {
+					console.warn(`HLS error for ${deviceId}:`, err);
+					reportClientLog({
+						level: 'error',
+						source: 'hls',
+						message: err,
+						context: {
+							device_id: deviceId,
+							mode: clipStore.enabled ? 'clip' : isPlayback ? 'vod' : 'live',
+							src: hlsSrc,
+						},
+					});
+				}}
 			/>
 		{:else}
 			<div class="w-full h-full grid place-items-center bg-black/80">

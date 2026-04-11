@@ -2,6 +2,7 @@
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { cameraConfigStore } from '$lib/stores/cameraConfig.svelte.js';
+	import { reportClientLog } from '$lib/stores/dev.svelte.js';
 	import HlsPlayer from '$lib/components/HlsPlayer.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { ArrowLeft, Maximize, Minimize, Volume2, VolumeOff, Camera, PictureInPicture2 } from 'lucide-svelte';
@@ -141,6 +142,15 @@
 				src={`/hls/${encodeURIComponent(cameraId)}/live.m3u8`}
 				muted={isMuted}
 				bind:videoEl={videoElement}
+				onError={(err) => {
+					console.warn(`HLS error (CameraView) for ${cameraId}:`, err);
+					reportClientLog({
+						level: 'error',
+						source: 'hls',
+						message: err,
+						context: { device_id: cameraId ?? '', mode: 'camera-view' },
+					});
+				}}
 			/>
 		</div>
 

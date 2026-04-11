@@ -210,6 +210,38 @@ export interface PortalResponse {
   url: string;
 }
 /**
+ * ClientLogEntry is the body of POST /api/v1/client-log. The endpoint is
+ * gated behind an authenticated session and the UI only fires it when
+ * the "Client error logging" developer setting is enabled, so there is no
+ * privacy surprise — the user deliberately opts in when they need remote
+ * debugging from a mobile browser.
+ */
+export interface ClientLogEntry {
+  /**
+   * Level maps to slog levels: "debug", "info", "warn", "error".
+   * Unknown values fall back to "info".
+   */
+  level: string;
+  /**
+   * Source is a free-form tag for grepping (e.g. "hls", "billing").
+   */
+  source: string;
+  /**
+   * Message is the main log line.
+   */
+  message: string;
+  /**
+   * UserAgent and URL are optional context captured by the client.
+   */
+  user_agent?: string;
+  url?: string;
+  /**
+   * Context is an open-ended string map for structured extras
+   * (e.g. HLS error type / status code / device ID).
+   */
+  context?: { [key: string]: string};
+}
+/**
  * TokenInfo is the per-token entry returned by GET /api/v1/tokens.
  */
 export interface TokenInfo {
