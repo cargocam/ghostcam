@@ -68,9 +68,11 @@ func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if user.DisabledAt != nil {
+	if user.DisabledAt != nil || user.DeletedAt != nil {
 		auth.DummyVerify(body.Password)
-		slog.Warn("login failed: account disabled", "email", body.Email, "ip", clientIP(r))
+		slog.Warn("login failed: account disabled or deleted",
+			"email", body.Email, "ip", clientIP(r),
+			"disabled", user.DisabledAt != nil, "deleted", user.DeletedAt != nil)
 		http.Error(w, "", http.StatusUnauthorized)
 		return
 	}

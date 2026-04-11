@@ -1,7 +1,15 @@
 import type {
 	AdminBillingTierSubscribersResponse,
+	AdminCreateUserRequest,
+	AdminCreateUserResponse,
 	AdminListBillingTiersResponse,
+	AdminListCamerasResponse,
+	AdminListUsersResponse,
+	AdminReassignCameraConflictResponse,
+	AdminReassignCameraRequest,
 	AdminRepriceBillingTierResponse,
+	AdminResetPasswordResponse,
+	AdminUpdateUserRequest,
 	CameraResponse,
 	CheckoutResponse,
 	CoverageResponse,
@@ -174,6 +182,118 @@ export async function adminGetTierSubscribers(
 	);
 	if (!res.ok) throw new Error(`adminGetTierSubscribers failed: ${res.status}`);
 	return res.json();
+}
+
+// --- Admin: Users ---
+
+export async function adminListUsers(): Promise<AdminListUsersResponse> {
+	const res = await fetch(`${API_BASE}/admin/users`, { credentials: 'include' });
+	if (!res.ok) throw new Error(`adminListUsers failed: ${res.status}`);
+	return res.json();
+}
+
+export async function adminCreateUser(
+	body: AdminCreateUserRequest,
+): Promise<AdminCreateUserResponse> {
+	const res = await fetch(`${API_BASE}/admin/users`, {
+		method: 'POST',
+		headers: headers(),
+		body: JSON.stringify(body),
+		credentials: 'include',
+	});
+	if (res.status === 409) {
+		throw new Error('email_exists');
+	}
+	if (!res.ok) throw new Error(`adminCreateUser failed: ${res.status}`);
+	return res.json();
+}
+
+export async function adminUpdateUser(
+	userID: string,
+	body: AdminUpdateUserRequest,
+): Promise<void> {
+	const res = await fetch(`${API_BASE}/admin/users/${encodeURIComponent(userID)}`, {
+		method: 'PATCH',
+		headers: headers(),
+		body: JSON.stringify(body),
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`adminUpdateUser failed: ${res.status}`);
+}
+
+export async function adminResetUserPassword(
+	userID: string,
+): Promise<AdminResetPasswordResponse> {
+	const res = await fetch(
+		`${API_BASE}/admin/users/${encodeURIComponent(userID)}/reset-password`,
+		{
+			method: 'POST',
+			headers: headers(),
+			credentials: 'include',
+		},
+	);
+	if (!res.ok) throw new Error(`adminResetUserPassword failed: ${res.status}`);
+	return res.json();
+}
+
+export async function adminDeleteUser(userID: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/admin/users/${encodeURIComponent(userID)}`, {
+		method: 'DELETE',
+		credentials: 'include',
+	});
+	if (!res.ok) {
+		// Surface the specific server reason so the UI can tell the
+		// admin WHY a delete was refused (admin target / self / already
+		// deleted). Body is a {error: string} object.
+		let reason = `adminDeleteUser failed: ${res.status}`;
+		try {
+			const body = (await res.json()) as { error?: string };
+			if (body?.error) reason = body.error;
+		} catch {
+			/* ignore */
+		}
+		throw new Error(reason);
+	}
+}
+
+// --- Admin: Cameras ---
+
+export async function adminListCameras(): Promise<AdminListCamerasResponse> {
+	const res = await fetch(`${API_BASE}/admin/cameras`, { credentials: 'include' });
+	if (!res.ok) throw new Error(`adminListCameras failed: ${res.status}`);
+	return res.json();
+}
+
+/**
+ * Reassign a camera to a different user. Returns ok=false with a typed
+ * conflict when the target user is already at their tier limit.
+ */
+export async function adminReassignCamera(
+	deviceID: string,
+	body: AdminReassignCameraRequest,
+): Promise<
+	{ ok: true } | { ok: false; conflict: AdminReassignCameraConflictResponse }
+> {
+	const res = await fetch(`${API_BASE}/admin/cameras/${encodeURIComponent(deviceID)}`, {
+		method: 'PATCH',
+		headers: headers(),
+		body: JSON.stringify(body),
+		credentials: 'include',
+	});
+	if (res.status === 409) {
+		const conflict = (await res.json()) as AdminReassignCameraConflictResponse;
+		return { ok: false, conflict };
+	}
+	if (!res.ok) throw new Error(`adminReassignCamera failed: ${res.status}`);
+	return { ok: true };
+}
+
+export async function adminDeleteCamera(deviceID: string): Promise<void> {
+	const res = await fetch(`${API_BASE}/admin/cameras/${encodeURIComponent(deviceID)}`, {
+		method: 'DELETE',
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`adminDeleteCamera failed: ${res.status}`);
 }
 
 /**

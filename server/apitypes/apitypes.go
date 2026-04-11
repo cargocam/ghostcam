@@ -334,6 +334,102 @@ type AdminRepriceBillingTierResponse struct {
 }
 
 // ====================================================================
+// Admin users
+// ====================================================================
+
+// AdminUser is a platform-wide view of a user for the admin Users
+// section. Joined with admin status, subscription tier, and camera
+// count so rendering the list never requires a per-row fan-out.
+type AdminUser struct {
+	UserID      string `json:"user_id"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+	CreatedAt   int64  `json:"created_at"`
+	VerifiedAt  *int64 `json:"verified_at,omitempty"`
+	DisabledAt  *int64 `json:"disabled_at,omitempty"`
+	DeletedAt   *int64 `json:"deleted_at,omitempty"`
+	IsAdmin     bool   `json:"is_admin"`
+	Tier        string `json:"tier"`
+	CameraCount int64  `json:"camera_count"`
+}
+
+// AdminListUsersResponse is the body of GET /api/v1/admin/users.
+type AdminListUsersResponse struct {
+	Users []AdminUser `json:"users"`
+}
+
+// AdminCreateUserRequest is the body of POST /api/v1/admin/users.
+// The admin supplies email + display name; the server generates a
+// random initial password and returns it in the response exactly once.
+type AdminCreateUserRequest struct {
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+}
+
+// AdminCreateUserResponse is the success body of POST /api/v1/admin/users.
+// GeneratedPassword is the one-time plaintext the admin is expected to
+// hand off to the user — the server does not store it. New users are
+// always created on the free tier; paid upgrades happen through the
+// normal Stripe checkout flow after the user first logs in.
+type AdminCreateUserResponse struct {
+	User              AdminUser `json:"user"`
+	GeneratedPassword string    `json:"generated_password"`
+}
+
+// AdminUpdateUserRequest is the body of PATCH /api/v1/admin/users/{id}.
+// Today the only supported mutation is toggling the disabled flag; the
+// struct uses a pointer so "not sent" is distinct from "set to false".
+type AdminUpdateUserRequest struct {
+	Disabled *bool `json:"disabled,omitempty"`
+}
+
+// AdminResetPasswordResponse is the success body of POST
+// /api/v1/admin/users/{id}/reset-password. Shape matches the create
+// response so the UI can reuse its one-time-password reveal dialog.
+type AdminResetPasswordResponse struct {
+	GeneratedPassword string `json:"generated_password"`
+}
+
+// ====================================================================
+// Admin cameras
+// ====================================================================
+
+// AdminCamera is a platform-wide view of a camera for the admin
+// Cameras section. Joined with owner email so the UI doesn't have to
+// secondary-fetch against the users list for each row.
+type AdminCamera struct {
+	DeviceID    string `json:"device_id"`
+	DisplayName string `json:"display_name"`
+	UserID      string `json:"user_id"`
+	OwnerEmail  string `json:"owner_email"`
+	EnrolledAt  int64  `json:"enrolled_at"`
+	LastSeenAt  *int64 `json:"last_seen_at,omitempty"`
+}
+
+// AdminListCamerasResponse is the body of GET /api/v1/admin/cameras.
+type AdminListCamerasResponse struct {
+	Cameras []AdminCamera `json:"cameras"`
+}
+
+// AdminReassignCameraRequest is the body of PATCH
+// /api/v1/admin/cameras/{deviceID}. The server validates that the
+// target user isn't already at their tier limit and rejects with 409
+// if they are — reassignment never silently starves an existing camera.
+type AdminReassignCameraRequest struct {
+	UserID string `json:"user_id"`
+}
+
+// AdminReassignCameraConflictResponse is the HTTP 409 body returned
+// when the target user's tier limit would be exceeded by the move.
+// Shape mirrors AdminArchiveConflictResponse so the UI can handle
+// 409 with a single pattern.
+type AdminReassignCameraConflictResponse struct {
+	Error       string `json:"error"`
+	CameraLimit int    `json:"camera_limit"`
+	CameraCount int64  `json:"camera_count"`
+}
+
+// ====================================================================
 // Client diagnostics
 // ====================================================================
 

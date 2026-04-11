@@ -272,6 +272,16 @@ func (a *App) router() http.Handler {
 		r.Post("/api/v1/admin/billing/tiers/{priceID}/archive", a.AdminArchiveBillingTier)
 		r.Post("/api/v1/admin/billing/tiers/{priceID}/reprice", a.AdminRepriceBillingTier)
 		r.Get("/api/v1/admin/billing/tiers/{priceID}/subscribers", a.AdminBillingTierSubscribers)
+
+		r.Get("/api/v1/admin/users", a.AdminListUsers)
+		r.Post("/api/v1/admin/users", a.AdminCreateUser)
+		r.Patch("/api/v1/admin/users/{userID}", a.AdminUpdateUser)
+		r.Post("/api/v1/admin/users/{userID}/reset-password", a.AdminResetUserPassword)
+		r.Delete("/api/v1/admin/users/{userID}", a.AdminSoftDeleteUser)
+
+		r.Get("/api/v1/admin/cameras", a.AdminListCameras)
+		r.Patch("/api/v1/admin/cameras/{deviceID}", a.AdminReassignCamera)
+		r.Delete("/api/v1/admin/cameras/{deviceID}", a.AdminDeleteCamera)
 	})
 
 	// Static SPA files

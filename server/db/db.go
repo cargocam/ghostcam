@@ -167,6 +167,7 @@ type UserRecord struct {
 	CreatedAt   int64
 	VerifiedAt  *int64
 	DisabledAt  *int64
+	DeletedAt   *int64
 }
 
 // NewAPIToken holds fields for creating an API token.

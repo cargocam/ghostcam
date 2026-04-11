@@ -343,6 +343,104 @@ export interface AdminRepriceBillingTierResponse {
   migrated_count: number /* int */;
 }
 /**
+ * AdminUser is a platform-wide view of a user for the admin Users
+ * section. Joined with admin status, subscription tier, and camera
+ * count so rendering the list never requires a per-row fan-out.
+ */
+export interface AdminUser {
+  user_id: string;
+  email: string;
+  display_name: string;
+  created_at: number /* int64 */;
+  verified_at?: number /* int64 */;
+  disabled_at?: number /* int64 */;
+  deleted_at?: number /* int64 */;
+  is_admin: boolean;
+  tier: string;
+  camera_count: number /* int64 */;
+}
+/**
+ * AdminListUsersResponse is the body of GET /api/v1/admin/users.
+ */
+export interface AdminListUsersResponse {
+  users: AdminUser[];
+}
+/**
+ * AdminCreateUserRequest is the body of POST /api/v1/admin/users.
+ * The admin supplies email + display name; the server generates a
+ * random initial password and returns it in the response exactly once.
+ */
+export interface AdminCreateUserRequest {
+  email: string;
+  display_name: string;
+}
+/**
+ * AdminCreateUserResponse is the success body of POST /api/v1/admin/users.
+ * GeneratedPassword is the one-time plaintext the admin is expected to
+ * hand off to the user — the server does not store it. New users are
+ * always created on the free tier; paid upgrades happen through the
+ * normal Stripe checkout flow after the user first logs in.
+ */
+export interface AdminCreateUserResponse {
+  user: AdminUser;
+  generated_password: string;
+}
+/**
+ * AdminUpdateUserRequest is the body of PATCH /api/v1/admin/users/{id}.
+ * Today the only supported mutation is toggling the disabled flag; the
+ * struct uses a pointer so "not sent" is distinct from "set to false".
+ */
+export interface AdminUpdateUserRequest {
+  disabled?: boolean;
+}
+/**
+ * AdminResetPasswordResponse is the success body of POST
+ * /api/v1/admin/users/{id}/reset-password. Shape matches the create
+ * response so the UI can reuse its one-time-password reveal dialog.
+ */
+export interface AdminResetPasswordResponse {
+  generated_password: string;
+}
+/**
+ * AdminCamera is a platform-wide view of a camera for the admin
+ * Cameras section. Joined with owner email so the UI doesn't have to
+ * secondary-fetch against the users list for each row.
+ */
+export interface AdminCamera {
+  device_id: string;
+  display_name: string;
+  user_id: string;
+  owner_email: string;
+  enrolled_at: number /* int64 */;
+  last_seen_at?: number /* int64 */;
+}
+/**
+ * AdminListCamerasResponse is the body of GET /api/v1/admin/cameras.
+ */
+export interface AdminListCamerasResponse {
+  cameras: AdminCamera[];
+}
+/**
+ * AdminReassignCameraRequest is the body of PATCH
+ * /api/v1/admin/cameras/{deviceID}. The server validates that the
+ * target user isn't already at their tier limit and rejects with 409
+ * if they are — reassignment never silently starves an existing camera.
+ */
+export interface AdminReassignCameraRequest {
+  user_id: string;
+}
+/**
+ * AdminReassignCameraConflictResponse is the HTTP 409 body returned
+ * when the target user's tier limit would be exceeded by the move.
+ * Shape mirrors AdminArchiveConflictResponse so the UI can handle
+ * 409 with a single pattern.
+ */
+export interface AdminReassignCameraConflictResponse {
+  error: string;
+  camera_limit: number /* int */;
+  camera_count: number /* int64 */;
+}
+/**
  * ClientLogEntry is the body of POST /api/v1/client-log. The endpoint is
  * gated behind an authenticated session and the UI only fires it when
  * the "Client error logging" developer setting is enabled, so there is no

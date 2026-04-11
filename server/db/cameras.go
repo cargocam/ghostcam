@@ -143,3 +143,68 @@ func (db *DB) CreateCameraAPIKey(ctx context.Context, deviceID, apiKeyHash strin
 	}
 	return nil
 }
+
+// --- Admin camera management ---
+
+// AdminCameraRecord is a platform-wide view of a camera joined with its
+// owning user's email. Used to render the admin Cameras section. Omits
+// notes/resolution/recording_mode to keep the payload small — admins
+// who need those details can drop down to the user's settings page.
+type AdminCameraRecord struct {
+	DeviceID    string
+	DisplayName string
+	UserID      string
+	OwnerEmail  string
+	EnrolledAt  int64
+	LastSeenAt  *int64
+}
+
+// ListAllCameras returns every camera in the database joined with its
+// owner's email, newest-enrolled first. Includes cameras whose owner is
+// soft-deleted so admins can see the full fleet and act on orphans.
+func (db *DB) ListAllCameras(ctx context.Context) ([]AdminCameraRecord, error) {
+	rows, err := db.pool.Query(ctx, `
+		SELECT c.device_id, c.display_name, c.user_id, u.email,
+		       c.enrolled_at, c.last_seen_at
+		FROM cameras c
+		JOIN users u ON u.user_id = c.user_id
+		ORDER BY c.enrolled_at DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("list all cameras: %w", err)
+	}
+	defer rows.Close()
+
+	var out []AdminCameraRecord
+	for rows.Next() {
+		var c AdminCameraRecord
+		if err := rows.Scan(
+			&c.DeviceID, &c.DisplayName, &c.UserID, &c.OwnerEmail,
+			&c.EnrolledAt, &c.LastSeenAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan admin camera row: %w", err)
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("admin cameras rows: %w", err)
+	}
+	return out, nil
+}
+
+// ReassignCamera changes the owning user of a camera. Caller is
+// responsible for enforcing tier-limit invariants before calling — this
+// is a raw UPDATE that doesn't know about billing.
+func (db *DB) ReassignCamera(ctx context.Context, deviceID, newUserID string) error {
+	tag, err := db.pool.Exec(ctx,
+		`UPDATE cameras SET user_id = $1 WHERE device_id = $2`,
+		newUserID, deviceID,
+	)
+	if err != nil {
+		return fmt.Errorf("reassign camera: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("reassign camera: device %q not found", deviceID)
+	}
+	return nil
+}

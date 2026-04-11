@@ -147,7 +147,10 @@ func (a *App) adminAuth(next http.Handler) http.Handler {
 	})
 }
 
-// cameraAuth authenticates cameras via Bearer API key.
+// cameraAuth authenticates cameras via Bearer API key and fails closed
+// if the camera's owning user has been soft-deleted — segments must
+// stop flowing the moment an admin trashes the account, even though
+// the cameras table row still exists until a dev hard-deletes it.
 func (a *App) cameraAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
@@ -167,6 +170,22 @@ func (a *App) cameraAuth(next http.Handler) http.Handler {
 		if err != nil || camera == nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
+		}
+
+		// Block the camera if its owner is soft-deleted. A missing
+		// user row is also treated as deleted so hard-deleted orphans
+		// fail closed. One extra DB hit per camera request is fine —
+		// it's a primary-key lookup and cameras poll every ~10s.
+		if camera.UserID != nil && *camera.UserID != "" {
+			deleted, err := a.DB.IsUserDeleted(r.Context(), *camera.UserID)
+			if err != nil {
+				http.Error(w, "", http.StatusInternalServerError)
+				return
+			}
+			if deleted {
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
 		}
 
 		ctx := context.WithValue(r.Context(), keyCameraDeviceID, camera.DeviceID)
