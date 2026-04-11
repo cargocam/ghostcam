@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/cargocam/ghostcam/server/billing"
@@ -229,6 +230,22 @@ func (a *App) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 		a.handleSubscriptionUpdated(ctx, &event)
 	case "customer.subscription.deleted":
 		a.handleSubscriptionDeleted(ctx, &event)
+	case "product.created", "product.updated", "product.deleted",
+		"price.created", "price.updated", "price.deleted":
+		// A product or price changed in Stripe — refresh the tier cache
+		// so the UI picks up the change on the next render instead of
+		// waiting for the hourly background refresh. The refresh runs
+		// asynchronously in a fresh context so a slow Stripe API call
+		// doesn't block webhook delivery (Stripe retries on timeout).
+		eventType := event.Type
+		go func() {
+			refreshCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			if err := a.Tiers.Refresh(refreshCtx, a.Config.StripeSecretKey); err != nil {
+				slog.Warn("billing: tier cache refresh after webhook failed",
+					"event_type", eventType, "error", err)
+			}
+		}()
 	default:
 		slog.Debug("unhandled stripe event type", "type", event.Type)
 	}

@@ -48,9 +48,6 @@ Config is loaded once at startup — there is no runtime reload endpoint. To app
 | `GHOSTCAM_SEGMENT_RETENTION_DAYS` | `30` | Segment retention in days. Used as the cutoff for opportunistic prune in the presign handler and as the read cutoff for manifest / coverage queries. |
 | `STRIPE_SECRET_KEY` | _(none)_ | Stripe API key |
 | `STRIPE_WEBHOOK_SECRET` | _(none)_ | Stripe webhook signing secret |
-| `STRIPE_PRICE_ID_STARTER` | _(none)_ | Stripe Price ID for starter tier |
-| `STRIPE_PRICE_ID_PRO` | _(none)_ | Stripe Price ID for pro tier |
-| `STRIPE_PRICE_ID_ENTERPRISE` | _(none)_ | Stripe Price ID for enterprise tier |
 | `STRIPE_PORTAL_CONFIG_ID` | _(none)_ | Portal config with plan switching |
 
 ### Camera
@@ -73,14 +70,46 @@ Config is loaded once at startup — there is no runtime reload endpoint. To app
 
 ## Billing Tiers
 
-Billing is always enabled. Every user defaults to **free**. `effectiveTier()` derives tier from Stripe subscription state; when Stripe not configured (dev), returns "enterprise" (unlimited).
+Billing is always enabled. Every user defaults to **free**. `effectiveTier()`
+derives the tier from Stripe subscription state; when Stripe is not configured
+(dev / self-hosted), it returns a synthetic `dev-unlimited` tier with no
+camera or storage limits.
 
-| Tier | Storage | Cameras |
-|------|---------|---------|
-| Free | 5 GB | 1 |
-| Starter | 50 GB | 4 |
-| Pro | 500 GB | 16 |
-| Enterprise | unlimited | unlimited |
+Paid tiers are **not hardcoded**. On startup — and on every relevant Stripe
+webhook — the server calls `prices.list(active=true, expand=data.product)`
+and registers every Stripe product that carries both of these product-level
+metadata keys as a tier:
+
+| Metadata key | Value |
+|--------------|-------|
+| `ghostcam_camera_limit` | integer (e.g. `4`) or `unlimited` |
+| `ghostcam_storage_gb`   | integer (e.g. `50`) or `unlimited` |
+
+Products missing both keys are skipped with a `billing: skipping stripe
+product without ghostcam metadata` warning — fail-closed so a new dashboard
+product can't accidentally grant paid limits. The tier's display name is
+pulled from the Stripe product `name`, and the price / currency / interval
+come from the Stripe price. The free tier is the one exception — it's a
+compile-time constant (`billing.FreeTier`) with 1 camera and 5 GB.
+
+### Required Stripe webhook events
+
+Configure your Stripe webhook endpoint (`/api/v1/webhooks/stripe`) to
+forward at minimum:
+
+| Event | Purpose |
+|-------|---------|
+| `checkout.session.completed`      | Record a new paid subscription on the user. |
+| `customer.subscription.updated`   | Handle plan switches, renewals, and status flips. |
+| `customer.subscription.deleted`   | Downgrade the user back to free on cancellation. |
+| `product.created`/`updated`/`deleted` | Refresh the server's tier cache so dashboard edits are visible in real time rather than waiting for the hourly background refresh. |
+| `price.created`/`updated`/`deleted`   | Same — a new price on an existing product should become a tier option immediately. |
+
+The server runs the tier refresh asynchronously in a 15-second context so
+a slow Stripe API call never blocks webhook delivery (Stripe would retry
+on timeout and risk reordering events). If the refresh fails, the existing
+cache contents are preserved and the failure is logged; the next hourly
+refresh or the next webhook will try again.
 
 ## Retention & Cleanup
 
