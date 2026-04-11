@@ -20,33 +20,31 @@
 	} = $props();
 </script>
 
-<header class="flex items-center justify-between h-12 px-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+<header class="flex items-center justify-between gap-2 h-12 px-2 sm:px-4 border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
 	<!-- Left: mobile menu + branding -->
-	<div class="flex items-center gap-3">
-		<Button variant="ghost" size="icon" class="md:hidden" onclick={onMenuClick}>
+	<div class="flex items-center gap-2 sm:gap-3 min-w-0">
+		<Button variant="ghost" size="icon" class="md:hidden shrink-0 -ml-1" onclick={onMenuClick}>
 			<Menu class="h-5 w-5" />
 		</Button>
-		<div class="flex items-center gap-2">
-			<span class="text-sm font-bold tracking-widest text-primary">GHOSTCAM</span>
-		</div>
+		<span class="hidden sm:inline text-sm font-bold tracking-widest text-primary">GHOSTCAM</span>
 	</div>
 
 	<!-- Center: view toggle + group selector -->
-	<div class="flex items-center gap-2">
+	<div class="flex items-center gap-2 min-w-0">
 		<ToggleGroup bind:value={
 			() => settingsStore.currentView,
 			(v) => settingsStore.setView(v as ViewMode)
 		}>
 			<ToggleGroupItem value="live">
-				<Video class="h-3.5 w-3.5 mr-1" />
+				<Video class="h-3.5 w-3.5 sm:mr-1" />
 				<span class="text-xs hidden sm:inline">LIVE</span>
 			</ToggleGroupItem>
 			<ToggleGroupItem value="map">
-				<Map class="h-3.5 w-3.5 mr-1" />
+				<Map class="h-3.5 w-3.5 sm:mr-1" />
 				<span class="text-xs hidden sm:inline">MAP</span>
 			</ToggleGroupItem>
 			<ToggleGroupItem value="dashboard">
-				<Activity class="h-3.5 w-3.5 mr-1" />
+				<Activity class="h-3.5 w-3.5 sm:mr-1" />
 				<span class="text-xs hidden sm:inline">STATS</span>
 			</ToggleGroupItem>
 		</ToggleGroup>
@@ -55,7 +53,7 @@
 	</div>
 
 	<!-- Right: context toggles + status + settings -->
-	<div class="flex items-center gap-2">
+	<div class="flex items-center gap-1 sm:gap-2 shrink-0">
 		{#if settingsStore.currentView === 'live'}
 			<ToggleGroup bind:value={
 				() => settingsStore.gridLayout,
@@ -87,7 +85,7 @@
 			</ToggleGroup>
 		{/if}
 
-		<div class="flex items-center gap-1.5 text-xs text-muted-foreground">
+		<div class="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground">
 			<span class={transportStore.connected ? 'text-primary' : 'text-destructive'}>
 				{cameraStore.onlineCount}
 			</span>
@@ -101,7 +99,7 @@
 			</span>
 		</Button>
 
-		<Button variant="ghost" size="icon" onclick={onSettingsClick}>
+		<Button variant="ghost" size="icon" class="-mr-1 sm:mr-0" onclick={onSettingsClick}>
 			<Settings class="h-4 w-4" />
 		</Button>
 	</div>

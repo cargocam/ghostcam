@@ -56,6 +56,23 @@
 		return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 	}
 
+	function formatTimeShort(ts: number): string {
+		return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+	}
+
+	// Track width-aware label count: use 3 labels when the track is narrow
+	// (e.g. mobile), 5 otherwise.
+	let trackWidth = $state(0);
+	$effect(() => {
+		if (!trackEl) return;
+		const ro = new ResizeObserver((entries) => {
+			trackWidth = entries[0].contentRect.width;
+		});
+		ro.observe(trackEl);
+		return () => ro.disconnect();
+	});
+	let labelCount = $derived(trackWidth > 0 && trackWidth < 260 ? 3 : 5);
+
 	function timeFromEvent(e: MouseEvent | PointerEvent): number {
 		if (!trackEl) return scrubberStore.playheadTime;
 		const rect = trackEl.getBoundingClientRect();
@@ -356,9 +373,10 @@
 	}
 </script>
 
-<div class="flex items-center gap-3 px-4 py-2 bg-background/95 backdrop-blur-sm border-t border-border">
-	<span class="text-xs text-muted-foreground font-mono w-20 shrink-0">
-		{formatTime(scrubberStore.playheadTime)}
+<div class="flex items-center gap-2 sm:gap-3 px-2 sm:px-4 py-2 bg-background/95 backdrop-blur-sm border-t border-border">
+	<span class="text-[11px] sm:text-xs text-muted-foreground font-mono shrink-0 tabular-nums">
+		<span class="hidden sm:inline">{formatTime(scrubberStore.playheadTime)}</span>
+		<span class="sm:hidden">{formatTimeShort(scrubberStore.playheadTime)}</span>
 	</span>
 
 	<div
@@ -471,9 +489,9 @@
 
 		<!-- Time labels -->
 		<div class="absolute inset-x-0 bottom-0 flex justify-between pointer-events-none">
-			{#each Array(5) as _, i}
-				{@const t = windowStart + (i / 4) * (windowEnd - windowStart)}
-				<span class="text-[9px] text-muted-foreground/50 font-mono">{formatTime(t)}</span>
+			{#each Array(labelCount) as _, i}
+				{@const t = windowStart + (i / (labelCount - 1)) * (windowEnd - windowStart)}
+				<span class="text-[9px] text-muted-foreground/50 font-mono tabular-nums">{formatTimeShort(t)}</span>
 			{/each}
 		</div>
 	</div>

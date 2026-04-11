@@ -73,6 +73,16 @@
 
 	body {
 		@apply bg-background text-foreground font-sans antialiased;
-		min-height: 100dvh;
+		min-height: 100vh; /* fallback */
+		min-height: 100svh;
+		overscroll-behavior: none;
 	}
+}
+
+/* Stable full-height shell that works on browsers without svh support.
+   Kept outside @layer base so the fallback order survives Tailwind's layer
+   cascade and the second declaration isn't dropped. */
+.h-screen-stable {
+	height: 100vh; /* fallback */
+	height: 100svh;
 }

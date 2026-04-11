@@ -14,6 +14,7 @@
 		gpsOverride = undefined,
 		selected = false,
 		offsetAngle = 315,
+		compact = false,
 		onMarkerClick,
 	}: {
 		map: L.Map;
@@ -22,6 +23,7 @@
 		gpsOverride?: { latitude: number; longitude: number } | undefined;
 		selected?: boolean;
 		offsetAngle?: number;
+		compact?: boolean;
 		onMarkerClick?: (deviceId: string) => void;
 	} = $props();
 
@@ -35,12 +37,16 @@
 	let markerMode = $derived(settingsStore.markerMode);
 
 	const PANEL_GAP = 8; // px between dot edge and panel
-	const PIP_W = 160, PIP_H = 110;
-	const INFO_W = 160, INFO_H = 56;
 	const DOT_SIZE = 12;
+	// Compact (narrow-viewport) dimensions keep markers within the visible area.
+	let PIP_W = $derived(compact ? 128 : 160);
+	let PIP_VIDEO_H = $derived(compact ? 72 : 90);
+	let PIP_H = $derived(compact ? 92 : 110);
+	let INFO_W = $derived(compact ? 128 : 160);
+	let INFO_H = $derived(compact ? 50 : 56);
 
 	function iconKey(): string {
-		return `${markerMode}|${selected}|${camera.online}|${displayName}|${offsetAngle}`;
+		return `${markerMode}|${selected}|${camera.online}|${displayName}|${offsetAngle}|${compact ? 'c' : 'f'}`;
 	}
 
 	function hlsSrc(): string {
@@ -109,7 +115,7 @@
 			const statusDot = `<span style="width:6px;height:6px;border-radius:50%;background:${dotColor};flex-shrink:0"></span>`;
 			panelHtml = `
 				<div style="position:absolute;left:${panelLeft}px;top:${panelTop}px;width:${PIP_W}px;z-index:1;border-radius:8px;overflow:hidden;${pipBorder};background:#000">
-					<div class="pip-video-slot" style="width:${PIP_W}px;height:90px;background:#1a1a2e"></div>
+					<div class="pip-video-slot" style="width:${PIP_W}px;height:${PIP_VIDEO_H}px;background:#1a1a2e"></div>
 					<div style="display:flex;align-items:center;gap:5px;padding:3px 8px;background:rgba(0,0,0,0.9);color:white;font-size:10px;font-family:monospace">
 						${statusDot}
 						<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${displayName}</span>
@@ -119,17 +125,18 @@
 			// Info mode
 			const cpu = t?.cpu_percent?.toFixed(0) ?? '--';
 			const mem = t?.memory_mb?.toFixed(0) ?? '--';
-			const temp = t?.temp_celsius ? `${t.temp_celsius.toFixed(0)}°` : '';
+			// Drop temperature on compact to keep content within the narrower panel.
+			const temp = !compact && t?.temp_celsius ? `${t.temp_celsius.toFixed(0)}°` : '';
 			const infoBorder = selected
 				? 'border:2px solid #10b981;box-shadow:0 0 0 2px #10b981,0 2px 8px rgba(0,0,0,0.3)'
 				: 'border:1px solid rgba(255,255,255,0.1);box-shadow:0 2px 8px rgba(0,0,0,0.3)';
 			panelHtml = `
-				<div style="position:absolute;left:${panelLeft}px;top:${panelTop}px;z-index:1;background:rgba(0,0,0,0.85);border-radius:8px;padding:6px 10px;color:white;font-size:11px;font-family:monospace;white-space:nowrap;${infoBorder}">
-					<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px">
+				<div style="position:absolute;left:${panelLeft}px;top:${panelTop}px;width:${INFO_W}px;box-sizing:border-box;z-index:1;background:rgba(0,0,0,0.85);border-radius:8px;padding:6px 10px;color:white;font-size:11px;font-family:monospace;white-space:nowrap;overflow:hidden;${infoBorder}">
+					<div style="display:flex;align-items:center;gap:6px;margin-bottom:3px;min-width:0">
 						<span style="width:6px;height:6px;border-radius:50%;background:${dotColor};flex-shrink:0"></span>
-						<span style="font-weight:600;overflow:hidden;text-overflow:ellipsis">${displayName}</span>
+						<span style="font-weight:600;overflow:hidden;text-overflow:ellipsis;min-width:0">${displayName}</span>
 					</div>
-					<div style="display:flex;gap:8px;color:rgba(255,255,255,0.7);font-size:10px">
+					<div style="display:flex;gap:8px;color:rgba(255,255,255,0.7);font-size:10px;overflow:hidden">
 						<span>CPU ${cpu}%</span>
 						<span>${mem} MB</span>
 						${temp ? `<span>${temp}C</span>` : ''}
@@ -165,7 +172,7 @@
 		video.autoplay = true;
 		video.muted = true;
 		video.playsInline = true;
-		video.style.cssText = `width:${PIP_W}px;height:90px;object-fit:cover;display:block`;
+		video.style.cssText = `width:${PIP_W}px;height:${PIP_VIDEO_H}px;object-fit:cover;display:block`;
 		slot.innerHTML = '';
 		slot.appendChild(video);
 		pipVideo = video;

@@ -48,11 +48,11 @@
 {#if !transportStore.authenticated}
 	<LoginPage />
 {:else if settingsStore.currentView === 'camera'}
-	<div class="h-dvh overflow-hidden bg-black">
+	<div class="app-root h-screen-stable overflow-hidden bg-black">
 		<CameraView />
 	</div>
 {:else}
-	<div class="flex h-dvh overflow-hidden bg-background">
+	<div class="app-root flex h-screen-stable overflow-hidden bg-background">
 		<Sidebar />
 		<MobileNav bind:open={mobileNavOpen} />
 
@@ -83,3 +83,14 @@
 
 <SettingsDialog bind:open={settingsOpen} />
 <AlertsSheet bind:open={alertsOpen} />
+
+<style>
+	/* Pad the top (notch) and bottom (home indicator) on devices with
+	   viewport-fit=cover so fixed-height layouts stay within the safe area. */
+	:global(.app-root) {
+		padding-top: env(safe-area-inset-top);
+		padding-bottom: env(safe-area-inset-bottom);
+		padding-left: env(safe-area-inset-left);
+		padding-right: env(safe-area-inset-right);
+	}
+</style>

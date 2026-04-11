@@ -88,7 +88,7 @@
 			<!-- Theme -->
 			<div>
 				<h3 class="text-sm font-medium mb-3">Theme</h3>
-				<div class="flex gap-2">
+				<div class="flex flex-wrap gap-2">
 					<Button
 						variant={settingsStore.theme === 'light' ? 'default' : 'outline'}
 						size="sm"

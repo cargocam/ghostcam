@@ -14,8 +14,8 @@
 	} = $props();
 
 	const sideClasses: Record<string, string> = {
-		left: "inset-y-0 left-0 h-full w-3/4 max-w-sm border-r slide-in-from-left",
-		right: "inset-y-0 right-0 h-full w-3/4 max-w-sm border-l slide-in-from-right",
+		left: "inset-y-0 left-0 h-full w-[85vw] max-w-sm border-r slide-in-from-left",
+		right: "inset-y-0 right-0 h-full w-[85vw] max-w-sm border-l slide-in-from-right",
 		top: "inset-x-0 top-0 border-b",
 		bottom: "inset-x-0 bottom-0 border-t",
 	};

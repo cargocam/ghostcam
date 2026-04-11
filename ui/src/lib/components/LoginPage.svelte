@@ -24,7 +24,7 @@
 	}
 </script>
 
-<div class="flex h-dvh items-center justify-center bg-background">
+<div class="flex h-screen-stable items-center justify-center bg-background">
 	<div class="w-full max-w-sm space-y-6 px-4">
 		<div class="text-center space-y-2">
 			<h1 class="text-2xl font-bold tracking-tight">Ghostcam</h1>

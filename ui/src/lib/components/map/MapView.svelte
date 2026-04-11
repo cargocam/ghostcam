@@ -39,6 +39,17 @@
 
 	let markerMode = $derived(settingsStore.markerMode);
 	let SHOW_PLAYBACK_DEBUG = $derived(settingsStore.debugMode);
+
+	// Track viewport width reactively so fitPadding and marker size adapt to
+	// small screens where detailed/pip panels would otherwise overflow.
+	let viewportWidth = $state(typeof window !== 'undefined' ? window.innerWidth : 1024);
+	$effect(() => {
+		if (typeof window === 'undefined') return;
+		const onResize = () => { viewportWidth = window.innerWidth; };
+		window.addEventListener('resize', onResize);
+		return () => window.removeEventListener('resize', onResize);
+	});
+	let isNarrow = $derived(viewportWidth < 640);
 	let mapSourceDebug = $derived.by(() => {
 		return cameraStore.cameras.map((camera) => {
 			const playbackPoint = playbackPointByDevice[camera.device_id];
@@ -55,13 +66,19 @@
 		});
 	});
 
-	// Padding accounts for marker size so fitBounds doesn't clip them
-	// dot: 12x12 center-anchored, detailed: 160x56 bottom-center, pip: 160x110 bottom-center
-	let fitPadding = $derived<[number, number]>(
-		markerMode === 'pip' ? [130, 100] :
-		markerMode === 'detailed' ? [70, 100] :
-		[30, 30]
-	);
+	// Padding (half of the panel size + margin) keeps markers inside the
+	// visible area after fitBounds. The detailed/pip panels hang off the dot
+	// corner so we need roughly the panel extent on the leading axes.
+	let fitPadding: [number, number] = $derived.by(() => {
+		if (markerMode === 'dot') return [30, 30];
+		if (isNarrow) {
+			// Smaller panels on narrow screens — see CameraMarker.
+			// Panel extent from the dot: 128 + 14 = 142px horizontally.
+			return markerMode === 'pip' ? [145, 120] : [145, 75];
+		}
+		// Full-size panels: 160 + 14 = 174px horizontally.
+		return markerMode === 'pip' ? [180, 135] : [180, 80];
+	});
 
 	const CARTO_DARK = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
 	const CARTO_LIGHT = 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png';
@@ -367,6 +384,7 @@
 					: undefined}
 				selected={tracking === 'single' && trackedDeviceId === camera.device_id}
 				offsetAngle={markerOffsets[camera.device_id] ?? 315}
+				compact={isNarrow}
 				onMarkerClick={handleMarkerClick}
 			/>
 		{/each}
