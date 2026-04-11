@@ -169,15 +169,27 @@
 						<!-- TODO: replace with a tier picker once the UI supports showing
 						     billing.AllTiers() cards. For now, "Upgrade" jumps straight
 						     into Stripe Checkout for the starter tier. -->
-						<Button class="w-full" onclick={() => billingStore.checkout('starter')}>
-							Upgrade to Starter
+						<Button
+							class="w-full"
+							disabled={billingStore.loading}
+							onclick={() => billingStore.checkout('starter')}
+						>
+							{billingStore.loading ? 'Opening…' : 'Upgrade to Starter'}
 							<ExternalLink class="h-3.5 w-3.5 ml-1.5" />
 						</Button>
 					{:else}
-						<Button variant="outline" class="w-full" onclick={() => billingStore.openPortal()}>
-							Manage Subscription
+						<Button
+							variant="outline"
+							class="w-full"
+							disabled={billingStore.loading}
+							onclick={() => billingStore.openPortal()}
+						>
+							{billingStore.loading ? 'Opening…' : 'Manage Subscription'}
 							<ExternalLink class="h-3.5 w-3.5 ml-1.5" />
 						</Button>
+					{/if}
+					{#if billingStore.error}
+						<p class="text-xs text-destructive mt-2 break-words">{billingStore.error}</p>
 					{/if}
 				</div>
 

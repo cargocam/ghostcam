@@ -1,7 +1,7 @@
 <script lang="ts">
 	import Hls from 'hls.js';
 	import { cn } from '$lib/utils.js';
-	import { VideoOff } from 'lucide-svelte';
+	import { VideoOff, Play } from 'lucide-svelte';
 
 	let {
 		src,
@@ -12,6 +12,7 @@
 		loopSeekRevision = 0,
 		class: className = '',
 		onError = undefined,
+		videoEl = $bindable<HTMLVideoElement | undefined>(undefined),
 	}: {
 		src: string;
 		muted?: boolean;
@@ -23,14 +24,62 @@
 		loopSeekRevision?: number;
 		class?: string;
 		onError?: (error: string) => void;
+		/** Exposed so parents can call webkitEnterFullscreen / requestPictureInPicture /
+		 *  draw snapshots. Bound via `bind:videoEl`. */
+		videoEl?: HTMLVideoElement;
 	} = $props();
 
-	let videoEl = $state<HTMLVideoElement | undefined>(undefined);
 	let hls: Hls | null = null;
 	let loading = $state<boolean>(false);
 	let noFootage = $state<boolean>(false);
 	/** PDT of first fragment in ms — used to map currentTime ↔ epoch time for looping. */
 	let firstPDTMs = $state(0);
+	/** Set when an auto-play() promise rejected (mobile autoplay policy, typically
+	 *  after a mid-session src change like entering clip mode). A tap-to-play
+	 *  overlay is rendered and calling play() from the click restores the gesture. */
+	let needsUserPlay = $state<boolean>(false);
+
+	function tryAutoplay(el: HTMLVideoElement | undefined) {
+		if (!el) return;
+		el.play().then(() => {
+			// play() resolved, but verify the element actually started —
+			// decode errors and some MSE hiccups can re-pause the video
+			// immediately after play() resolves.
+			requestAnimationFrame(() => {
+				needsUserPlay = el.paused;
+			});
+		}).catch(() => {
+			// Chrome's mobile autoplay policy rejects play() called outside a
+			// user gesture when the media isn't muted. Surface a tap-to-play
+			// overlay; the resulting click is a user gesture so play()
+			// succeeds from there.
+			if (el.paused) needsUserPlay = true;
+		});
+	}
+
+	function manualResume() {
+		needsUserPlay = false;
+		videoEl?.play().catch(() => {
+			// Shouldn't normally reject (we have a gesture), but if it does
+			// the pause listener will re-show the overlay.
+		});
+	}
+
+	// Reflect the video's actual paused state in `needsUserPlay` so the
+	// tap-to-resume overlay appears whenever playback halts (autoplay
+	// rejection, decode error, reaching VOD end, etc.).
+	$effect(() => {
+		if (!videoEl) return;
+		const el = videoEl;
+		const onPause = () => { needsUserPlay = true; };
+		const onPlaying = () => { needsUserPlay = false; };
+		el.addEventListener('pause', onPause);
+		el.addEventListener('playing', onPlaying);
+		return () => {
+			el.removeEventListener('pause', onPause);
+			el.removeEventListener('playing', onPlaying);
+		};
+	});
 
 	// HLS setup — only re-runs when src or seekTo changes
 	$effect(() => {
@@ -40,6 +89,7 @@
 		loading = false;
 		noFootage = false;
 		firstPDTMs = 0;
+		needsUserPlay = false;
 
 		if (Hls.isSupported()) {
 			const instance = new Hls({
@@ -65,7 +115,7 @@
 					}
 				}
 
-				mediaEl.play().catch(() => {});
+				tryAutoplay(mediaEl);
 			});
 			instance.on(Hls.Events.FRAG_LOADING, () => { loading = true; });
 			instance.on(Hls.Events.FRAG_LOADED, () => { loading = false; });
@@ -89,8 +139,32 @@
 				}
 			});
 		} else if (videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+			// Native HLS path — used on iOS Safari, where hls.js doesn't work
+			// (iOS doesn't expose MediaSource on iPhone). We still need to
+			// feed firstPDTMs so the loop/clip logic works; HTMLMediaElement
+			// populates getStartDate() from #EXT-X-PROGRAM-DATE-TIME.
 			videoEl.src = src;
-			videoEl.addEventListener('loadedmetadata', () => videoEl?.play().catch(() => {}));
+			const onMetadata = () => {
+				if (!videoEl) return;
+				const getStartDate = (videoEl as any).getStartDate as undefined | (() => Date);
+				if (typeof getStartDate === 'function') {
+					const start = getStartDate.call(videoEl);
+					const t = start && start instanceof Date ? start.getTime() : NaN;
+					if (!Number.isNaN(t) && t > 0) {
+						firstPDTMs = t;
+						if (targetSeek > 0) {
+							const offsetSec = targetSeek - t / 1000;
+							if (offsetSec > 0) videoEl.currentTime = offsetSec;
+						}
+					}
+				}
+				tryAutoplay(videoEl);
+			};
+			videoEl.addEventListener('loadedmetadata', onMetadata);
+			return () => {
+				videoEl?.removeEventListener('loadedmetadata', onMetadata);
+				if (hls) { hls.destroy(); hls = null; }
+			};
 		}
 
 		return () => {
@@ -145,6 +219,17 @@
 				<span class="text-xs">No footage</span>
 			</div>
 		</div>
+	{:else if needsUserPlay}
+		<button
+			type="button"
+			class="absolute inset-0 grid place-items-center bg-black/50 backdrop-blur-sm"
+			onclick={(e) => { e.stopPropagation(); manualResume(); }}
+			aria-label="Resume playback"
+		>
+			<span class="flex items-center justify-center h-14 w-14 rounded-full bg-white/90 text-black shadow-lg">
+				<Play class="h-7 w-7 fill-current ml-0.5" />
+			</span>
+		</button>
 	{:else if loading}
 		<div class="absolute inset-0 grid place-items-center pointer-events-none">
 			<div class="h-8 w-8 rounded-full border-2 border-white/30 border-t-white/90 animate-spin"></div>

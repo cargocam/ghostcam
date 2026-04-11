@@ -44,6 +44,8 @@ class BillingStore {
 	}
 
 	async checkout(tier: string) {
+		this.loading = true;
+		this.error = null;
 		try {
 			const { url } = await createCheckout(
 				tier,
@@ -53,15 +55,19 @@ class BillingStore {
 			window.location.href = url;
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : 'Checkout failed';
+			this.loading = false;
 		}
 	}
 
 	async openPortal() {
+		this.loading = true;
+		this.error = null;
 		try {
 			const { url } = await createPortal(window.location.origin + '/');
 			window.location.href = url;
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : 'Portal failed';
+			this.loading = false;
 		}
 	}
 }

@@ -30,11 +30,26 @@
 	}
 
 	function toggleFullscreen() {
+		// iOS Safari doesn't support Fullscreen API on arbitrary elements —
+		// only on <video> via webkitEnterFullscreen. Detect that path first
+		// so mobile viewers aren't stuck with a no-op fullscreen button.
+		const v = videoElement as HTMLVideoElement & {
+			webkitEnterFullscreen?: () => void;
+			webkitDisplayingFullscreen?: boolean;
+		} | undefined;
+		if (!document.fullscreenEnabled && v?.webkitEnterFullscreen) {
+			if (!v.webkitDisplayingFullscreen) v.webkitEnterFullscreen();
+			return;
+		}
 		if (!containerEl) return;
 		if (document.fullscreenElement) {
 			document.exitFullscreen();
 		} else {
-			containerEl.requestFullscreen();
+			containerEl.requestFullscreen().catch(() => {
+				// Android Chrome can reject on some gestures; fall back to
+				// video-element fullscreen if the standard path fails.
+				if (v?.webkitEnterFullscreen) v.webkitEnterFullscreen();
+			});
 		}
 	}
 
@@ -104,7 +119,11 @@
 		onclick={resetOverlayTimer}
 	>
 		<div class="absolute inset-0">
-			<HlsPlayer src={`/hls/${encodeURIComponent(cameraId)}/live.m3u8`} muted={isMuted} />
+			<HlsPlayer
+				src={`/hls/${encodeURIComponent(cameraId)}/live.m3u8`}
+				muted={isMuted}
+				bind:videoEl={videoElement}
+			/>
 		</div>
 
 		<!-- Top overlay -->

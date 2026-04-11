@@ -163,6 +163,7 @@
 				loopStart={clipStore.enabled ? clipStore.startTime : -1}
 				loopEnd={clipStore.enabled ? clipStore.endTime : -1}
 				loopSeekRevision={clipStore.seekRevision}
+				bind:videoEl={videoElement}
 				onError={(err) => console.warn(`HLS error for ${deviceId}:`, err)}
 			/>
 		{:else}
