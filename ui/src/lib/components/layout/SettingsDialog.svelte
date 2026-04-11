@@ -148,11 +148,16 @@
 						Billing
 					</h3>
 					<p class="text-xs text-muted-foreground mb-2">
-						{billingStore.loadError} Please try again.
+						{billingStore.loadError}
 					</p>
-					<Button variant="outline" size="sm" onclick={() => billingStore.load()}>
+					<Button
+						variant="outline"
+						size="sm"
+						disabled={billingStore.loading}
+						onclick={() => billingStore.load(true)}
+					>
 						<RefreshCw class="h-3.5 w-3.5 mr-1.5" />
-						Retry
+						{billingStore.loading ? 'Refreshing…' : 'Retry'}
 					</Button>
 				</div>
 				<Separator />

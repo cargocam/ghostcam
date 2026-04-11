@@ -117,25 +117,18 @@ func run() error {
 	tierCache := billing.NewCache()
 	if cfg.StripeSecretKey != "" {
 		// Refresh synchronously so handlers have tiers available for the
-		// first request. Failure is logged but not fatal — the server still
-		// starts and the cache repopulates on the next hourly refresh.
+		// first request. Failure is logged but not fatal — the server
+		// still starts and the cache repopulates on the next webhook
+		// delivery (product/price.* events → RefreshTiers on StripeWebhook)
+		// or when a user hits the settings Retry button, which calls the
+		// authenticated POST /api/v1/billing/tiers/refresh endpoint.
+		//
+		// We deliberately do not run a background refresh ticker: the
+		// server has no other long-running goroutines and billing is
+		// not load-bearing enough to justify the exception.
 		if err := tierCache.Refresh(ctx, cfg.StripeSecretKey); err != nil {
 			slog.Warn("billing: initial tier cache refresh failed", "error", err)
 		}
-		go func() {
-			t := time.NewTicker(1 * time.Hour)
-			defer t.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-t.C:
-					if err := tierCache.Refresh(context.Background(), cfg.StripeSecretKey); err != nil {
-						slog.Warn("billing: tier cache refresh failed", "error", err)
-					}
-				}
-			}
-		}()
 	}
 
 	app := &App{
@@ -194,6 +187,7 @@ func (a *App) router() http.Handler {
 	registerRL := NewRateLimiter(5)
 	provisionRL := NewRateLimiter(10)
 	clientLogRL := NewRateLimiter(60)
+	tierRefreshRL := NewRateLimiter(5)
 
 	// Public
 	r.Get("/healthz", a.Healthz)
@@ -256,6 +250,10 @@ func (a *App) router() http.Handler {
 		r.Post("/api/v1/billing/checkout", a.CreateCheckout)
 		r.Post("/api/v1/billing/portal", a.CreatePortal)
 		r.Get("/api/v1/billing/usage", a.GetUsage)
+		// Force a synchronous Stripe tier cache refresh. Public
+		// /billing/tiers reads the cache only. This authenticated
+		// variant is what the settings dialog's Retry button calls.
+		r.With(tierRefreshRL.Middleware).Post("/api/v1/billing/tiers/refresh", a.RefreshTiers)
 
 		// Client-side diagnostic logging. Off by default; the UI only
 		// posts here when the "Client error logging" developer toggle

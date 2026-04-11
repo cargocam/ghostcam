@@ -3,6 +3,7 @@ import {
 	getSubscription,
 	getUsage,
 	listTiers,
+	refreshTiers,
 	createPortal,
 	createCheckout,
 } from '$lib/signaling.js';
@@ -50,7 +51,7 @@ class BillingStore {
 		this.storageLimitGB != null && this.storageLimitGB > 0 && this.storageUsedGB >= this.storageLimitGB
 	);
 
-	async load() {
+	async load(forceRefresh = false) {
 		this.loading = true;
 		this.loadError = null;
 		this.error = null;
@@ -58,7 +59,12 @@ class BillingStore {
 			const [sub, usage, tiersResp] = await Promise.all([
 				getSubscription(),
 				getUsage(),
-				listTiers(),
+				// When the user hits Retry we force a fresh Stripe round-trip
+				// so metadata they just tagged in the dashboard shows up
+				// immediately. The ordinary initial load reads the cached
+				// list because hammering Stripe on every settings open
+				// would be wasteful.
+				forceRefresh ? refreshTiers() : listTiers(),
 			]);
 			this.subscription = sub;
 			this.usage = usage;
@@ -70,7 +76,8 @@ class BillingStore {
 			// retry affordance instead of a permanent "no plans available"
 			// dead-end.
 			if (sub.billing_enabled && this.paidTiers.length === 0) {
-				this.loadError = 'Failed to load billing plans.';
+				this.loadError =
+					'No plans configured. Tag each Stripe product with ghostcam_camera_limit and ghostcam_storage_gb metadata, then retry.';
 				this.tiersLoaded = false;
 			} else {
 				this.tiersLoaded = true;

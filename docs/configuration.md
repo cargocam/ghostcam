@@ -77,8 +77,8 @@ camera or storage limits.
 
 Paid tiers are **not hardcoded**. On startup — and on every relevant Stripe
 webhook — the server calls `prices.list(active=true, expand=data.product)`
-and registers every Stripe product that carries both of these product-level
-metadata keys as a tier:
+and registers every Stripe product that carries either of these
+product-level metadata keys as a tier:
 
 | Metadata key | Value |
 |--------------|-------|
@@ -108,8 +108,26 @@ forward at minimum:
 The server runs the tier refresh asynchronously in a 15-second context so
 a slow Stripe API call never blocks webhook delivery (Stripe would retry
 on timeout and risk reordering events). If the refresh fails, the existing
-cache contents are preserved and the failure is logged; the next hourly
-refresh or the next webhook will try again.
+cache contents are preserved and the failure is logged; the next webhook
+delivery will try again.
+
+### Manual tier refresh
+
+Server startup is the only unconditional refresh — there is no hourly
+background tick. The cache is kept up to date by three mechanisms, all
+reactive:
+
+1. **Server startup** (one-shot synchronous refresh via `main.run`).
+2. **Stripe webhooks** for product/price lifecycle events.
+3. **`POST /api/v1/billing/tiers/refresh`** — an authenticated,
+   rate-limited endpoint the UI's settings-dialog Retry button calls
+   when the tier list is empty. Lets a user who just tagged product
+   metadata in the Stripe dashboard see it immediately without
+   waiting for a webhook to land.
+
+This is deliberate: the server has no long-running goroutines (see the
+retention/cleanup table below for the same pattern), and billing is not
+load-bearing enough for one.
 
 ## Retention & Cleanup
 

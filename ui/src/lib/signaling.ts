@@ -55,6 +55,20 @@ export async function listTiers(): Promise<ListTiersResponse> {
 	return res.json();
 }
 
+// Force a Stripe-side refresh of the tier cache, then return the fresh
+// list. Used by the billing UI's Retry button so that users who just
+// tagged product metadata in the Stripe dashboard see the change
+// immediately instead of waiting for the next webhook or hourly tick.
+export async function refreshTiers(): Promise<ListTiersResponse> {
+	const res = await fetch(`${API_BASE}/billing/tiers/refresh`, {
+		method: 'POST',
+		headers: headers(),
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`refreshTiers failed: ${res.status}`);
+	return res.json();
+}
+
 export async function getUsage(): Promise<UsageResponse> {
 	const res = await fetch(`${API_BASE}/billing/usage`, { credentials: 'include' });
 	if (!res.ok) throw new Error(`getUsage failed: ${res.status}`);

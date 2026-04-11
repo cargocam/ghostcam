@@ -50,6 +50,28 @@ func (a *App) ListTiers(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, apitypes.ListTiersResponse{Tiers: result})
 }
 
+// RefreshTiers handles POST /api/v1/billing/tiers/refresh. Synchronously
+// reloads the tier cache from Stripe and returns the fresh list. Intended
+// for the UI's Retry affordance — a user who just tagged a Stripe product
+// with ghostcam_camera_limit / ghostcam_storage_gb metadata can hit Retry
+// and see the update immediately, without waiting for the product.updated
+// webhook or the hourly background tick. Rate-limited independently so a
+// stuck client looping on retry cannot hammer the Stripe API.
+func (a *App) RefreshTiers(w http.ResponseWriter, r *http.Request) {
+	if !a.stripeConfigured() {
+		writeError(w, http.StatusNotImplemented, "billing_not_configured")
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	if err := a.Tiers.Refresh(ctx, a.Config.StripeSecretKey); err != nil {
+		slog.Warn("billing: tier cache refresh-on-demand failed", "error", err)
+		writeError(w, http.StatusBadGateway, "stripe_refresh_failed")
+		return
+	}
+	a.ListTiers(w, r)
+}
+
 // CreateCheckout handles POST /api/v1/billing/checkout.
 // Creates a Stripe Checkout Session and returns the redirect URL.
 //
