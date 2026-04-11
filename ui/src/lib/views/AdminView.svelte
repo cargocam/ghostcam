@@ -369,23 +369,19 @@
 					{#each tiers as tier (tier.price_id)}
 						{@const draft = drafts[tier.price_id]}
 						<div class="p-4 space-y-3">
-							<div class="flex items-start justify-between gap-3">
-								<div class="min-w-0 flex-1">
-									<div class="flex items-center gap-2 flex-wrap">
-										{#if tier.configured}
-											<span class="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-primary/15 text-primary">
-												<CheckCircle2 class="h-3 w-3" />
-												Configured
-											</span>
-										{:else}
-											<span class="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-warning/15 text-warning">
-												<AlertTriangle class="h-3 w-3" />
-												Unconfigured
-											</span>
-										{/if}
-									</div>
-									<div class="text-[11px] text-muted-foreground font-mono mt-0.5 truncate">{tier.price_id}</div>
-								</div>
+							<div class="flex items-center justify-between gap-3">
+								<div class="text-[11px] text-muted-foreground font-mono truncate min-w-0">{tier.price_id}</div>
+								{#if tier.configured}
+									<span class="shrink-0 inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-primary/15 text-primary">
+										<CheckCircle2 class="h-3 w-3" />
+										Configured
+									</span>
+								{:else}
+									<span class="shrink-0 inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-warning/15 text-warning">
+										<AlertTriangle class="h-3 w-3" />
+										Unconfigured
+									</span>
+								{/if}
 							</div>
 
 							<div class="grid grid-cols-2 gap-3">
