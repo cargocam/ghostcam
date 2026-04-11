@@ -35,12 +35,27 @@
 	// editor). Future cards should follow the same section pattern.
 
 	type Draft = {
+		nameText: string;
 		cameraLimitText: string; // raw input value, "" = unlimited
 		storageGBText: string;
 		dirty: boolean;
 		saving: boolean;
 		error: string | null;
 	};
+
+	// Build a draft from a server tier row. Used both on initial load
+	// and after every mutation (create / update / archive) to keep the
+	// drafts map in sync with the fresh server state.
+	function makeDraft(t: AdminBillingTier): Draft {
+		return {
+			nameText: t.product_name ?? '',
+			cameraLimitText: parseLimitToInput(t.camera_limit_raw),
+			storageGBText: parseLimitToInput(t.storage_gb_raw),
+			dirty: false,
+			saving: false,
+			error: null,
+		};
+	}
 
 	let tiers = $state<AdminBillingTier[]>([]);
 	let loading = $state<boolean>(true);
@@ -54,18 +69,7 @@
 			const resp = await adminListBillingTiers();
 			tiers = resp.tiers ?? [];
 			// Reset drafts from the fresh server values.
-			drafts = Object.fromEntries(
-				tiers.map((t) => [
-					t.price_id,
-					{
-						cameraLimitText: parseLimitToInput(t.camera_limit_raw),
-						storageGBText: parseLimitToInput(t.storage_gb_raw),
-						dirty: false,
-						saving: false,
-						error: null,
-					},
-				]),
-			);
+			drafts = Object.fromEntries(tiers.map((t) => [t.price_id, makeDraft(t)]));
 		} catch (e) {
 			loadError = e instanceof Error ? e.message : 'Failed to load admin billing tiers';
 		} finally {
@@ -113,25 +117,20 @@
 		}
 		drafts[tier.price_id] = { ...d, saving: true, error: null };
 
+		const trimmedName = d.nameText.trim();
 		const update: AdminUpdateBillingTier = {
 			camera_limit: cam.value,
 			storage_gb: stor.value,
 		};
+		// Only send `name` if it actually changed — leaves other admin
+		// sessions' edits alone if they raced us.
+		if (trimmedName !== (tier.product_name ?? '').trim() && trimmedName !== '') {
+			update.name = trimmedName;
+		}
 		try {
 			const resp = await adminUpdateBillingTier(tier.price_id, update);
 			tiers = resp.tiers ?? [];
-			drafts = Object.fromEntries(
-				tiers.map((t) => [
-					t.price_id,
-					{
-						cameraLimitText: parseLimitToInput(t.camera_limit_raw),
-						storageGBText: parseLimitToInput(t.storage_gb_raw),
-						dirty: false,
-						saving: false,
-						error: null,
-					},
-				]),
-			);
+			drafts = Object.fromEntries(tiers.map((t) => [t.price_id, makeDraft(t)]));
 		} catch (e) {
 			drafts[tier.price_id] = {
 				...d,
@@ -225,18 +224,7 @@
 		try {
 			const resp = await adminCreateBillingTier(payload);
 			tiers = resp.tiers ?? [];
-			drafts = Object.fromEntries(
-				tiers.map((t) => [
-					t.price_id,
-					{
-						cameraLimitText: parseLimitToInput(t.camera_limit_raw),
-						storageGBText: parseLimitToInput(t.storage_gb_raw),
-						dirty: false,
-						saving: false,
-						error: null,
-					},
-				]),
-			);
+			drafts = Object.fromEntries(tiers.map((t) => [t.price_id, makeDraft(t)]));
 			createOpen = false;
 		} catch (e) {
 			createError = e instanceof Error ? e.message : 'Create failed';
@@ -265,18 +253,7 @@
 			const result = await adminArchiveBillingTier(tier.price_id, confirm);
 			if (result.ok) {
 				tiers = result.tiers.tiers ?? [];
-				drafts = Object.fromEntries(
-					tiers.map((t) => [
-						t.price_id,
-						{
-							cameraLimitText: parseLimitToInput(t.camera_limit_raw),
-							storageGBText: parseLimitToInput(t.storage_gb_raw),
-							dirty: false,
-							saving: false,
-							error: null,
-						},
-					]),
-				);
+				drafts = Object.fromEntries(tiers.map((t) => [t.price_id, makeDraft(t)]));
 				archiveConfirm = null;
 			} else {
 				archiveConfirm = {
@@ -359,7 +336,6 @@
 							<div class="flex items-start justify-between gap-3">
 								<div class="min-w-0 flex-1">
 									<div class="flex items-center gap-2 flex-wrap">
-										<span class="text-sm font-semibold truncate">{tier.product_name || tier.product_id}</span>
 										<span class="text-xs text-muted-foreground whitespace-nowrap">{formatPrice(tier)}</span>
 										{#if tier.configured}
 											<span class="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-primary/15 text-primary">
@@ -376,6 +352,22 @@
 									<div class="text-[11px] text-muted-foreground font-mono mt-0.5 truncate">{tier.price_id}</div>
 								</div>
 							</div>
+
+							<label class="block">
+								<span class="text-xs text-muted-foreground block mb-1">Product name</span>
+								<input
+									type="text"
+									value={draft?.nameText ?? ''}
+									disabled={draft?.saving}
+									oninput={(e) => {
+										if (draft) {
+											drafts[tier.price_id] = { ...draft, nameText: e.currentTarget.value };
+											markDirty(tier.price_id);
+										}
+									}}
+									class="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+								/>
+							</label>
 
 							<div class="grid grid-cols-2 gap-3">
 								<label class="block">
