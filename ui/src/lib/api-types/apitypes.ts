@@ -293,6 +293,56 @@ export interface AdminArchiveConflictResponse {
   active_subscribers: number /* int64 */;
 }
 /**
+ * AdminBillingTierSubscribersResponse is the body of
+ * GET /api/v1/admin/billing/tiers/{priceID}/subscribers.
+ * A tiny probe used by the Reprice dialog to tell the admin how many
+ * people will be affected before they commit.
+ */
+export interface AdminBillingTierSubscribersResponse {
+  active_subscribers: number /* int64 */;
+}
+/**
+ * AdminRepriceBillingTierRequest is the body of POST
+ * /api/v1/admin/billing/tiers/{priceID}/reprice.
+ * Stripe prices are immutable — the only way to "change" a price is
+ * to create a new one on the same product and archive the old one.
+ * This endpoint wraps that dance in one atomic admin operation and,
+ * optionally, migrates existing subscribers off the old price.
+ * 	PriceCents                  New amount, in the minor currency unit.
+ * 	                            Currency and interval are copied from
+ * 	                            the existing price — Stripe does not
+ * 	                            allow changing those on a subscription.
+ * 	MigrateSubscribers          If true, every active subscription on
+ * 	                            the old price gets its item updated
+ * 	                            to the new price ID in one call.
+ * 	Prorate                     Only meaningful when MigrateSubscribers
+ * 	                            is true. true = Stripe calculates
+ * 	                            prorations for the switch; false =
+ * 	                            no prorations, customer is on the new
+ * 	                            price starting next invoice.
+ * 	ConfirmDroppingSubscribers  Only meaningful when MigrateSubscribers
+ * 	                            is false and the old price has >0
+ * 	                            active subscribers. Admin is
+ * 	                            explicitly accepting that those
+ * 	                            subscribers will be dropped to free
+ * 	                            on their next API call.
+ */
+export interface AdminRepriceBillingTierRequest {
+  price_cents: number /* int64 */;
+  migrate_subscribers: boolean;
+  prorate: boolean;
+  confirm_dropping_subscribers: boolean;
+}
+/**
+ * AdminRepriceBillingTierResponse is the success body of reprice.
+ * Carries the fresh admin tier list plus the count of subscribers
+ * that were migrated so the UI can surface feedback.
+ */
+export interface AdminRepriceBillingTierResponse {
+  tiers: AdminBillingTier[];
+  migrated_count: number /* int */;
+}
+/**
  * ClientLogEntry is the body of POST /api/v1/client-log. The endpoint is
  * gated behind an authenticated session and the UI only fires it when
  * the "Client error logging" developer setting is enabled, so there is no

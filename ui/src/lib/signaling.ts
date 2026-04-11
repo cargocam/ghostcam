@@ -1,5 +1,7 @@
 import type {
+	AdminBillingTierSubscribersResponse,
 	AdminListBillingTiersResponse,
+	AdminRepriceBillingTierResponse,
 	CameraResponse,
 	CheckoutResponse,
 	CoverageResponse,
@@ -38,6 +40,13 @@ export type AdminCreateBillingTier = {
 export type AdminArchiveConflict = {
 	error: 'active_subscribers';
 	active_subscribers: number;
+};
+
+export type AdminRepriceBillingTier = {
+	price_cents: number;
+	migrate_subscribers: boolean;
+	prorate: boolean;
+	confirm_dropping_subscribers: boolean;
 };
 
 const API_BASE = '/api/v1';
@@ -154,6 +163,46 @@ export async function adminArchiveBillingTier(
 	}
 	if (!res.ok) throw new Error(`adminArchiveBillingTier failed: ${res.status}`);
 	return { ok: true, tiers: await res.json() };
+}
+
+export async function adminGetTierSubscribers(
+	priceID: string,
+): Promise<AdminBillingTierSubscribersResponse> {
+	const res = await fetch(
+		`${API_BASE}/admin/billing/tiers/${encodeURIComponent(priceID)}/subscribers`,
+		{ credentials: 'include' },
+	);
+	if (!res.ok) throw new Error(`adminGetTierSubscribers failed: ${res.status}`);
+	return res.json();
+}
+
+/**
+ * Reprice a tier (create new price, optionally migrate subscribers,
+ * archive the old price). Same discriminated-union shape as archive:
+ * on 409 the server is refusing to drop subscribers silently.
+ */
+export async function adminRepriceBillingTier(
+	priceID: string,
+	update: AdminRepriceBillingTier,
+): Promise<
+	| { ok: true; response: AdminRepriceBillingTierResponse }
+	| { ok: false; conflict: AdminArchiveConflict }
+> {
+	const res = await fetch(
+		`${API_BASE}/admin/billing/tiers/${encodeURIComponent(priceID)}/reprice`,
+		{
+			method: 'POST',
+			headers: headers(),
+			body: JSON.stringify(update),
+			credentials: 'include',
+		},
+	);
+	if (res.status === 409) {
+		const conflict = (await res.json()) as AdminArchiveConflict;
+		return { ok: false, conflict };
+	}
+	if (!res.ok) throw new Error(`adminRepriceBillingTier failed: ${res.status}`);
+	return { ok: true, response: await res.json() };
 }
 
 export async function getUsage(): Promise<UsageResponse> {

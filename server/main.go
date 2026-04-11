@@ -270,6 +270,8 @@ func (a *App) router() http.Handler {
 		r.Post("/api/v1/admin/billing/tiers", a.AdminCreateBillingTier)
 		r.Patch("/api/v1/admin/billing/tiers/{priceID}", a.AdminUpdateBillingTier)
 		r.Post("/api/v1/admin/billing/tiers/{priceID}/archive", a.AdminArchiveBillingTier)
+		r.Post("/api/v1/admin/billing/tiers/{priceID}/reprice", a.AdminRepriceBillingTier)
+		r.Get("/api/v1/admin/billing/tiers/{priceID}/subscribers", a.AdminBillingTierSubscribers)
 	})
 
 	// Static SPA files

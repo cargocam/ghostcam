@@ -284,6 +284,55 @@ type AdminArchiveConflictResponse struct {
 	ActiveSubscribers int64  `json:"active_subscribers"`
 }
 
+// AdminBillingTierSubscribersResponse is the body of
+// GET /api/v1/admin/billing/tiers/{priceID}/subscribers.
+// A tiny probe used by the Reprice dialog to tell the admin how many
+// people will be affected before they commit.
+type AdminBillingTierSubscribersResponse struct {
+	ActiveSubscribers int64 `json:"active_subscribers"`
+}
+
+// AdminRepriceBillingTierRequest is the body of POST
+// /api/v1/admin/billing/tiers/{priceID}/reprice.
+//
+// Stripe prices are immutable — the only way to "change" a price is
+// to create a new one on the same product and archive the old one.
+// This endpoint wraps that dance in one atomic admin operation and,
+// optionally, migrates existing subscribers off the old price.
+//
+//	PriceCents                  New amount, in the minor currency unit.
+//	                            Currency and interval are copied from
+//	                            the existing price — Stripe does not
+//	                            allow changing those on a subscription.
+//	MigrateSubscribers          If true, every active subscription on
+//	                            the old price gets its item updated
+//	                            to the new price ID in one call.
+//	Prorate                     Only meaningful when MigrateSubscribers
+//	                            is true. true = Stripe calculates
+//	                            prorations for the switch; false =
+//	                            no prorations, customer is on the new
+//	                            price starting next invoice.
+//	ConfirmDroppingSubscribers  Only meaningful when MigrateSubscribers
+//	                            is false and the old price has >0
+//	                            active subscribers. Admin is
+//	                            explicitly accepting that those
+//	                            subscribers will be dropped to free
+//	                            on their next API call.
+type AdminRepriceBillingTierRequest struct {
+	PriceCents                 int64 `json:"price_cents"`
+	MigrateSubscribers         bool  `json:"migrate_subscribers"`
+	Prorate                    bool  `json:"prorate"`
+	ConfirmDroppingSubscribers bool  `json:"confirm_dropping_subscribers"`
+}
+
+// AdminRepriceBillingTierResponse is the success body of reprice.
+// Carries the fresh admin tier list plus the count of subscribers
+// that were migrated so the UI can surface feedback.
+type AdminRepriceBillingTierResponse struct {
+	Tiers         []AdminBillingTier `json:"tiers"`
+	MigratedCount int                `json:"migrated_count"`
+}
+
 // ====================================================================
 // Client diagnostics
 // ====================================================================
