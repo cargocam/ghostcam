@@ -43,6 +43,16 @@ export interface ChangePasswordRequest {
   new_password: string;
 }
 /**
+ * AuthMeResponse is the body of GET /api/v1/auth/me. Admin status is
+ * resolved from the admins table on every call so grants and revocations
+ * take effect without a token rotation.
+ */
+export interface AuthMeResponse {
+  user_id: string;
+  email: string;
+  is_admin: boolean;
+}
+/**
  * CameraResponse is the per-camera payload returned by GET /api/v1/cameras
  * (as a list) and GET /api/v1/cameras/{id} (as a single object).
  */

@@ -50,8 +50,14 @@ func (db *DB) Close() {
 	db.pool.Close()
 }
 
-// Initialize performs first-run setup: creates admin user if no users exist,
-// ensures HMAC secret exists. Returns the initial password if one was generated.
+// Initialize performs first-run setup: creates the bootstrap admin user if
+// no users exist, ensures the bootstrap admin has a row in the admins table
+// (backfill on upgrade from the email-match model), and ensures the HMAC
+// secret exists. Returns the initial password if one was generated.
+//
+// The bootstrap admin is just a normal user that happens to also have an
+// admins row. Additional admins can be granted/revoked at runtime via
+// db.GrantAdmin / db.RevokeAdmin.
 func (db *DB) Initialize(ctx context.Context, presetPassword, adminEmail string) (string, error) {
 	var hasUsers bool
 	err := db.pool.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM users)").Scan(&hasUsers)
@@ -77,17 +83,35 @@ func (db *DB) Initialize(ctx context.Context, presetPassword, adminEmail string)
 			 VALUES ($1, $2, $3, 'Admin', $4, $4)`,
 			userID, adminEmail, hash, now)
 		if err != nil {
-			return "", fmt.Errorf("creating admin user: %w", err)
+			return "", fmt.Errorf("creating bootstrap admin user: %w", err)
 		}
-		// Auto-create subscription for admin on the free tier.
-		// Paid tiers require an active Stripe subscription. In dev mode
-		// (Stripe not configured), effectiveTier() returns a synthetic
-		// unlimited tier so tier limits are not enforced regardless of
-		// this value.
+		// Auto-create subscription for the bootstrap admin on the free
+		// tier. Paid tiers require an active Stripe subscription. In
+		// dev mode (Stripe not configured), effectiveTier() returns a
+		// synthetic unlimited tier so tier limits are not enforced
+		// regardless of this value.
 		if err := db.CreateSubscription(ctx, userID, "free", "active"); err != nil {
 			slog.Warn("failed to create admin subscription", "error", err)
 		}
+		if err := db.GrantAdmin(ctx, userID); err != nil {
+			return "", fmt.Errorf("granting admin to bootstrap user: %w", err)
+		}
 		initialPassword = password
+	} else if adminEmail != "" {
+		// Backfill path for databases that existed under the email-match
+		// super-admin model: if the user matching GHOSTCAM_ADMIN_EMAIL
+		// exists but is not in the admins table yet, grant them admin
+		// so they don't get locked out when the middleware switches to
+		// the DB-backed check. No-op on subsequent runs.
+		var bootstrapUserID string
+		err := db.pool.QueryRow(ctx,
+			`SELECT user_id FROM users WHERE email = $1`, adminEmail,
+		).Scan(&bootstrapUserID)
+		if err == nil && bootstrapUserID != "" {
+			if err := db.GrantAdmin(ctx, bootstrapUserID); err != nil {
+				slog.Warn("failed to backfill bootstrap admin", "error", err)
+			}
+		}
 	}
 
 	// Ensure HMAC secret exists

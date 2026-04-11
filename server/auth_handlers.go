@@ -15,11 +15,10 @@ const jwtTTL = 30 * 24 * time.Hour // 30 days
 const cookieMaxAge = 30 * 86400
 
 func (a *App) setAuthCookie(w http.ResponseWriter, userID, email string) {
-	// Single-operator product: admin is whoever matches GHOSTCAM_ADMIN_EMAIL.
-	// The is_admin claim is purely a UI hint; adminAuth re-validates on
-	// every request so a forged claim can't grant elevated access.
-	isAdmin := email != "" && email == a.Config.AdminEmail
-	token := auth.SignJWT(userID, email, isAdmin, a.HMACSecret, jwtTTL)
+	// Admin status is resolved per-request by the adminAuth middleware
+	// against the admins table — it is deliberately not stamped into
+	// the JWT, so grants and revocations take effect immediately.
+	token := auth.SignJWT(userID, email, a.HMACSecret, jwtTTL)
 	secure := ""
 	if a.Config.secureCookies() {
 		secure = "; Secure"
@@ -84,6 +83,29 @@ func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 // first run via GHOSTCAM_ADMIN_EMAIL / GHOSTCAM_ADMIN_PASSWORD env vars.
 func (a *App) Register(w http.ResponseWriter, _ *http.Request) {
 	writeError(w, http.StatusForbidden, "registration_disabled")
+}
+
+// Me handles GET /api/v1/auth/me. Returns the authenticated user's id,
+// email, and (live, DB-resolved) admin status. The UI calls this to
+// decide whether to render admin-only affordances — admin status is
+// deliberately not in the JWT so grants/revocations take effect without
+// a token rotation.
+func (a *App) Me(w http.ResponseWriter, r *http.Request) {
+	userID := getUserID(r)
+	email := getUserEmail(r)
+
+	isAdmin, err := a.DB.IsAdmin(r.Context(), userID)
+	if err != nil {
+		slog.Error("me: is-admin check failed", "user_id", userID, "error", err)
+		http.Error(w, "", http.StatusInternalServerError)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, apitypes.AuthMeResponse{
+		UserID:  userID,
+		Email:   email,
+		IsAdmin: isAdmin,
+	})
 }
 
 // Logout handles POST /api/v1/auth/logout.

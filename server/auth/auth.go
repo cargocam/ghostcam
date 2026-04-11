@@ -129,29 +129,26 @@ func GenerateHMACSecret() []byte {
 // --- JWT ---
 
 // JWTClaims holds the decoded claims from a verified JWT.
+//
+// Admin status is deliberately not carried in the token — the server
+// resolves it per-request from the admins table via the adminAuth
+// middleware, so revocation is immediate and cannot be spoofed.
 type JWTClaims struct {
-	UserID  string
-	Email   string
-	IsAdmin bool
+	UserID string
+	Email  string
 }
 
-// SignJWT creates an HS256-signed JWT with the given user_id, email, admin
-// flag, and expiry. Minimal implementation — no external JWT library needed.
-//
-// The is_admin claim lets the UI decide whether to show admin-only affordances
-// (e.g. the billing tier editor) without an extra round trip to the server.
-// It's not used as an authorization decision on its own — the server's
-// adminAuth middleware always re-validates via AdminEmail on each request.
-func SignJWT(userID, email string, isAdmin bool, secret []byte, ttl time.Duration) string {
+// SignJWT creates an HS256-signed JWT with the given user_id, email, and
+// expiry. Minimal implementation — no external JWT library needed.
+func SignJWT(userID, email string, secret []byte, ttl time.Duration) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"HS256","typ":"JWT"}`))
 	exp := time.Now().Add(ttl).Unix()
 	// Use json.Marshal for the payload to safely escape email (may contain
 	// characters that would break a fmt.Sprintf JSON string).
 	payloadBytes, _ := json.Marshal(map[string]any{
-		"sub":      userID,
-		"email":    email,
-		"is_admin": isAdmin,
-		"exp":      exp,
+		"sub":   userID,
+		"email": email,
+		"exp":   exp,
 	})
 	payloadEnc := base64.RawURLEncoding.EncodeToString(payloadBytes)
 
@@ -188,10 +185,9 @@ func VerifyJWT(token string, secret []byte) *JWTClaims {
 
 	// Parse claims
 	var claims struct {
-		Sub     string `json:"sub"`
-		Email   string `json:"email"`
-		IsAdmin bool   `json:"is_admin"`
-		Exp     int64  `json:"exp"`
+		Sub   string `json:"sub"`
+		Email string `json:"email"`
+		Exp   int64  `json:"exp"`
 	}
 	if err := json.Unmarshal(payloadBytes, &claims); err != nil {
 		return nil
@@ -205,7 +201,7 @@ func VerifyJWT(token string, secret []byte) *JWTClaims {
 		return nil
 	}
 
-	return &JWTClaims{UserID: claims.Sub, Email: claims.Email, IsAdmin: claims.IsAdmin}
+	return &JWTClaims{UserID: claims.Sub, Email: claims.Email}
 }
 
 func splitDot(s string) []string {

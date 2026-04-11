@@ -73,11 +73,12 @@ func (a *App) viewerAuth(next http.Handler) http.Handler {
 	})
 }
 
-// adminAuth wraps viewerAuth and enforces that the authenticated viewer's
-// email matches AdminEmail. The admin email comes from the JWT claim that
-// viewerAuth populated on the cookie path — admins must log in via the
-// web UI, not via API token, because API-token auth does not populate
-// KeyUserEmail (the token record doesn't carry an email).
+// adminAuth wraps viewerAuth and enforces that the authenticated viewer
+// has a row in the admins table. The check is a DB lookup on every admin
+// request — admin traffic is low, and doing it live means grants and
+// revocations take effect immediately without a token rotation. API
+// tokens are allowed through as long as their owning user is an admin;
+// the same /api/v1/admin/* routes are reachable either way.
 func (a *App) adminAuth(next http.Handler) http.Handler {
 	return a.viewerAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		userID := getUserID(r)
@@ -86,7 +87,12 @@ func (a *App) adminAuth(next http.Handler) http.Handler {
 			return
 		}
 
-		if getUserEmail(r) != a.Config.AdminEmail {
+		isAdmin, err := a.DB.IsAdmin(r.Context(), userID)
+		if err != nil {
+			http.Error(w, "", http.StatusInternalServerError)
+			return
+		}
+		if !isAdmin {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}

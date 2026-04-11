@@ -113,9 +113,9 @@ Defaults are configured via `.pi.env` (gitignored) or passed as CLI args `[HOST]
 Open the Ghostcam URL in your browser. You'll see a login form with **Email** and **Password** fields.
 
 - **Local dev**: `admin@ghostcam.dev` / `dev-password`
-- **Production**: whatever email/password the admin set via `GHOSTCAM_ADMIN_EMAIL` / `GHOSTCAM_ADMIN_PASSWORD`
+- **Production**: whatever email/password was set via `GHOSTCAM_ADMIN_EMAIL` / `GHOSTCAM_ADMIN_PASSWORD` on first run
 
-Registration is disabled. Admin users are seeded on first server start. To add more users, insert them via the database.
+Registration is disabled. The bootstrap user is seeded on first server start and granted admin via a row in the `admins` table. Additional admins can be granted at runtime by inserting into `admins (user_id, created_at)` — admin status is resolved per-request from the table, so grants and revocations take effect without a token rotation.
 
 ## 2. Enrolling a Camera
 

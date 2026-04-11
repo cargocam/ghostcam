@@ -38,8 +38,8 @@ Config is loaded once at startup — there is no runtime reload endpoint. To app
 | `GHOSTCAM_REDIS_URL` | _(none)_ | Redis URL (telemetry streams, SSE pub/sub) |
 | `GHOSTCAM_HTTP_PORT` | `3000` | HTTP port |
 | `GHOSTCAM_STATIC_DIR` | _(none)_ | Directory for serving static UI files |
-| `GHOSTCAM_ADMIN_EMAIL` | `admin@localhost` | Admin email |
-| `GHOSTCAM_ADMIN_PASSWORD` | _(auto-generated)_ | Preset admin password |
+| `GHOSTCAM_ADMIN_EMAIL` | `admin@localhost` | Bootstrap admin email. Used on first run to seed a normal user and grant them a row in the `admins` table. On subsequent runs also used to backfill the admins table if a pre-existing user with this email isn't an admin yet. |
+| `GHOSTCAM_ADMIN_PASSWORD` | _(auto-generated)_ | Bootstrap admin password (first-run only) |
 | `GHOSTCAM_PUBLIC_URL` | _(none)_ | Public URL for QR codes and CORS origin |
 | `GHOSTCAM_S3_BUCKET` | `ghostcam-segments` | S3/Tigris bucket name |
 | `GHOSTCAM_S3_REGION` | `auto` | S3 region |

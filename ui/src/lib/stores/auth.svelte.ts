@@ -2,15 +2,21 @@
 //
 // The JWT cookie is not HttpOnly, so the UI can decode it client-side and
 // derive claim-based values (like the user's email) reactively. The cookie
-// remains the single source of truth — login/logout/change-password all
-// rewrite it, and the store re-reads it via `refresh()` at those moments.
+// remains the single source of truth for identity — login/logout/
+// change-password all rewrite it and the store re-reads via `refresh()`.
+//
+// Admin status is deliberately NOT in the JWT: the server resolves it
+// from the admins table per-request, so grants/revocations take effect
+// without a token rotation. The UI learns its admin status via
+// GET /api/v1/auth/me, called on init and after every login/logout.
+
+import type { AuthMeResponse } from '$lib/api-types';
 
 const COOKIE_NAME = 'ghostcam-token';
 
 type JwtClaims = {
 	sub?: string;
 	email?: string;
-	is_admin?: boolean;
 	exp?: number;
 };
 
@@ -45,15 +51,40 @@ class AuthStore {
 	claims = $derived<JwtClaims | null>(decodeJwt(this.token));
 	email = $derived<string>(this.claims?.email ?? '');
 	userId = $derived<string>(this.claims?.sub ?? '');
-	// is_admin is a UI hint only; the server's adminAuth middleware
-	// re-validates the admin email on every admin-scoped request so a
-	// forged claim cannot grant elevated access.
-	isAdmin = $derived<boolean>(this.claims?.is_admin === true);
+	// Admin status is server-resolved via GET /api/v1/auth/me; it is
+	// null while the fetch is pending or the user isn't authenticated.
+	// A nullish value should be treated as "not admin" by UI code.
+	isAdmin = $state<boolean | null>(null);
 
-	/** Re-read the cookie. Call after login, logout, or change-password. */
+	/** Re-read the cookie and refetch admin status from the server. */
 	refresh() {
 		this.token = readTokenFromCookie();
+		if (this.token) {
+			void this.loadMe();
+		} else {
+			this.isAdmin = null;
+		}
+	}
+
+	async loadMe(): Promise<void> {
+		try {
+			const res = await fetch('/api/v1/auth/me', { credentials: 'include' });
+			if (!res.ok) {
+				this.isAdmin = null;
+				return;
+			}
+			const data = (await res.json()) as AuthMeResponse;
+			this.isAdmin = data.is_admin === true;
+		} catch {
+			this.isAdmin = null;
+		}
 	}
 }
 
 export const authStore = new AuthStore();
+
+// Kick off the initial /auth/me fetch if the cookie is already present
+// at module load (returning visitor with a valid session).
+if (typeof document !== 'undefined' && authStore.token) {
+	void authStore.loadMe();
+}

@@ -73,7 +73,8 @@ server/            (package main — binary builds from this directory)
                   PublicURL for QR codes and CORS origin, retentionDays() helper,
                   secureCookies() derived from the PublicURL scheme
   middleware.go   Context key helpers, viewerAuth (JWT cookie + Bearer API token),
-                  cameraAuth (Bearer API key), adminAuth (viewerAuth + admin email check)
+                  cameraAuth (Bearer API key), adminAuth (viewerAuth + DB lookup
+                  against the admins table — admin status is not in the JWT)
   ratelimit.go    Per-IP token bucket rate limiter with opportunistic eviction
                   (no dedicated cleanup goroutine)
 
