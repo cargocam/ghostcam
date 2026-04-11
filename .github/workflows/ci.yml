@@ -156,6 +156,40 @@ jobs:
           docker compose logs server
           exit 1
 
+      # Guard against non-idempotent migrations reaching production.
+      # The server's first boot (above) runs every migration. We restart
+      # the container and verify that (a) it comes healthy again and
+      # (b) no migration re-runs — which is only true if every already-
+      # applied migration is recorded in schema_migrations. This is the
+      # regression test for the f7be026 crash loop where 007's ALTER COLUMN
+      # cert_fingerprint DROP NOT NULL kept failing after 010 dropped the
+      # column.
+      - name: Verify migration idempotency on restart
+        run: |
+          docker compose logs --no-color --no-log-prefix server > /tmp/server-before-restart.log
+          docker compose restart server
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:3000/readyz > /dev/null 2>&1; then
+              echo "server ready again after ${i}s"
+              break
+            fi
+            if [ "$i" = "60" ]; then
+              echo "server did not become ready after restart in 60s"
+              docker compose logs server | tail -80
+              exit 1
+            fi
+            sleep 1
+          done
+          docker compose logs --no-color --no-log-prefix server > /tmp/server-after-restart.log
+          NEW_LOG=$(diff /tmp/server-before-restart.log /tmp/server-after-restart.log | grep '^>' | sed 's/^> //')
+          if echo "$NEW_LOG" | grep -q 'running migration'; then
+            echo "FAIL: server re-ran migrations on restart — schema_migrations tracking is broken"
+            echo "--- new log lines ---"
+            echo "$NEW_LOG"
+            exit 1
+          fi
+          echo "OK: restart boot ran zero migrations"
+
       - name: Run e2e
         working-directory: e2e
         run: bun run test
