@@ -252,11 +252,12 @@
 				<Separator />
 			{/if}
 
-			<!-- Admin: visible only for users with a row in the admins
-			     table. Status comes from GET /api/v1/auth/me and stays
-			     null until the fetch resolves, so this block is hidden
-			     briefly on first load (acceptable — admin panel is rare). -->
-			{#if authStore.isAdmin === true}
+			<!-- Admin: visible when the JWT's is_admin claim is set,
+			     which happens when the user has a row in the admins
+			     table at login time. The server re-checks the admins
+			     table on every admin-scoped request so a stale claim
+			     is never load-bearing. -->
+			{#if authStore.isAdmin}
 				<div>
 					<h3 class="text-sm font-medium mb-3 flex items-center gap-1.5">
 						<Shield class="h-4 w-4" />

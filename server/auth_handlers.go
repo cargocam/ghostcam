@@ -14,11 +14,21 @@ import (
 const jwtTTL = 30 * 24 * time.Hour // 30 days
 const cookieMaxAge = 30 * 86400
 
-func (a *App) setAuthCookie(w http.ResponseWriter, userID, email string) {
-	// Admin status is resolved per-request by the adminAuth middleware
-	// against the admins table — it is deliberately not stamped into
-	// the JWT, so grants and revocations take effect immediately.
-	token := auth.SignJWT(userID, email, a.HMACSecret, jwtTTL)
+func (a *App) setAuthCookie(w http.ResponseWriter, r *http.Request, userID, email string) {
+	// Stamp is_admin into the JWT as a UI hint. The adminAuth middleware
+	// always re-checks the admins table on every admin request, so this
+	// claim is never load-bearing for authorization — a stale or forged
+	// claim can never grant elevated access, it only controls whether
+	// the UI shows the admin panel button. A newly-granted admin sees
+	// the hint on their next login; a revoked admin sees the stale hint
+	// until their next login, and any admin call they try meanwhile
+	// returns 403 from the middleware.
+	isAdmin, err := a.DB.IsAdmin(r.Context(), userID)
+	if err != nil {
+		slog.Warn("setAuthCookie: is-admin lookup failed, treating as non-admin", "user_id", userID, "error", err)
+		isAdmin = false
+	}
+	token := auth.SignJWT(userID, email, isAdmin, a.HMACSecret, jwtTTL)
 	secure := ""
 	if a.Config.secureCookies() {
 		secure = "; Secure"
@@ -74,7 +84,7 @@ func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("audit", "event_type", "auth_success", "user_id", user.UserID)
 
-	a.setAuthCookie(w, user.UserID, user.Email)
+	a.setAuthCookie(w, r, user.UserID, user.Email)
 	writeJSON(w, http.StatusOK, apitypes.LoginResponse{UserID: user.UserID})
 }
 
@@ -83,29 +93,6 @@ func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 // first run via GHOSTCAM_ADMIN_EMAIL / GHOSTCAM_ADMIN_PASSWORD env vars.
 func (a *App) Register(w http.ResponseWriter, _ *http.Request) {
 	writeError(w, http.StatusForbidden, "registration_disabled")
-}
-
-// Me handles GET /api/v1/auth/me. Returns the authenticated user's id,
-// email, and (live, DB-resolved) admin status. The UI calls this to
-// decide whether to render admin-only affordances — admin status is
-// deliberately not in the JWT so grants/revocations take effect without
-// a token rotation.
-func (a *App) Me(w http.ResponseWriter, r *http.Request) {
-	userID := getUserID(r)
-	email := getUserEmail(r)
-
-	isAdmin, err := a.DB.IsAdmin(r.Context(), userID)
-	if err != nil {
-		slog.Error("me: is-admin check failed", "user_id", userID, "error", err)
-		http.Error(w, "", http.StatusInternalServerError)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, apitypes.AuthMeResponse{
-		UserID:  userID,
-		Email:   email,
-		IsAdmin: isAdmin,
-	})
 }
 
 // Logout handles POST /api/v1/auth/logout.
@@ -159,6 +146,6 @@ func (a *App) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.setAuthCookie(w, userID, getUserEmail(r))
+	a.setAuthCookie(w, r, userID, getUserEmail(r))
 	w.WriteHeader(http.StatusOK)
 }

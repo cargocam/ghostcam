@@ -211,7 +211,6 @@ func (a *App) router() http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(a.viewerAuth)
 
-		r.Get("/api/v1/auth/me", a.Me)
 		r.Post("/api/v1/auth/logout", a.Logout)
 		r.Patch("/api/v1/auth/password", a.ChangePassword)
 

@@ -38,15 +38,6 @@ type ChangePasswordRequest struct {
 	NewPassword     string `json:"new_password"`
 }
 
-// AuthMeResponse is the body of GET /api/v1/auth/me. Admin status is
-// resolved from the admins table on every call so grants and revocations
-// take effect without a token rotation.
-type AuthMeResponse struct {
-	UserID  string `json:"user_id"`
-	Email   string `json:"email"`
-	IsAdmin bool   `json:"is_admin"`
-}
-
 // ====================================================================
 // Cameras
 // ====================================================================

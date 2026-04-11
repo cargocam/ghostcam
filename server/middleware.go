@@ -2,11 +2,39 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
 	"github.com/cargocam/ghostcam/server/auth"
 )
+
+// adminAuthDecision returns the HTTP status adminAuth should emit for a
+// request given the result of each authorization check. Factored out as
+// a pure function so the decision matrix can be unit-tested without
+// spinning up an http.Handler or a DB.
+//
+//   - jwtValid=false          → 401 Unauthorized (bad/missing cookie)
+//   - jwtValid, dbErr!=nil    → 500 Internal Server Error (admins table unreachable)
+//   - jwtValid, !isAdmin      → 403 Forbidden
+//   - jwtValid, isAdmin       → 200 OK (let the handler run)
+func adminAuthDecision(jwtValid, isAdmin bool, dbErr error) int {
+	if !jwtValid {
+		return http.StatusUnauthorized
+	}
+	if dbErr != nil {
+		return http.StatusInternalServerError
+	}
+	if !isAdmin {
+		return http.StatusForbidden
+	}
+	return http.StatusOK
+}
+
+// errAdminCheck is returned by the decision function's DB-error path in
+// tests. Kept unexported because it's a sentinel used only for the test
+// table — production code surfaces pgx errors directly.
+var errAdminCheck = errors.New("admin check failed")
 
 // Context keys for values populated by middleware.
 type contextKey string
@@ -73,32 +101,50 @@ func (a *App) viewerAuth(next http.Handler) http.Handler {
 	})
 }
 
-// adminAuth wraps viewerAuth and enforces that the authenticated viewer
-// has a row in the admins table. The check is a DB lookup on every admin
-// request — admin traffic is low, and doing it live means grants and
-// revocations take effect immediately without a token rotation. API
-// tokens are allowed through as long as their owning user is an admin;
-// the same /api/v1/admin/* routes are reachable either way.
+// adminAuth gates /api/v1/admin/* on (1) a valid JWT cookie and (2) the
+// authenticated user having a row in the admins table. It deliberately
+// does NOT accept Bearer API tokens: admin actions are UI actions, and
+// requiring cookie auth guarantees that keyUserEmail is populated (for
+// audit log lines) and that admin CRUD never happens from a long-lived
+// token that may have been exfiltrated.
+//
+// The admins-table check runs on every admin request. Admin traffic is
+// low, and doing it live means grants and revocations take effect
+// immediately — a revoked admin's stale JWT hint still hits 403 here,
+// even though the UI may still render the admin panel button until
+// their next login.
 func (a *App) adminAuth(next http.Handler) http.Handler {
-	return a.viewerAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		userID := getUserID(r)
-		if userID == "" {
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Cookie auth only: inline the JWT-cookie branch of viewerAuth
+		// so we never accept a Bearer API token for admin scope.
+		var (
+			claims  *auth.JWTClaims
+			isAdmin bool
+			dbErr   error
+		)
+		if cookie, err := r.Cookie("ghostcam-token"); err == nil {
+			claims = auth.VerifyJWT(cookie.Value, a.HMACSecret)
+		}
+		if claims != nil {
+			isAdmin, dbErr = a.DB.IsAdmin(r.Context(), claims.UserID)
 		}
 
-		isAdmin, err := a.DB.IsAdmin(r.Context(), userID)
-		if err != nil {
+		switch adminAuthDecision(claims != nil, isAdmin, dbErr) {
+		case http.StatusUnauthorized:
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		case http.StatusInternalServerError:
 			http.Error(w, "", http.StatusInternalServerError)
 			return
-		}
-		if !isAdmin {
+		case http.StatusForbidden:
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
 
-		next.ServeHTTP(w, r)
-	}))
+		ctx := context.WithValue(r.Context(), keyUserID, claims.UserID)
+		ctx = context.WithValue(ctx, keyUserEmail, claims.Email)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 // cameraAuth authenticates cameras via Bearer API key.
