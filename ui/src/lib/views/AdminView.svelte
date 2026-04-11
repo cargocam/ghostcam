@@ -6,11 +6,9 @@
 		adminUpdateBillingTier,
 		adminCreateBillingTier,
 		adminArchiveBillingTier,
-		adminGetTierSubscribers,
 		adminRepriceBillingTier,
 		type AdminUpdateBillingTier,
 		type AdminCreateBillingTier,
-		type AdminRepriceBillingTier,
 	} from '$lib/signaling.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import {
@@ -28,7 +26,6 @@
 		AlertTriangle,
 		Plus,
 		Archive,
-		DollarSign,
 	} from 'lucide-svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { cn } from '$lib/utils.js';
@@ -40,6 +37,7 @@
 
 	type Draft = {
 		nameText: string;
+		priceDollarsText: string; // dollars as typed, "9.99"
 		cameraLimitText: string; // raw input value, "" = unlimited
 		storageGBText: string;
 		dirty: boolean;
@@ -53,6 +51,7 @@
 	function makeDraft(t: AdminBillingTier): Draft {
 		return {
 			nameText: t.product_name ?? '',
+			priceDollarsText: (t.price_cents / 100).toFixed(2),
 			cameraLimitText: parseLimitToInput(t.camera_limit_raw),
 			storageGBText: parseLimitToInput(t.storage_gb_raw),
 			dirty: false,
@@ -119,6 +118,21 @@
 			};
 			return;
 		}
+
+		// Parse and validate the price field. Empty / non-positive is an
+		// error — the admin view is Stripe-products-only, never the free
+		// tier, so every row must have a real price.
+		const priceDollars = parseFloat(d.priceDollarsText);
+		if (!isFinite(priceDollars) || priceDollars <= 0) {
+			drafts[tier.price_id] = {
+				...d,
+				error: 'Price must be a positive number',
+			};
+			return;
+		}
+		const newPriceCents = Math.round(priceDollars * 100);
+		const priceChanged = newPriceCents !== tier.price_cents;
+
 		drafts[tier.price_id] = { ...d, saving: true, error: null };
 
 		const trimmedName = d.nameText.trim();
@@ -132,8 +146,37 @@
 			update.name = trimmedName;
 		}
 		try {
-			const resp = await adminUpdateBillingTier(tier.price_id, update);
+			// Step 1: update product name + metadata on the current price.
+			// Metadata lives on the Stripe product, so the update persists
+			// even when step 2 creates a new price on the same product.
+			let resp = await adminUpdateBillingTier(tier.price_id, update);
 			tiers = resp.tiers ?? [];
+
+			// Step 2: if the price changed, reprice via the atomic
+			// "create new price + migrate subscribers + archive old"
+			// flow. Default to migrate + prorate — that's the safe
+			// "I'm bumping our prices" intent. Admins who want to
+			// drop subscribers instead should archive the tier and
+			// create a new one.
+			if (priceChanged) {
+				const result = await adminRepriceBillingTier(tier.price_id, {
+					price_cents: newPriceCents,
+					migrate_subscribers: true,
+					prorate: true,
+					confirm_dropping_subscribers: false,
+				});
+				if (!result.ok) {
+					// Shouldn't happen with migrate=true, but surface it
+					// instead of silently dropping rows if the server
+					// ever changes that invariant.
+					throw new Error(
+						`Reprice refused: ${result.conflict.active_subscribers} active ` +
+							`subscriber${result.conflict.active_subscribers === 1 ? '' : 's'} ` +
+							`would be dropped.`,
+					);
+				}
+				tiers = result.response.tiers ?? [];
+			}
 			drafts = Object.fromEntries(tiers.map((t) => [t.price_id, makeDraft(t)]));
 		} catch (e) {
 			drafts[tier.price_id] = {
@@ -142,17 +185,6 @@
 				error: e instanceof Error ? e.message : 'Save failed',
 			};
 		}
-	}
-
-	function formatPrice(tier: AdminBillingTier): string {
-		if (tier.price_cents <= 0 || !tier.currency) return '—';
-		const amount = tier.price_cents / 100;
-		const amountStr = amount.toLocaleString(undefined, {
-			style: 'currency',
-			currency: tier.currency.toUpperCase(),
-			minimumFractionDigits: amount % 1 === 0 ? 0 : 2,
-		});
-		return tier.interval ? `${amountStr}/${tier.interval}` : amountStr;
 	}
 
 	// --- Create ---
@@ -278,106 +310,6 @@
 		}
 	}
 
-	// --- Reprice ---
-	//
-	// Stripe prices are immutable, so "changing the price" is really
-	// a three-step atomic server operation: create a new price on the
-	// same product, optionally migrate existing subscribers, archive
-	// the old price. The dialog gathers the new amount + migration
-	// preferences; the server enforces the "don't silently drop
-	// paying customers" invariant via the same 409 conflict pattern
-	// the archive flow uses.
-
-	let repriceTarget = $state<AdminBillingTier | null>(null);
-	let repriceForm = $state<{
-		newPriceDollars: string;
-		migrate: boolean;
-		prorate: boolean;
-	}>({ newPriceDollars: '', migrate: true, prorate: true });
-	let repriceSaving = $state<boolean>(false);
-	let repriceError = $state<string | null>(null);
-	let repriceSubscribers = $state<number | null>(null); // null = still loading
-	let repriceConfirmDrop = $state<boolean>(false); // second-pass "yes, drop them" flag
-
-	async function openReprice(tier: AdminBillingTier) {
-		repriceTarget = tier;
-		repriceForm = {
-			newPriceDollars: (tier.price_cents / 100).toFixed(2),
-			migrate: true,
-			prorate: true,
-		};
-		repriceError = null;
-		repriceSubscribers = null;
-		repriceConfirmDrop = false;
-
-		try {
-			const resp = await adminGetTierSubscribers(tier.price_id);
-			repriceSubscribers = resp.active_subscribers;
-		} catch (e) {
-			repriceError = e instanceof Error ? e.message : 'Failed to load subscriber count';
-			repriceSubscribers = 0;
-		}
-	}
-
-	function closeReprice() {
-		repriceTarget = null;
-	}
-
-	async function submitReprice() {
-		if (!repriceTarget) return;
-		repriceError = null;
-
-		const dollars = parseFloat(repriceForm.newPriceDollars);
-		if (!isFinite(dollars) || dollars <= 0) {
-			repriceError = 'New price must be a positive number';
-			return;
-		}
-		const newPriceCents = Math.round(dollars * 100);
-		if (newPriceCents === repriceTarget.price_cents) {
-			repriceError = 'New price is the same as the current price';
-			return;
-		}
-
-		const payload: AdminRepriceBillingTier = {
-			price_cents: newPriceCents,
-			migrate_subscribers: repriceForm.migrate,
-			prorate: repriceForm.migrate && repriceForm.prorate,
-			confirm_dropping_subscribers: !repriceForm.migrate && repriceConfirmDrop,
-		};
-
-		repriceSaving = true;
-		try {
-			const result = await adminRepriceBillingTier(repriceTarget.price_id, payload);
-			if (result.ok) {
-				tiers = result.response.tiers ?? [];
-				drafts = Object.fromEntries(tiers.map((t) => [t.price_id, makeDraft(t)]));
-				const migrated = result.response.migrated_count;
-				repriceTarget = null;
-				// Show a transient confirmation via the draft error
-				// slot of the (now-new) price row? Simpler: log it.
-				// The admin already sees the row with its new price
-				// on re-render, which is the primary feedback.
-				if (migrated > 0) {
-					console.info(`Migrated ${migrated} subscriber${migrated === 1 ? '' : 's'}`);
-				}
-			} else {
-				// Server refused to drop subscribers silently. Show
-				// the count + an explicit "drop them anyway" toggle.
-				repriceSubscribers = result.conflict.active_subscribers;
-				repriceConfirmDrop = false;
-				repriceError =
-					`${result.conflict.active_subscribers} active subscriber` +
-					(result.conflict.active_subscribers === 1 ? '' : 's') +
-					' will be dropped to the free tier on their next API call.' +
-					' Check the confirmation box below to proceed, or tick "Migrate" instead.';
-			}
-		} catch (e) {
-			repriceError = e instanceof Error ? e.message : 'Reprice failed';
-		} finally {
-			repriceSaving = false;
-		}
-	}
-
 	onMount(load);
 </script>
 
@@ -440,7 +372,6 @@
 							<div class="flex items-start justify-between gap-3">
 								<div class="min-w-0 flex-1">
 									<div class="flex items-center gap-2 flex-wrap">
-										<span class="text-xs text-muted-foreground whitespace-nowrap">{formatPrice(tier)}</span>
 										{#if tier.configured}
 											<span class="inline-flex items-center gap-1 text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded bg-primary/15 text-primary">
 												<CheckCircle2 class="h-3 w-3" />
@@ -457,21 +388,42 @@
 								</div>
 							</div>
 
-							<label class="block">
-								<span class="text-xs text-muted-foreground block mb-1">Product name</span>
-								<input
-									type="text"
-									value={draft?.nameText ?? ''}
-									disabled={draft?.saving}
-									oninput={(e) => {
-										if (draft) {
-											drafts[tier.price_id] = { ...draft, nameText: e.currentTarget.value };
-											markDirty(tier.price_id);
-										}
-									}}
-									class="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
-								/>
-							</label>
+							<div class="grid grid-cols-2 gap-3">
+								<label class="block">
+									<span class="text-xs text-muted-foreground block mb-1">Tier name</span>
+									<input
+										type="text"
+										value={draft?.nameText ?? ''}
+										disabled={draft?.saving}
+										oninput={(e) => {
+											if (draft) {
+												drafts[tier.price_id] = { ...draft, nameText: e.currentTarget.value };
+												markDirty(tier.price_id);
+											}
+										}}
+										class="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+									/>
+								</label>
+								<label class="block">
+									<span class="text-xs text-muted-foreground block mb-1">
+										Price ({tier.currency.toUpperCase()}/{tier.interval})
+									</span>
+									<input
+										type="text"
+										inputmode="decimal"
+										placeholder="29.99"
+										value={draft?.priceDollarsText ?? ''}
+										disabled={draft?.saving}
+										oninput={(e) => {
+											if (draft) {
+												drafts[tier.price_id] = { ...draft, priceDollarsText: e.currentTarget.value };
+												markDirty(tier.price_id);
+											}
+										}}
+										class="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-60"
+									/>
+								</label>
+							</div>
 
 							<div class="grid grid-cols-2 gap-3">
 								<label class="block">
@@ -515,16 +467,6 @@
 							{/if}
 
 							<div class="flex items-center justify-end gap-2 flex-wrap">
-								<Button
-									variant="outline"
-									size="sm"
-									onclick={() => openReprice(tier)}
-									disabled={draft?.saving || archiveInFlight === tier.price_id}
-									title="Change the price for this tier"
-								>
-									<DollarSign class="h-3.5 w-3.5 mr-1.5" />
-									Change price
-								</Button>
 								<Button
 									variant="outline"
 									size="sm"
@@ -715,151 +657,6 @@
 					{archiveInFlight ? 'Archiving…' : 'Archive anyway'}
 				</Button>
 			</div>
-		</DialogContent>
-	</Dialog>
-{/if}
-
-<!-- Reprice dialog -->
-{#if repriceTarget}
-	<Dialog
-		bind:open={
-			() => true,
-			(v) => { if (!v) closeReprice(); }
-		}
-	>
-		<DialogContent>
-			<DialogHeader>
-				<DialogTitle class="flex items-center gap-2">
-					<DollarSign class="h-4 w-4" />
-					Change price — {repriceTarget.product_name || repriceTarget.product_id}
-				</DialogTitle>
-				<DialogDescription>
-					Currency and billing interval can't be changed on an existing
-					Stripe price — create a new tier if you need those. This updates
-					the amount only.
-				</DialogDescription>
-			</DialogHeader>
-			<form
-				class="space-y-3 mt-2"
-				onsubmit={(e) => {
-					e.preventDefault();
-					submitReprice();
-				}}
-			>
-				<div class="grid grid-cols-2 gap-3">
-					<div>
-						<span class="text-xs text-muted-foreground block mb-1">Current price</span>
-						<div class="rounded-md border bg-muted/30 px-3 py-1.5 text-sm">
-							{repriceTarget.price_cents / 100}
-							{repriceTarget.currency.toUpperCase()}/{repriceTarget.interval}
-						</div>
-					</div>
-					<label class="block">
-						<span class="text-xs text-muted-foreground block mb-1">New price</span>
-						<input
-							type="text"
-							inputmode="decimal"
-							placeholder="29.99"
-							value={repriceForm.newPriceDollars}
-							oninput={(e) => (repriceForm.newPriceDollars = e.currentTarget.value)}
-							required
-							class="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-						/>
-					</label>
-				</div>
-
-				<div class="rounded-md border border-border/60 bg-muted/20 p-3 space-y-2">
-					<div class="text-xs font-semibold flex items-center gap-1.5">
-						<span>Existing subscribers</span>
-						{#if repriceSubscribers === null}
-							<span class="text-muted-foreground font-normal">(checking…)</span>
-						{:else}
-							<span class="text-muted-foreground font-normal">
-								· {repriceSubscribers} active
-							</span>
-						{/if}
-					</div>
-
-					<label class="flex items-start gap-2 text-xs cursor-pointer">
-						<input
-							type="checkbox"
-							checked={repriceForm.migrate}
-							onchange={(e) => (repriceForm.migrate = e.currentTarget.checked)}
-							class="mt-0.5 h-4 w-4 rounded border-border accent-primary"
-						/>
-						<span class="flex-1">
-							<span class="font-medium block">Migrate these subscribers to the new price</span>
-							<span class="block text-muted-foreground mt-0.5">
-								Updates each subscription's line item to the new Stripe price
-								so they're billed at the new amount on their next invoice.
-							</span>
-						</span>
-					</label>
-
-					{#if repriceForm.migrate}
-						<label class="flex items-start gap-2 text-xs cursor-pointer pl-6">
-							<input
-								type="checkbox"
-								checked={repriceForm.prorate}
-								onchange={(e) => (repriceForm.prorate = e.currentTarget.checked)}
-								class="mt-0.5 h-4 w-4 rounded border-border accent-primary"
-							/>
-							<span class="flex-1">
-								<span class="font-medium block">Prorate the switch</span>
-								<span class="block text-muted-foreground mt-0.5">
-									Credit or charge the difference for the current billing
-									period. Unchecked means the new price starts clean on the
-									next invoice.
-								</span>
-							</span>
-						</label>
-					{:else if repriceSubscribers !== null && repriceSubscribers > 0}
-						<label class="flex items-start gap-2 text-xs cursor-pointer pl-6">
-							<input
-								type="checkbox"
-								checked={repriceConfirmDrop}
-								onchange={(e) => (repriceConfirmDrop = e.currentTarget.checked)}
-								class="mt-0.5 h-4 w-4 rounded border-border accent-destructive"
-							/>
-							<span class="flex-1">
-								<span class="font-medium block text-destructive">
-									Yes, drop existing subscribers to the free tier
-								</span>
-								<span class="block text-muted-foreground mt-0.5">
-									The old price will be archived. Existing subscriptions
-									still pointing at it will resolve to the free tier on
-									their next API call.
-								</span>
-							</span>
-						</label>
-					{/if}
-				</div>
-
-				{#if repriceError}
-					<p class="text-xs text-destructive break-words">{repriceError}</p>
-				{/if}
-
-				<div class="flex justify-end gap-2 pt-2">
-					<Button
-						type="button"
-						variant="outline"
-						onclick={closeReprice}
-						disabled={repriceSaving}
-					>
-						Cancel
-					</Button>
-					<Button
-						type="submit"
-						disabled={repriceSaving ||
-							repriceSubscribers === null ||
-							(!repriceForm.migrate &&
-								repriceSubscribers > 0 &&
-								!repriceConfirmDrop)}
-					>
-						{repriceSaving ? 'Applying…' : 'Change price'}
-					</Button>
-				</div>
-			</form>
 		</DialogContent>
 	</Dialog>
 {/if}
