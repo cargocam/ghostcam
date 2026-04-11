@@ -17,7 +17,20 @@ class BillingStore {
 	// server's Stripe-backed cache; ids are Stripe price IDs
 	// (e.g. "price_1ABC..."). The free tier is always present.
 	tiers = $state<TierInfo[]>([]);
+	// Three-state UX: before load returns, billing is in `loading`.
+	// On a clean load success with at least one paid tier, `tiersLoaded`
+	// flips true and the UI shows the plan picker. On any failure
+	// (including an empty response, which is indistinguishable from a
+	// misconfigured Stripe account and equally unusable), `loadError`
+	// carries a message and the UI shows a retry button instead of a
+	// confusing "no plans available" dead-end.
 	loading = $state(false);
+	loadError = $state<string | null>(null);
+	tiersLoaded = $state(false);
+	// Non-null while a checkout/portal click is in flight. Kept separate
+	// from `loading` so the main load spinner doesn't flicker when the
+	// user clicks "Manage Subscription".
+	actionInFlight = $state(false);
 	error = $state<string | null>(null);
 
 	billingEnabled = $derived(this.subscription?.billing_enabled ?? false);
@@ -39,18 +52,32 @@ class BillingStore {
 
 	async load() {
 		this.loading = true;
+		this.loadError = null;
 		this.error = null;
 		try {
-			const [sub, usage, tiers] = await Promise.all([
+			const [sub, usage, tiersResp] = await Promise.all([
 				getSubscription(),
 				getUsage(),
-				listTiers().catch(() => ({ tiers: [] as TierInfo[] })),
+				listTiers(),
 			]);
 			this.subscription = sub;
 			this.usage = usage;
-			this.tiers = tiers.tiers ?? [];
+			this.tiers = tiersResp.tiers ?? [];
+
+			// Billing is enabled but Stripe returned no paid tiers — almost
+			// always a server-side Stripe misconfiguration (missing product
+			// metadata). Treat it as a load failure so the user sees a
+			// retry affordance instead of a permanent "no plans available"
+			// dead-end.
+			if (sub.billing_enabled && this.paidTiers.length === 0) {
+				this.loadError = 'Failed to load billing plans.';
+				this.tiersLoaded = false;
+			} else {
+				this.tiersLoaded = true;
+			}
 		} catch (e) {
-			this.error = e instanceof Error ? e.message : 'Failed to load billing';
+			this.loadError = e instanceof Error ? e.message : 'Failed to load billing';
+			this.tiersLoaded = false;
 		} finally {
 			this.loading = false;
 		}
@@ -63,7 +90,7 @@ class BillingStore {
 	 * from the server response.
 	 */
 	async checkout(tierID: string) {
-		this.loading = true;
+		this.actionInFlight = true;
 		this.error = null;
 		try {
 			const { url } = await createCheckout(
@@ -74,19 +101,19 @@ class BillingStore {
 			window.location.href = url;
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : 'Checkout failed';
-			this.loading = false;
+			this.actionInFlight = false;
 		}
 	}
 
 	async openPortal() {
-		this.loading = true;
+		this.actionInFlight = true;
 		this.error = null;
 		try {
 			const { url } = await createPortal(window.location.origin + '/');
 			window.location.href = url;
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : 'Portal failed';
-			this.loading = false;
+			this.actionInFlight = false;
 		}
 	}
 }

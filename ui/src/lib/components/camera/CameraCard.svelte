@@ -164,6 +164,7 @@
 				loopStart={clipStore.enabled ? clipStore.startTime : -1}
 				loopEnd={clipStore.enabled ? clipStore.endTime : -1}
 				loopSeekRevision={clipStore.seekRevision}
+				mode={clipStore.enabled ? 'clip' : isPlayback ? 'vod' : 'live'}
 				bind:videoEl={videoElement}
 				onError={(err) => {
 					console.warn(`HLS error for ${deviceId}:`, err);

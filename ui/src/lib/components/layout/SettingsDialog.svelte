@@ -14,7 +14,7 @@
 	import { devStore } from '$lib/stores/dev.svelte.js';
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { changePassword } from '$lib/auth.js';
-	import { Sun, Moon, Monitor, CreditCard, ExternalLink, Trash2, Bug } from 'lucide-svelte';
+	import { Sun, Moon, Monitor, CreditCard, ExternalLink, Trash2, Bug, RefreshCw } from 'lucide-svelte';
 
 	let {
 		open = $bindable(false),
@@ -126,7 +126,37 @@
 			<Separator />
 
 			<!-- Billing -->
-			{#if billingStore.billingEnabled}
+			{#if billingStore.loading}
+				<div>
+					<h3 class="text-sm font-medium mb-3 flex items-center gap-1.5">
+						<CreditCard class="h-4 w-4" />
+						Billing
+					</h3>
+					<!-- Skeleton: same visual footprint as the loaded state
+					     so the section doesn't jump around once it settles. -->
+					<div class="space-y-2">
+						<div class="h-4 w-24 rounded bg-muted animate-pulse"></div>
+						<div class="h-2 w-full rounded bg-muted animate-pulse"></div>
+						<div class="h-20 w-full rounded-md border bg-muted/40 animate-pulse"></div>
+					</div>
+				</div>
+				<Separator />
+			{:else if billingStore.loadError}
+				<div>
+					<h3 class="text-sm font-medium mb-3 flex items-center gap-1.5">
+						<CreditCard class="h-4 w-4" />
+						Billing
+					</h3>
+					<p class="text-xs text-muted-foreground mb-2">
+						{billingStore.loadError} Please try again.
+					</p>
+					<Button variant="outline" size="sm" onclick={() => billingStore.load()}>
+						<RefreshCw class="h-3.5 w-3.5 mr-1.5" />
+						Retry
+					</Button>
+				</div>
+				<Separator />
+			{:else if billingStore.billingEnabled && billingStore.tiersLoaded}
 				<div>
 					<h3 class="text-sm font-medium mb-3 flex items-center gap-1.5">
 						<CreditCard class="h-4 w-4" />
@@ -173,45 +203,39 @@
 
 					<!-- Actions -->
 					{#if isFree}
-						{#if paidTiers.length === 0}
-							<p class="text-xs text-muted-foreground">
-								No paid plans are currently available.
-							</p>
-						{:else}
-							<p class="text-xs text-muted-foreground mb-2">Upgrade to a paid plan</p>
-							<div class="space-y-2">
-								{#each paidTiers as tier (tier.id)}
-									<div class="rounded-md border p-3">
-										<div class="flex items-center justify-between gap-2 mb-1">
-											<span class="text-sm font-medium">{tier.name}</span>
-											<span class="text-xs text-muted-foreground whitespace-nowrap">
-												{formatTierPrice(tier)}
-											</span>
-										</div>
-										<div class="text-[11px] text-muted-foreground mb-2">
-											{formatCameraLimit(tier)} · {formatStorageLimit(tier)}
-										</div>
-										<Button
-											size="sm"
-											class="w-full"
-											disabled={billingStore.loading}
-											onclick={() => billingStore.checkout(tier.id)}
-										>
-											{billingStore.loading ? 'Opening…' : `Choose ${tier.name}`}
-											<ExternalLink class="h-3.5 w-3.5 ml-1.5" />
-										</Button>
+						<p class="text-xs text-muted-foreground mb-2">Upgrade to a paid plan</p>
+						<div class="space-y-2">
+							{#each paidTiers as tier (tier.id)}
+								<div class="rounded-md border p-3">
+									<div class="flex items-center justify-between gap-2 mb-1">
+										<span class="text-sm font-medium">{tier.name}</span>
+										<span class="text-xs text-muted-foreground whitespace-nowrap">
+											{formatTierPrice(tier)}
+										</span>
 									</div>
-								{/each}
-							</div>
-						{/if}
+									<div class="text-[11px] text-muted-foreground mb-2">
+										{formatCameraLimit(tier)} · {formatStorageLimit(tier)}
+									</div>
+									<Button
+										size="sm"
+										class="w-full"
+										disabled={billingStore.actionInFlight}
+										onclick={() => billingStore.checkout(tier.id)}
+									>
+										{billingStore.actionInFlight ? 'Opening…' : `Choose ${tier.name}`}
+										<ExternalLink class="h-3.5 w-3.5 ml-1.5" />
+									</Button>
+								</div>
+							{/each}
+						</div>
 					{:else}
 						<Button
 							variant="outline"
 							class="w-full"
-							disabled={billingStore.loading}
+							disabled={billingStore.actionInFlight}
 							onclick={() => billingStore.openPortal()}
 						>
-							{billingStore.loading ? 'Opening…' : 'Manage Subscription'}
+							{billingStore.actionInFlight ? 'Opening…' : 'Manage Subscription'}
 							<ExternalLink class="h-3.5 w-3.5 ml-1.5" />
 						</Button>
 					{/if}

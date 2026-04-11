@@ -10,6 +10,7 @@
 		loopStart = -1,
 		loopEnd = -1,
 		loopSeekRevision = 0,
+		mode = 'live',
 		class: className = '',
 		onError = undefined,
 		videoEl = $bindable<HTMLVideoElement | undefined>(undefined),
@@ -22,12 +23,24 @@
 		loopEnd?: number;
 		/** Bumped to force seek to loopStart (e.g. after handle release). */
 		loopSeekRevision?: number;
+		/** What kind of stream this is. Controls the "no footage" message
+		 *  so live failures say "camera has no recent footage" while VOD
+		 *  failures say "no recording for this time range". */
+		mode?: 'live' | 'vod' | 'clip';
 		class?: string;
 		onError?: (error: string) => void;
 		/** Exposed so parents can call webkitEnterFullscreen / requestPictureInPicture /
 		 *  draw snapshots. Bound via `bind:videoEl`. */
 		videoEl?: HTMLVideoElement;
 	} = $props();
+
+	// Human-readable label for the "no footage" state. The diagnostic
+	// string (HTTP status, hls.js detail) still renders below it.
+	let noFootageHeadline = $derived(
+		mode === 'live'
+			? 'Camera has no recent footage'
+			: 'No recording for this time range'
+	);
 
 	let hls: Hls | null = null;
 	let loading = $state<boolean>(false);
@@ -246,7 +259,7 @@
 		<div class="absolute inset-0 grid place-items-center bg-black/80">
 			<div class="flex flex-col items-center gap-1.5 text-muted-foreground px-4 text-center">
 				<VideoOff class="h-8 w-8 opacity-40" />
-				<span class="text-xs">No footage</span>
+				<span class="text-xs">{noFootageHeadline}</span>
 				{#if noFootageDetail}
 					<span class="text-[10px] font-mono opacity-60 break-all">{noFootageDetail}</span>
 				{/if}

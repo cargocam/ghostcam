@@ -15,8 +15,13 @@ import (
 
 const segmentDurationSecs = 6
 
-// liveWindowMs is the sliding window for live manifests (~15 segments).
-const liveWindowMs = 90 * 1000
+// liveWindowMs is the sliding window size for live manifests. Wide enough
+// to absorb a few minutes of upload hiccups (real cameras on cellular
+// links go quiet during signal drops, handover, or motion-gated encoding)
+// without the manifest endpoint returning 404 and the viewer showing
+// "No footage". hls.js only plays the tail of the playlist anyway, so a
+// 5-minute window costs almost nothing but buys meaningful resilience.
+const liveWindowMs = 5 * 60 * 1000
 
 // retentionMs returns the retention window in milliseconds.
 func (a *App) retentionMs() uint64 {
