@@ -9,6 +9,7 @@ import { settingsStore } from '$lib/stores/settings.svelte.js';
 
 class TransportStore {
 	authenticated = $state(false);
+	initialized = $state(false);
 	connected = $state(false);
 	connectedAt = $state<number | null>(null);
 	error = $state<string | null>(null);
@@ -23,10 +24,10 @@ class TransportStore {
 	private staleCheckInterval: ReturnType<typeof setInterval> | null = null;
 
 	async initialize() {
-		this.authenticated = await checkSession();
-		if (!this.authenticated) return;
-
 		try {
+			this.authenticated = await checkSession();
+			if (!this.authenticated) return;
+
 			// Fetch initial camera list
 			const cameras = await listCameras();
 			cameraStore.setInitialList(cameras);
@@ -52,6 +53,8 @@ class TransportStore {
 			this.error = null;
 		} catch (e) {
 			this.error = e instanceof Error ? e.message : 'Initialization failed';
+		} finally {
+			this.initialized = true;
 		}
 	}
 

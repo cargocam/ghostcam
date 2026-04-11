@@ -46,7 +46,14 @@
 	});
 </script>
 
-{#if !transportStore.authenticated}
+{#if !transportStore.initialized}
+	<div class="flex h-screen-stable items-center justify-center bg-background">
+		<div class="flex flex-col items-center gap-4">
+			<img src="/icon.svg" alt="" class="h-16 w-16 animate-pulse" />
+			<h1 class="text-2xl font-bold tracking-tight">Ghostcam</h1>
+		</div>
+	</div>
+{:else if !transportStore.authenticated}
 	<LoginPage />
 {:else if settingsStore.currentView === 'camera'}
 	<div class="app-root h-screen-stable overflow-hidden bg-black">
