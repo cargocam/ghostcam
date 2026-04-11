@@ -14,6 +14,7 @@
 	import CameraView from '$lib/views/CameraView.svelte';
 	import MapView from '$lib/views/MapView.svelte';
 	import DashboardView from '$lib/views/DashboardView.svelte';
+	import AdminView from '$lib/views/AdminView.svelte';
 
 	let mobileNavOpen = $state(false);
 	let settingsOpen = $state(false);
@@ -50,6 +51,13 @@
 {:else if settingsStore.currentView === 'camera'}
 	<div class="app-root h-screen-stable overflow-hidden bg-black">
 		<CameraView />
+	</div>
+{:else if settingsStore.currentView === 'admin'}
+	<!-- Admin view is a top-level surface, not a tab inside main, so the
+	     sidebar / scrubber / alerts stay out of the way. A single back
+	     arrow in the view itself returns to live. -->
+	<div class="app-root h-screen-stable overflow-hidden bg-background">
+		<AdminView />
 	</div>
 {:else}
 	<div class="app-root flex h-screen-stable overflow-hidden bg-background">

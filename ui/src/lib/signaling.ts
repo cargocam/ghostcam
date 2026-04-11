@@ -1,4 +1,5 @@
 import type {
+	AdminListBillingTiersResponse,
 	CameraResponse,
 	CheckoutResponse,
 	CoverageResponse,
@@ -14,6 +15,15 @@ import type {
 	UnreadCountResponse,
 	UsageResponse,
 } from '$lib/api-types';
+
+// AdminUpdateBillingTierRequest on the wire sends `null` for unlimited,
+// but tygo generates `number | undefined` from Go's `*int`. Declare the
+// client-facing shape explicitly so callers can pass `null` without a
+// cast — the JSON round-trips cleanly either way.
+export type AdminUpdateBillingTier = {
+	camera_limit: number | null;
+	storage_gb: number | null;
+};
 
 const API_BASE = '/api/v1';
 
@@ -66,6 +76,28 @@ export async function refreshTiers(): Promise<ListTiersResponse> {
 		credentials: 'include',
 	});
 	if (!res.ok) throw new Error(`refreshTiers failed: ${res.status}`);
+	return res.json();
+}
+
+// --- Admin ---
+
+export async function adminListBillingTiers(): Promise<AdminListBillingTiersResponse> {
+	const res = await fetch(`${API_BASE}/admin/billing/tiers`, { credentials: 'include' });
+	if (!res.ok) throw new Error(`adminListBillingTiers failed: ${res.status}`);
+	return res.json();
+}
+
+export async function adminUpdateBillingTier(
+	priceID: string,
+	update: AdminUpdateBillingTier,
+): Promise<AdminListBillingTiersResponse> {
+	const res = await fetch(`${API_BASE}/admin/billing/tiers/${encodeURIComponent(priceID)}`, {
+		method: 'PATCH',
+		headers: headers(),
+		body: JSON.stringify(update),
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`adminUpdateBillingTier failed: ${res.status}`);
 	return res.json();
 }
 

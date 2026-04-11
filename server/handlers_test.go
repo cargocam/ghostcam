@@ -164,10 +164,19 @@ func TestResolveEffectiveTier(t *testing.T) {
 			wantID:           billing.FreeTierID,
 		},
 		{
-			name:             "legacy pro tier with active stripe subscription resolves via fallback",
+			// Legacy name + active subscription: the pure function
+			// no longer resolves legacy names (Stripe is now the only
+			// source of truth for paid tier limits). The fail-closed
+			// fallback is free. The App.effectiveTier wrapper runs a
+			// one-shot migration that fetches the live Stripe price ID
+			// and rewrites the DB — after that migration, the sub row
+			// carries a price ID and resolveEffectiveTier's second
+			// pass hits the cache. That migration path is covered by
+			// the integration test, not here.
+			name:             "legacy pro tier with active stripe — resolves to free (lazy migration required)",
 			sub:              &db.SubscriptionRecord{Tier: "pro", Status: "active", StripeSubscriptionID: strPtr("sub_123")},
 			stripeConfigured: true,
-			wantID:           "pro",
+			wantID:           billing.FreeTierID,
 		},
 		{
 			name:             "legacy pro tier with canceled stripe subscription",
@@ -176,10 +185,10 @@ func TestResolveEffectiveTier(t *testing.T) {
 			wantID:           billing.FreeTierID,
 		},
 		{
-			name:             "legacy enterprise with active stripe",
+			name:             "legacy enterprise with active stripe — resolves to free (lazy migration required)",
 			sub:              &db.SubscriptionRecord{Tier: "enterprise", Status: "active", StripeSubscriptionID: strPtr("sub_456")},
 			stripeConfigured: true,
-			wantID:           "enterprise",
+			wantID:           billing.FreeTierID,
 		},
 		{
 			name:             "any tier without stripe configured = dev-unlimited",

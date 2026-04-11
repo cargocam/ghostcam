@@ -208,6 +208,48 @@ type PortalResponse struct {
 }
 
 // ====================================================================
+// Admin billing
+// ====================================================================
+
+// AdminBillingTier is the per-price entry returned by GET
+// /api/v1/admin/billing/tiers. Unlike the public TierInfo — which only
+// surfaces tiers that already have valid ghostcam metadata — this struct
+// describes every active Stripe price in the account, including those
+// that have not yet been configured. The admin UI uses it to render an
+// editable table so the operator can see all products and assign limits.
+type AdminBillingTier struct {
+	PriceID     string `json:"price_id"`
+	ProductID   string `json:"product_id"`
+	ProductName string `json:"product_name"`
+	PriceCents  int64  `json:"price_cents"`
+	Currency    string `json:"currency"`
+	Interval    string `json:"interval"`
+	// Raw metadata strings as stored on the Stripe product. Empty string
+	// means the key is unset. The admin UI converts these to numbers or
+	// the "Unlimited" label for display.
+	CameraLimitRaw string `json:"camera_limit_raw"`
+	StorageGBRaw   string `json:"storage_gb_raw"`
+	// Configured is true when both metadata keys are present — i.e. the
+	// product is complete enough for the tier cache to accept it.
+	Configured bool `json:"configured"`
+}
+
+// AdminListBillingTiersResponse is the body of GET
+// /api/v1/admin/billing/tiers.
+type AdminListBillingTiersResponse struct {
+	Tiers []AdminBillingTier `json:"tiers"`
+}
+
+// AdminUpdateBillingTierRequest is the body of PATCH
+// /api/v1/admin/billing/tiers/{priceID}. Either field set to null means
+// "unlimited" for that dimension. Both fields are required on every
+// request to prevent half-configured products.
+type AdminUpdateBillingTierRequest struct {
+	CameraLimit *int `json:"camera_limit"`
+	StorageGB   *int `json:"storage_gb"`
+}
+
+// ====================================================================
 // Client diagnostics
 // ====================================================================
 

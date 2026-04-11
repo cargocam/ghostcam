@@ -10,6 +10,7 @@ const COOKIE_NAME = 'ghostcam-token';
 type JwtClaims = {
 	sub?: string;
 	email?: string;
+	is_admin?: boolean;
 	exp?: number;
 };
 
@@ -44,6 +45,10 @@ class AuthStore {
 	claims = $derived<JwtClaims | null>(decodeJwt(this.token));
 	email = $derived<string>(this.claims?.email ?? '');
 	userId = $derived<string>(this.claims?.sub ?? '');
+	// is_admin is a UI hint only; the server's adminAuth middleware
+	// re-validates the admin email on every admin-scoped request so a
+	// forged claim cannot grant elevated access.
+	isAdmin = $derived<boolean>(this.claims?.is_admin === true);
 
 	/** Re-read the cookie. Call after login, logout, or change-password. */
 	refresh() {

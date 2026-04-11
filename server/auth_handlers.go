@@ -15,7 +15,11 @@ const jwtTTL = 30 * 24 * time.Hour // 30 days
 const cookieMaxAge = 30 * 86400
 
 func (a *App) setAuthCookie(w http.ResponseWriter, userID, email string) {
-	token := auth.SignJWT(userID, email, a.HMACSecret, jwtTTL)
+	// Single-operator product: admin is whoever matches GHOSTCAM_ADMIN_EMAIL.
+	// The is_admin claim is purely a UI hint; adminAuth re-validates on
+	// every request so a forged claim can't grant elevated access.
+	isAdmin := email != "" && email == a.Config.AdminEmail
+	token := auth.SignJWT(userID, email, isAdmin, a.HMACSecret, jwtTTL)
 	secure := ""
 	if a.Config.secureCookies() {
 		secure = "; Secure"

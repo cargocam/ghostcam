@@ -14,7 +14,7 @@
 	import { devStore } from '$lib/stores/dev.svelte.js';
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { changePassword } from '$lib/auth.js';
-	import { Sun, Moon, Monitor, CreditCard, ExternalLink, Trash2, Bug, RefreshCw } from 'lucide-svelte';
+	import { Sun, Moon, Monitor, CreditCard, ExternalLink, Trash2, Bug, RefreshCw, Shield } from 'lucide-svelte';
 
 	let {
 		open = $bindable(false),
@@ -247,6 +247,31 @@
 					{#if billingStore.error}
 						<p class="text-xs text-destructive mt-2 break-words">{billingStore.error}</p>
 					{/if}
+				</div>
+
+				<Separator />
+			{/if}
+
+			<!-- Admin (single-operator: visible only when the JWT's
+			     is_admin claim is set, which happens when the user's
+			     email matches GHOSTCAM_ADMIN_EMAIL). -->
+			{#if authStore.isAdmin}
+				<div>
+					<h3 class="text-sm font-medium mb-3 flex items-center gap-1.5">
+						<Shield class="h-4 w-4" />
+						Admin
+					</h3>
+					<Button
+						variant="outline"
+						size="sm"
+						class="w-full"
+						onclick={() => {
+							settingsStore.setView('admin');
+							open = false;
+						}}
+					>
+						Open admin panel
+					</Button>
 				</div>
 
 				<Separator />

@@ -210,6 +210,51 @@ export interface PortalResponse {
   url: string;
 }
 /**
+ * AdminBillingTier is the per-price entry returned by GET
+ * /api/v1/admin/billing/tiers. Unlike the public TierInfo — which only
+ * surfaces tiers that already have valid ghostcam metadata — this struct
+ * describes every active Stripe price in the account, including those
+ * that have not yet been configured. The admin UI uses it to render an
+ * editable table so the operator can see all products and assign limits.
+ */
+export interface AdminBillingTier {
+  price_id: string;
+  product_id: string;
+  product_name: string;
+  price_cents: number /* int64 */;
+  currency: string;
+  interval: string;
+  /**
+   * Raw metadata strings as stored on the Stripe product. Empty string
+   * means the key is unset. The admin UI converts these to numbers or
+   * the "Unlimited" label for display.
+   */
+  camera_limit_raw: string;
+  storage_gb_raw: string;
+  /**
+   * Configured is true when both metadata keys are present — i.e. the
+   * product is complete enough for the tier cache to accept it.
+   */
+  configured: boolean;
+}
+/**
+ * AdminListBillingTiersResponse is the body of GET
+ * /api/v1/admin/billing/tiers.
+ */
+export interface AdminListBillingTiersResponse {
+  tiers: AdminBillingTier[];
+}
+/**
+ * AdminUpdateBillingTierRequest is the body of PATCH
+ * /api/v1/admin/billing/tiers/{priceID}. Either field set to null means
+ * "unlimited" for that dimension. Both fields are required on every
+ * request to prevent half-configured products.
+ */
+export interface AdminUpdateBillingTierRequest {
+  camera_limit?: number /* int */;
+  storage_gb?: number /* int */;
+}
+/**
  * ClientLogEntry is the body of POST /api/v1/client-log. The endpoint is
  * gated behind an authenticated session and the UI only fires it when
  * the "Client error logging" developer setting is enabled, so there is no

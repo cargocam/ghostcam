@@ -35,5 +35,5 @@ export interface GroupInfo {
 }
 
 export type GridLayout = 'auto' | '1+5';
-export type ViewMode = 'live' | 'map' | 'dashboard' | 'camera';
+export type ViewMode = 'live' | 'map' | 'dashboard' | 'camera' | 'admin';
 export type MarkerMode = 'dot' | 'detailed' | 'pip';

@@ -55,14 +55,26 @@ var FreeTier = Tier{
 	StorageLimitGB: intPtr(5),
 }
 
-// legacyNameFallback keeps pre-refactor DB rows working until the Stripe
-// webhook migrates them to the new price-ID tier format. Any sub row whose
-// tier column is one of these names resolves to this struct without
-// consulting Stripe. New checkouts never produce these IDs.
-var legacyNameFallback = map[string]Tier{
-	"starter":    {ID: "starter", Name: "Starter", CameraLimit: intPtr(4), StorageLimitGB: intPtr(50)},
-	"pro":        {ID: "pro", Name: "Pro", CameraLimit: intPtr(16), StorageLimitGB: intPtr(500)},
-	"enterprise": {ID: "enterprise", Name: "Enterprise", CameraLimit: nil, StorageLimitGB: nil},
+// LegacyTierNames is the set of pre-refactor tier identifiers that may
+// still exist in subscriptions.tier rows. These are never produced by new
+// checkouts — the app writes Stripe price IDs directly — but rows created
+// before the Stripe-driven refactor still carry them. The server-side
+// lazy-migration path in App.effectiveTier detects these strings, fetches
+// the current Stripe price ID for the subscription, and rewrites the DB
+// row. Exported so the legacy check lives next to the Tier type, not in
+// a parallel list somewhere else in the codebase.
+var LegacyTierNames = map[string]struct{}{
+	"starter":    {},
+	"pro":        {},
+	"enterprise": {},
+}
+
+// IsLegacyTierName reports whether the given tier string is one of the
+// pre-refactor hardcoded names. Callers use this to decide whether a DB
+// row needs the one-shot Stripe-backed migration.
+func IsLegacyTierName(tier string) bool {
+	_, ok := LegacyTierNames[tier]
+	return ok
 }
 
 // StorageLimitBytes returns the storage limit in bytes, or 0 for unlimited.
@@ -90,7 +102,12 @@ func NewCache() *Cache {
 // Get returns the tier for the given ID. Recognized IDs:
 //   - FreeTierID ("free") — always returns FreeTier
 //   - any Stripe price ID present in the cache
-//   - any legacy name in legacyNameFallback (grandfathered)
+//
+// Legacy tier names (starter/pro/enterprise) are NOT resolved here — they
+// must go through App.effectiveTier's lazy Stripe-backed migration so the
+// DB row is rewritten to the correct price ID the first time it's read.
+// Returning a hardcoded tier from the cache would make Stripe metadata
+// no longer the single source of truth.
 //
 // Unknown IDs return (zero, false). Callers must fail closed.
 func (c *Cache) Get(id string) (Tier, bool) {
@@ -100,13 +117,7 @@ func (c *Cache) Get(id string) (Tier, bool) {
 	c.mu.RLock()
 	t, ok := c.tiers[id]
 	c.mu.RUnlock()
-	if ok {
-		return t, true
-	}
-	if legacy, ok := legacyNameFallback[id]; ok {
-		return legacy, true
-	}
-	return Tier{}, false
+	return t, ok
 }
 
 // All returns every tier known to the cache, with FreeTier prepended so UIs

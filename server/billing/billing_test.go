@@ -45,32 +45,33 @@ func TestCacheGet_Unknown(t *testing.T) {
 	}
 }
 
-func TestCacheGet_LegacyNames(t *testing.T) {
+func TestCacheGet_LegacyNamesNoLongerResolve(t *testing.T) {
 	c := NewCache()
 
-	// Pre-refactor DB rows can have the tier column set to one of the
-	// hardcoded legacy names. The cache must resolve them via the
-	// grandfathered fallback so a deploy of the refactor doesn't
-	// instantly drop every existing paid customer to free.
-	tests := []struct {
-		id      string
-		wantCam *int
-	}{
-		{"starter", intPtr(4)},
-		{"pro", intPtr(16)},
-		{"enterprise", nil},
+	// Pre-refactor DB rows may still carry the hardcoded legacy tier
+	// names (starter/pro/enterprise). The cache itself must NOT resolve
+	// them — doing so would make Stripe metadata not the single source
+	// of truth. Instead, App.effectiveTier runs a one-shot lazy
+	// migration that fetches the current Stripe price ID for the
+	// subscription, rewrites the DB row, and then looks up the price
+	// via the cache on the second call. This test pins the cache's
+	// behavior; the migration path is covered by integration tests.
+	for _, legacy := range []string{"starter", "pro", "enterprise"} {
+		t.Run(legacy, func(t *testing.T) {
+			if _, ok := c.Get(legacy); ok {
+				t.Errorf("Get(%q) should NOT resolve — legacy names are migrated, not grandfathered", legacy)
+			}
+			if !IsLegacyTierName(legacy) {
+				t.Errorf("IsLegacyTierName(%q) = false, want true", legacy)
+			}
+		})
 	}
-	for _, tt := range tests {
-		t.Run(tt.id, func(t *testing.T) {
-			tier, ok := c.Get(tt.id)
-			if !ok {
-				t.Fatalf("Get(%q) should resolve via legacy fallback", tt.id)
-			}
-			if tt.wantCam == nil && tier.CameraLimit != nil {
-				t.Errorf("CameraLimit should be nil (unlimited), got %v", tier.CameraLimit)
-			}
-			if tt.wantCam != nil && (tier.CameraLimit == nil || *tier.CameraLimit != *tt.wantCam) {
-				t.Errorf("CameraLimit = %v, want %d", tier.CameraLimit, *tt.wantCam)
+
+	// Non-legacy strings are not flagged as legacy.
+	for _, other := range []string{"", "free", "price_1ABC", "godmode"} {
+		t.Run("not-legacy/"+other, func(t *testing.T) {
+			if IsLegacyTierName(other) {
+				t.Errorf("IsLegacyTierName(%q) = true, want false", other)
 			}
 		})
 	}

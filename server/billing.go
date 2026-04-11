@@ -16,6 +16,7 @@ import (
 	"github.com/stripe/stripe-go/v82"
 	portalsession "github.com/stripe/stripe-go/v82/billingportal/session"
 	checkoutsession "github.com/stripe/stripe-go/v82/checkout/session"
+	"github.com/stripe/stripe-go/v82/subscription"
 	"github.com/stripe/stripe-go/v82/webhook"
 )
 
@@ -23,7 +24,7 @@ import (
 func (a *App) GetSubscription(w http.ResponseWriter, r *http.Request) {
 	userID := getUserID(r)
 	sub, _ := a.DB.GetSubscription(r.Context(), userID)
-	tier := a.effectiveTier(sub)
+	tier := a.effectiveTier(r.Context(), sub)
 
 	writeJSON(w, http.StatusOK, apitypes.SubscriptionResponse{
 		BillingEnabled: a.stripeConfigured(),
@@ -189,7 +190,7 @@ func (a *App) GetUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sub, _ := a.DB.GetSubscription(ctx, userID)
-	tier := a.effectiveTier(sub)
+	tier := a.effectiveTier(r.Context(), sub)
 
 	writeJSON(w, http.StatusOK, apitypes.UsageResponse{
 		CamerasCount:   cameraCount,
@@ -255,10 +256,12 @@ func (a *App) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 	case "product.created", "product.updated", "product.deleted",
 		"price.created", "price.updated", "price.deleted":
 		// A product or price changed in Stripe — refresh the tier cache
-		// so the UI picks up the change on the next render instead of
-		// waiting for the hourly background refresh. The refresh runs
-		// asynchronously in a fresh context so a slow Stripe API call
-		// doesn't block webhook delivery (Stripe retries on timeout).
+		// so the UI picks up the change on the next render. Webhooks
+		// and the settings Retry button are the only refresh paths; the
+		// server has no hourly ticker. The refresh runs asynchronously
+		// in a bounded context so a slow Stripe API call doesn't block
+		// webhook delivery (Stripe retries on timeout, which would risk
+		// event reordering).
 		eventType := event.Type
 		go func() {
 			refreshCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
@@ -461,6 +464,67 @@ func (a *App) notifyCameraLimitExceeded(ctx context.Context, userID, tierID stri
 	withID, _ := json.Marshal(live)
 	a.Redis.Publish(ctx, fmt.Sprintf("camera_limit_exceeded:%s", userID), withID)
 	slog.Info("camera limit exceeded after tier change", "user_id", userID, "count", count, "limit", *tier.CameraLimit, "tier", tierID)
+}
+
+// migrateLegacyTier rewrites a sub row whose tier column still holds one
+// of the pre-refactor hardcoded names ("starter"/"pro"/"enterprise") to
+// the current Stripe price ID, and returns the updated in-memory record
+// so the calling request sees the new value immediately without a second
+// DB read.
+//
+// The migration is triggered transparently from App.effectiveTier on the
+// first call for any legacy row, and happens exactly once per row — once
+// the tier column carries a price ID, IsLegacyTierName returns false and
+// this path isn't taken again.
+//
+// Failures (Stripe unreachable, malformed subscription, unknown price,
+// DB write error) return nil so the caller falls through to the
+// fail-closed free tier. Every failure path logs the details.
+func (a *App) migrateLegacyTier(ctx context.Context, sub *db.SubscriptionRecord) *db.SubscriptionRecord {
+	if !a.stripeConfigured() || sub == nil || sub.StripeSubscriptionID == nil {
+		return nil
+	}
+	subID := *sub.StripeSubscriptionID
+
+	stripe.Key = a.Config.StripeSecretKey
+
+	stripeSub, err := subscription.Get(subID, nil)
+	if err != nil || stripeSub == nil {
+		slog.Warn("billing: legacy tier migration — stripe subscription fetch failed",
+			"user_id", sub.UserID, "subscription_id", subID, "error", err)
+		return nil
+	}
+
+	priceID, ok := a.stripeTierFromSubscription(stripeSub)
+	if !ok {
+		slog.Warn("billing: legacy tier migration — subscription has no line items",
+			"user_id", sub.UserID, "subscription_id", subID)
+		return nil
+	}
+	if _, known := a.Tiers.Get(priceID); !known {
+		slog.Warn("billing: legacy tier migration — price ID not in tier cache; product metadata missing?",
+			"user_id", sub.UserID, "subscription_id", subID, "price_id", priceID)
+		return nil
+	}
+
+	if err := a.DB.UpdateSubscription(ctx, sub.UserID, &db.SubscriptionUpdate{
+		Tier: &priceID,
+	}); err != nil {
+		slog.Error("billing: legacy tier migration — DB update failed",
+			"user_id", sub.UserID, "subscription_id", subID, "price_id", priceID, "error", err)
+		return nil
+	}
+
+	slog.Info("billing: legacy tier migrated",
+		"user_id", sub.UserID,
+		"subscription_id", subID,
+		"from", sub.Tier,
+		"to", priceID,
+	)
+
+	migrated := *sub
+	migrated.Tier = priceID
+	return &migrated
 }
 
 func strPtr(s string) *string { return &s }

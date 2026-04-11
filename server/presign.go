@@ -34,20 +34,23 @@ var devUnlimitedTier = billing.Tier{
 
 // resolveEffectiveTier is the pure implementation behind the per-App
 // effectiveTier method. Extracted so tests can exercise the full decision
-// matrix without constructing a live *App / DB pool.
+// matrix without constructing a live *App / DB pool. It deliberately does
+// NOT try to rewrite the DB — legacy migration is the App method's job;
+// this function just reads the (possibly already migrated) sub row and
+// the cache.
 //
 // Rules (applied in order):
 //  1. Stripe not configured → dev-unlimited tier (self-hosted without billing).
 //  2. No subscription row → free tier.
 //  3. sub.Tier == "free" → free tier (short-circuit).
 //  4. Any non-free paid tier without an active Stripe subscription ID → free.
-//  5. Cache lookup miss (unknown price ID / tier name) → free, logged.
+//  5. Cache lookup miss (unknown price ID, legacy name that hasn't been
+//     migrated yet, empty string) → free, logged.
 //  6. Cache hit → the matched tier struct.
 //
-// Legacy tier names from before the Stripe-driven refactor
-// (starter/pro/enterprise) still resolve via the cache's built-in
-// grandfathered fallback, so existing paid users keep working until a
-// webhook migrates their sub row to a price ID.
+// Stripe metadata is the single source of truth for paid tier limits.
+// Hardcoded fallbacks live only on the free tier (which has no Stripe
+// price) and on the devUnlimitedTier (used when Stripe is disabled).
 func resolveEffectiveTier(sub *db.SubscriptionRecord, stripeConfigured bool, cache *billing.Cache) billing.Tier {
 	if !stripeConfigured {
 		return devUnlimitedTier
@@ -71,8 +74,17 @@ func resolveEffectiveTier(sub *db.SubscriptionRecord, stripeConfigured bool, cac
 }
 
 // effectiveTier is the App-method wrapper around resolveEffectiveTier used
-// by every handler on the hot path.
-func (a *App) effectiveTier(sub *db.SubscriptionRecord) billing.Tier {
+// by every handler on the hot path. Transparently migrates legacy tier
+// strings (starter/pro/enterprise) to Stripe price IDs on first access by
+// fetching the live subscription from Stripe and rewriting the DB row.
+// After the first call per legacy row, subsequent calls take the fast
+// path through the cache.
+func (a *App) effectiveTier(ctx context.Context, sub *db.SubscriptionRecord) billing.Tier {
+	if sub != nil && billing.IsLegacyTierName(sub.Tier) && sub.StripeSubscriptionID != nil {
+		if migrated := a.migrateLegacyTier(ctx, sub); migrated != nil {
+			sub = migrated
+		}
+	}
 	return resolveEffectiveTier(sub, a.stripeConfigured(), a.Tiers)
 }
 
@@ -192,7 +204,7 @@ func (a *App) Presign(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Check tier limits.
 	sub, _ := a.DB.GetSubscription(ctx, userID)
-	tier := a.effectiveTier(sub)
+	tier := a.effectiveTier(ctx, sub)
 
 	// Camera limit: only the N oldest cameras (by enrolled_at) may upload.
 	if tier.CameraLimit != nil {
