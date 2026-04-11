@@ -81,8 +81,9 @@ func (db *DB) Initialize(ctx context.Context, presetPassword, adminEmail string)
 		}
 		// Auto-create subscription for admin on the free tier.
 		// Paid tiers require an active Stripe subscription. In dev mode
-		// (Stripe not configured), effectiveTier() returns "enterprise"
-		// so tier limits are not enforced regardless of this value.
+		// (Stripe not configured), effectiveTier() returns a synthetic
+		// unlimited tier so tier limits are not enforced regardless of
+		// this value.
 		if err := db.CreateSubscription(ctx, userID, "free", "active"); err != nil {
 			slog.Warn("failed to create admin subscription", "error", err)
 		}

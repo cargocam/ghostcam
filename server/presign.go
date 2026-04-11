@@ -24,47 +24,56 @@ const presignBatchMax = 10
 // Prune is tied to normal upload activity instead of a background loop.
 const pruneBatchSize = 100
 
-// defaultTierID is the tier assigned to users without a paid Stripe subscription.
-const defaultTierID = "free"
-
-// effectiveTier returns the user's billing tier ID. The returned string is
-// guaranteed to be a key in billing.Tiers — if a subscription row contains
-// an unknown tier name (typo, migration bug, tampering) we log loudly and
-// fall back to the free tier. This is fail-closed on purpose: never grant
-// unlimited resources because of an unrecognized string.
-//
-// Paid tiers require an active Stripe subscription — a tier column alone is
-// not enough. When Stripe is not configured (dev/local), we return
-// "enterprise" so testing works without payment infrastructure.
-func effectiveTier(sub *db.SubscriptionRecord, stripeConfigured bool) string {
-	if !stripeConfigured {
-		return "enterprise" // dev mode: unlimited
-	}
-	if sub == nil {
-		return defaultTierID
-	}
-	if sub.Tier != defaultTierID && (sub.StripeSubscriptionID == nil || sub.Status != "active") {
-		return defaultTierID
-	}
-	if _, ok := billing.GetTier(sub.Tier); !ok {
-		slog.Error("unknown tier in subscription row, falling back to free",
-			"user_id", sub.UserID, "tier", sub.Tier)
-		return defaultTierID
-	}
-	return sub.Tier
+// devUnlimitedTier is the tier returned when Stripe is not configured
+// (local dev / self-hosted without billing). It grants unlimited cameras
+// and storage so the dev loop doesn't require a Stripe account.
+var devUnlimitedTier = billing.Tier{
+	ID:   "dev-unlimited",
+	Name: "Dev (unlimited)",
 }
 
-// resolveTier looks up the Tier struct for a known-valid tier ID. It's a
-// thin wrapper that panics on unknown input — effectiveTier and
-// billing.AllTiers are the only sources that feed into it, and both
-// guarantee the ID is present in billing.Tiers. A panic here would
-// indicate a programming error, not untrusted input.
-func resolveTier(tierID string) billing.Tier {
-	t, ok := billing.GetTier(tierID)
-	if !ok {
-		panic("resolveTier called with unknown tier: " + tierID)
+// resolveEffectiveTier is the pure implementation behind the per-App
+// effectiveTier method. Extracted so tests can exercise the full decision
+// matrix without constructing a live *App / DB pool.
+//
+// Rules (applied in order):
+//  1. Stripe not configured → dev-unlimited tier (self-hosted without billing).
+//  2. No subscription row → free tier.
+//  3. sub.Tier == "free" → free tier (short-circuit).
+//  4. Any non-free paid tier without an active Stripe subscription ID → free.
+//  5. Cache lookup miss (unknown price ID / tier name) → free, logged.
+//  6. Cache hit → the matched tier struct.
+//
+// Legacy tier names from before the Stripe-driven refactor
+// (starter/pro/enterprise) still resolve via the cache's built-in
+// grandfathered fallback, so existing paid users keep working until a
+// webhook migrates their sub row to a price ID.
+func resolveEffectiveTier(sub *db.SubscriptionRecord, stripeConfigured bool, cache *billing.Cache) billing.Tier {
+	if !stripeConfigured {
+		return devUnlimitedTier
 	}
-	return t
+	if sub == nil {
+		return billing.FreeTier
+	}
+	if sub.Tier == billing.FreeTierID {
+		return billing.FreeTier
+	}
+	if sub.StripeSubscriptionID == nil || sub.Status != "active" {
+		return billing.FreeTier
+	}
+	tier, ok := cache.Get(sub.Tier)
+	if !ok {
+		slog.Error("billing: unknown tier in subscription row, falling back to free",
+			"user_id", sub.UserID, "tier", sub.Tier)
+		return billing.FreeTier
+	}
+	return tier
+}
+
+// effectiveTier is the App-method wrapper around resolveEffectiveTier used
+// by every handler on the hot path.
+func (a *App) effectiveTier(sub *db.SubscriptionRecord) billing.Tier {
+	return resolveEffectiveTier(sub, a.stripeConfigured(), a.Tiers)
 }
 
 // Presign handles POST /api/v1/cameras/{deviceID}/presign.
@@ -183,7 +192,7 @@ func (a *App) Presign(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Check tier limits.
 	sub, _ := a.DB.GetSubscription(ctx, userID)
-	tier := resolveTier(effectiveTier(sub, a.stripeConfigured()))
+	tier := a.effectiveTier(sub)
 
 	// Camera limit: only the N oldest cameras (by enrolled_at) may upload.
 	if tier.CameraLimit != nil {

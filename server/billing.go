@@ -22,17 +22,18 @@ import (
 func (a *App) GetSubscription(w http.ResponseWriter, r *http.Request) {
 	userID := getUserID(r)
 	sub, _ := a.DB.GetSubscription(r.Context(), userID)
-	tierID := effectiveTier(sub, a.stripeConfigured())
+	tier := a.effectiveTier(sub)
 
 	writeJSON(w, http.StatusOK, apitypes.SubscriptionResponse{
 		BillingEnabled: a.stripeConfigured(),
-		Tier:           tierID,
+		Tier:           tier.ID,
+		TierName:       tier.Name,
 	})
 }
 
 // ListTiers handles GET /api/v1/billing/tiers.
 func (a *App) ListTiers(w http.ResponseWriter, _ *http.Request) {
-	tiers := billing.AllTiers()
+	tiers := a.Tiers.All()
 	result := make([]apitypes.TierInfo, 0, len(tiers))
 	for _, t := range tiers {
 		result = append(result, apitypes.TierInfo{
@@ -40,6 +41,9 @@ func (a *App) ListTiers(w http.ResponseWriter, _ *http.Request) {
 			Name:        t.Name,
 			CameraLimit: t.CameraLimit,
 			StorageGB:   t.StorageLimitGB,
+			PriceCents:  t.PriceCents,
+			Currency:    t.Currency,
+			Interval:    t.Interval,
 		})
 	}
 	writeJSON(w, http.StatusOK, apitypes.ListTiersResponse{Tiers: result})
@@ -47,6 +51,12 @@ func (a *App) ListTiers(w http.ResponseWriter, _ *http.Request) {
 
 // CreateCheckout handles POST /api/v1/billing/checkout.
 // Creates a Stripe Checkout Session and returns the redirect URL.
+//
+// The request body carries a Stripe price ID in the Tier field (not a
+// friendly name like "starter"). The server validates it is present in the
+// tier cache — unknown IDs are 400'd rather than forwarded to Stripe, so a
+// compromised client can't spin up a checkout session for an arbitrary
+// product.
 func (a *App) CreateCheckout(w http.ResponseWriter, r *http.Request) {
 	if !a.stripeConfigured() {
 		writeError(w, http.StatusNotImplemented, "billing_not_configured")
@@ -61,8 +71,8 @@ func (a *App) CreateCheckout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	priceID := a.tierToPriceID(body.Tier)
-	if priceID == "" {
+	tier, ok := a.Tiers.Get(body.Tier)
+	if !ok || tier.ID == billing.FreeTierID {
 		writeError(w, http.StatusBadRequest, "invalid tier")
 		return
 	}
@@ -73,7 +83,7 @@ func (a *App) CreateCheckout(w http.ResponseWriter, r *http.Request) {
 		Mode: stripe.String(string(stripe.CheckoutSessionModeSubscription)),
 		LineItems: []*stripe.CheckoutSessionLineItemParams{
 			{
-				Price:    stripe.String(priceID),
+				Price:    stripe.String(tier.ID),
 				Quantity: stripe.Int64(1),
 			},
 		},
@@ -156,7 +166,7 @@ func (a *App) GetUsage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sub, _ := a.DB.GetSubscription(ctx, userID)
-	tier := resolveTier(effectiveTier(sub, a.stripeConfigured()))
+	tier := a.effectiveTier(sub)
 
 	writeJSON(w, http.StatusOK, apitypes.UsageResponse{
 		CamerasCount:   cameraCount,
@@ -244,14 +254,19 @@ func (a *App) handleCheckoutCompleted(ctx context.Context, event *stripe.Event) 
 	}
 
 	// Resolve the tier from the subscription's price. If we don't recognise
-	// the price ID (misconfigured env var, unknown product) we do NOT set
-	// the user to a paid tier — leaving the subscription at "free" is the
-	// fail-closed default and surfaces the misconfiguration via the log.
+	// the price ID (missing product metadata, not yet picked up by the tier
+	// cache, or a completely unknown product) we do NOT escalate to a paid
+	// tier — leaving the row at "free" is the fail-closed default and
+	// surfaces the misconfiguration via the log.
 	tier, ok := a.stripeTierFromSubscription(session.Subscription)
 	if !ok {
-		slog.Error("stripe: checkout with unknown price ID, keeping user on free",
+		slog.Error("stripe: checkout with malformed subscription, keeping user on free",
 			"user_id", userID, "subscription_id", stripeSubID(session.Subscription))
-		tier = "free"
+		tier = billing.FreeTierID
+	} else if _, known := a.Tiers.Get(tier); !known {
+		slog.Error("stripe: checkout with unknown price ID, keeping user on free",
+			"user_id", userID, "price_id", tier, "subscription_id", stripeSubID(session.Subscription))
+		tier = billing.FreeTierID
 	}
 
 	customerID := session.Customer.ID
@@ -288,8 +303,19 @@ func (a *App) handleSubscriptionUpdated(ctx context.Context, event *stripe.Event
 	// configuration drift is visible.
 	tier, ok := a.stripeTierFromSubscription(&sub)
 	if !ok {
-		slog.Error("stripe: subscription.updated with unknown price ID, leaving tier unchanged",
+		slog.Error("stripe: subscription.updated with malformed payload, leaving tier unchanged",
 			"user_id", existing.UserID, "subscription_id", sub.ID)
+		status := string(sub.Status)
+		if err := a.DB.UpdateSubscription(ctx, existing.UserID, &db.SubscriptionUpdate{
+			Status: &status,
+		}); err != nil {
+			slog.Error("stripe: failed to update subscription status", "user_id", existing.UserID, "error", err)
+		}
+		return
+	}
+	if _, known := a.Tiers.Get(tier); !known {
+		slog.Error("stripe: subscription.updated with unknown price ID, leaving tier unchanged",
+			"user_id", existing.UserID, "price_id", tier, "subscription_id", sub.ID)
 		status := string(sub.Status)
 		if err := a.DB.UpdateSubscription(ctx, existing.UserID, &db.SubscriptionUpdate{
 			Status: &status,
@@ -333,7 +359,7 @@ func (a *App) handleSubscriptionDeleted(ctx context.Context, event *stripe.Event
 		return
 	}
 
-	freeTier := "free"
+	freeTier := billing.FreeTierID
 	canceledStatus := "canceled"
 	if err := a.DB.UpdateSubscription(ctx, existing.UserID, &db.SubscriptionUpdate{
 		Tier:   &freeTier,
@@ -347,52 +373,20 @@ func (a *App) handleSubscriptionDeleted(ctx context.Context, event *stripe.Event
 	a.notifyCameraLimitExceeded(ctx, existing.UserID, freeTier)
 }
 
-func (a *App) tierToPriceID(tier string) string {
-	switch tier {
-	case "starter":
-		return a.Config.StripePriceIDStarter
-	case "pro":
-		return a.Config.StripePriceIDPro
-	case "enterprise":
-		return a.Config.StripePriceIDEnterprise
-	default:
-		return ""
-	}
-}
-
-// priceIDToTier maps a Stripe price ID to a known tier string. It returns
-// ok=false on unknown input — callers must fail closed (log loudly and
-// refuse to escalate the user to a paid tier). Silently defaulting to a
-// paid tier would let a misconfigured Stripe price grant entitlements.
-func (a *App) priceIDToTier(priceID string) (string, bool) {
-	// Unset env vars would match any empty priceID, so guard explicitly.
-	if priceID == "" {
-		return "", false
-	}
-	switch priceID {
-	case a.Config.StripePriceIDStarter:
-		return "starter", true
-	case a.Config.StripePriceIDPro:
-		return "pro", true
-	case a.Config.StripePriceIDEnterprise:
-		return "enterprise", true
-	default:
-		return "", false
-	}
-}
-
-// stripeTierFromSubscription derives the tier from the first line item's
-// price. Returns ok=false if the subscription has no items or the price
-// doesn't match any configured tier.
+// stripeTierFromSubscription extracts the Stripe price ID from the first
+// line item on a Stripe subscription. Price IDs are the canonical tier
+// identifier under the Stripe-driven tier model — callers should pass the
+// returned string to a.Tiers.Get to validate and resolve its limits.
+// Returns ok=false only when the subscription shape itself is malformed.
 func (a *App) stripeTierFromSubscription(sub *stripe.Subscription) (string, bool) {
 	if sub == nil || sub.Items == nil || len(sub.Items.Data) == 0 {
 		return "", false
 	}
 	item := sub.Items.Data[0]
-	if item == nil || item.Price == nil {
+	if item == nil || item.Price == nil || item.Price.ID == "" {
 		return "", false
 	}
-	return a.priceIDToTier(item.Price.ID)
+	return item.Price.ID, true
 }
 
 // notifyCameraLimitExceeded emits a camera_limit_exceeded SSE event if the
@@ -400,7 +394,7 @@ func (a *App) stripeTierFromSubscription(sub *stripe.Subscription) (string, bool
 // programming error (callers guarantee validity) but we bail out silently
 // rather than panic — this is notification code, not an auth decision.
 func (a *App) notifyCameraLimitExceeded(ctx context.Context, userID, tierID string) {
-	tier, ok := billing.GetTier(tierID)
+	tier, ok := a.Tiers.Get(tierID)
 	if !ok {
 		slog.Error("notifyCameraLimitExceeded: unknown tier", "user_id", userID, "tier", tierID)
 		return

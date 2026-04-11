@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cargocam/ghostcam/server/billing"
 	"github.com/cargocam/ghostcam/server/db"
 	"github.com/cargocam/ghostcam/server/redis"
 	"github.com/cargocam/ghostcam/server/s3"
@@ -31,6 +32,7 @@ type App struct {
 	Redis      *goredis.Client // nil if Redis not configured
 	S3         *s3.Client      // nil if S3 not configured
 	HMACSecret []byte
+	Tiers      *billing.Cache
 }
 
 // stripeConfigured reports whether a Stripe secret key is set. Paid tier
@@ -112,12 +114,37 @@ func run() error {
 		}
 	}
 
+	tierCache := billing.NewCache()
+	if cfg.StripeSecretKey != "" {
+		// Refresh synchronously so handlers have tiers available for the
+		// first request. Failure is logged but not fatal — the server still
+		// starts and the cache repopulates on the next hourly refresh.
+		if err := tierCache.Refresh(ctx, cfg.StripeSecretKey); err != nil {
+			slog.Warn("billing: initial tier cache refresh failed", "error", err)
+		}
+		go func() {
+			t := time.NewTicker(1 * time.Hour)
+			defer t.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+					if err := tierCache.Refresh(context.Background(), cfg.StripeSecretKey); err != nil {
+						slog.Warn("billing: tier cache refresh failed", "error", err)
+					}
+				}
+			}
+		}()
+	}
+
 	app := &App{
 		Config:     cfg,
 		DB:         database,
 		Redis:      redisClient,
 		S3:         s3Client,
 		HMACSecret: hmacSecret,
+		Tiers:      tierCache,
 	}
 
 	srv := &http.Server{

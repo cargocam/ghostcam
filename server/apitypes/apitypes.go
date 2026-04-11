@@ -149,12 +149,17 @@ type CoverageResponse struct {
 // ====================================================================
 
 // TierInfo is the per-tier entry returned by GET /api/v1/billing/tiers.
-// Nil limits mean unlimited.
+// For paid tiers the ID is a Stripe price ID (e.g. "price_1ABC..."); for
+// the free tier the ID is the literal string "free". Nil limits mean
+// unlimited. Price/currency/interval are zero for the free tier.
 type TierInfo struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
 	CameraLimit *int   `json:"camera_limit"`
 	StorageGB   *int   `json:"storage_gb"`
+	PriceCents  int64  `json:"price_cents"`
+	Currency    string `json:"currency"`
+	Interval    string `json:"interval"` // "month" / "year" / ""
 }
 
 // ListTiersResponse is the body of GET /api/v1/billing/tiers.
@@ -163,9 +168,13 @@ type ListTiersResponse struct {
 }
 
 // SubscriptionResponse is the body of GET /api/v1/billing/subscription.
+// Tier carries the current tier identifier (Stripe price ID or "free");
+// TierName is the human-readable display name from the Stripe product, or
+// "Free" for the unpaid tier.
 type SubscriptionResponse struct {
 	BillingEnabled bool   `json:"billing_enabled"`
 	Tier           string `json:"tier"`
+	TierName       string `json:"tier_name"`
 }
 
 // UsageResponse is the body of GET /api/v1/billing/usage.

@@ -25,13 +25,14 @@ type ServerConfig struct {
 	S3PresignTTLSecs uint64
 	// Public URL for QR codes (e.g. "https://cam.example.com")
 	PublicURL string
-	// Stripe (optional — billing disabled if StripeSecretKey is empty)
-	StripeSecretKey         string
-	StripeWebhookSecret     string
-	StripePriceIDStarter    string
-	StripePriceIDPro        string
-	StripePriceIDEnterprise string
-	StripePortalConfigID    string
+	// Stripe (optional — billing disabled if StripeSecretKey is empty).
+	// Tier/product IDs are NOT configured here; the server fetches active
+	// prices from Stripe on startup and treats each product with the
+	// `ghostcam_camera_limit` / `ghostcam_storage_gb` metadata keys as a
+	// tier. See server/billing/tiers.go.
+	StripeSecretKey      string
+	StripeWebhookSecret  string
+	StripePortalConfigID string
 	// Segment retention in days (default 30)
 	SegmentRetentionDays int
 }
@@ -87,9 +88,6 @@ func LoadConfig() (*ServerConfig, error) {
 	// Stripe (env only — sensitive)
 	cfg.StripeSecretKey = os.Getenv("STRIPE_SECRET_KEY")
 	cfg.StripeWebhookSecret = os.Getenv("STRIPE_WEBHOOK_SECRET")
-	cfg.StripePriceIDStarter = os.Getenv("STRIPE_PRICE_ID_STARTER")
-	cfg.StripePriceIDPro = os.Getenv("STRIPE_PRICE_ID_PRO")
-	cfg.StripePriceIDEnterprise = os.Getenv("STRIPE_PRICE_ID_ENTERPRISE")
 	cfg.StripePortalConfigID = os.Getenv("STRIPE_PORTAL_CONFIG_ID")
 
 	// Segment retention

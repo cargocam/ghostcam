@@ -5,7 +5,12 @@
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { transportStore } from '$lib/stores/transport.svelte.js';
-	import { billingStore } from '$lib/stores/billing.svelte.js';
+	import {
+		billingStore,
+		formatCameraLimit,
+		formatStorageLimit,
+		formatTierPrice,
+	} from '$lib/stores/billing.svelte.js';
 	import { authStore } from '$lib/stores/auth.svelte.js';
 	import { changePassword } from '$lib/auth.js';
 	import { Sun, Moon, Monitor, CreditCard, ExternalLink, Trash2 } from 'lucide-svelte';
@@ -24,6 +29,7 @@
 	});
 
 	let isFree = $derived(billingStore.currentTier === 'free');
+	let paidTiers = $derived(billingStore.paidTiers);
 
 	// Change email dialog state (stubbed — not yet implemented on the backend)
 	let changeEmailOpen = $state(false);
@@ -128,7 +134,7 @@
 
 					<!-- Current plan + usage -->
 					<div class="mb-3">
-						<span class="text-sm font-medium capitalize">{billingStore.currentTier}</span>
+						<span class="text-sm font-medium">{billingStore.currentTierName}</span>
 						{#if billingStore.usage}
 							<span class="text-xs text-muted-foreground ml-1.5">
 								{billingStore.usage.cameras_count}{billingStore.usage.camera_limit !== null ? `/${billingStore.usage.camera_limit}` : ''} cameras
@@ -166,17 +172,37 @@
 
 					<!-- Actions -->
 					{#if isFree}
-						<!-- TODO: replace with a tier picker once the UI supports showing
-						     billing.AllTiers() cards. For now, "Upgrade" jumps straight
-						     into Stripe Checkout for the starter tier. -->
-						<Button
-							class="w-full"
-							disabled={billingStore.loading}
-							onclick={() => billingStore.checkout('starter')}
-						>
-							{billingStore.loading ? 'Opening…' : 'Upgrade to Starter'}
-							<ExternalLink class="h-3.5 w-3.5 ml-1.5" />
-						</Button>
+						{#if paidTiers.length === 0}
+							<p class="text-xs text-muted-foreground">
+								No paid plans are currently available.
+							</p>
+						{:else}
+							<p class="text-xs text-muted-foreground mb-2">Upgrade to a paid plan</p>
+							<div class="space-y-2">
+								{#each paidTiers as tier (tier.id)}
+									<div class="rounded-md border p-3">
+										<div class="flex items-center justify-between gap-2 mb-1">
+											<span class="text-sm font-medium">{tier.name}</span>
+											<span class="text-xs text-muted-foreground whitespace-nowrap">
+												{formatTierPrice(tier)}
+											</span>
+										</div>
+										<div class="text-[11px] text-muted-foreground mb-2">
+											{formatCameraLimit(tier)} · {formatStorageLimit(tier)}
+										</div>
+										<Button
+											size="sm"
+											class="w-full"
+											disabled={billingStore.loading}
+											onclick={() => billingStore.checkout(tier.id)}
+										>
+											{billingStore.loading ? 'Opening…' : `Choose ${tier.name}`}
+											<ExternalLink class="h-3.5 w-3.5 ml-1.5" />
+										</Button>
+									</div>
+								{/each}
+							</div>
+						{/if}
 					{:else}
 						<Button
 							variant="outline"

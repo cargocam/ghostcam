@@ -144,13 +144,18 @@ export interface CoverageResponse {
 }
 /**
  * TierInfo is the per-tier entry returned by GET /api/v1/billing/tiers.
- * Nil limits mean unlimited.
+ * For paid tiers the ID is a Stripe price ID (e.g. "price_1ABC..."); for
+ * the free tier the ID is the literal string "free". Nil limits mean
+ * unlimited. Price/currency/interval are zero for the free tier.
  */
 export interface TierInfo {
   id: string;
   name: string;
   camera_limit?: number /* int */;
   storage_gb?: number /* int */;
+  price_cents: number /* int64 */;
+  currency: string;
+  interval: string; // "month" / "year" / ""
 }
 /**
  * ListTiersResponse is the body of GET /api/v1/billing/tiers.
@@ -160,10 +165,14 @@ export interface ListTiersResponse {
 }
 /**
  * SubscriptionResponse is the body of GET /api/v1/billing/subscription.
+ * Tier carries the current tier identifier (Stripe price ID or "free");
+ * TierName is the human-readable display name from the Stripe product, or
+ * "Free" for the unpaid tier.
  */
 export interface SubscriptionResponse {
   billing_enabled: boolean;
   tier: string;
+  tier_name: string;
 }
 /**
  * UsageResponse is the body of GET /api/v1/billing/usage.

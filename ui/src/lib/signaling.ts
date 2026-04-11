@@ -4,6 +4,7 @@ import type {
 	CoverageResponse,
 	EventEntry,
 	ListEventsResponse,
+	ListTiersResponse,
 	PortalResponse,
 	PrepareClipResponse,
 	QRRequest,
@@ -45,6 +46,12 @@ export async function fetchCoverage(deviceId: string): Promise<CoverageResponse>
 export async function getSubscription(): Promise<SubscriptionResponse> {
 	const res = await fetch(`${API_BASE}/billing/subscription`, { credentials: 'include' });
 	if (!res.ok) throw new Error(`getSubscription failed: ${res.status}`);
+	return res.json();
+}
+
+export async function listTiers(): Promise<ListTiersResponse> {
+	const res = await fetch(`${API_BASE}/billing/tiers`, { credentials: 'include' });
+	if (!res.ok) throw new Error(`listTiers failed: ${res.status}`);
 	return res.json();
 }
 

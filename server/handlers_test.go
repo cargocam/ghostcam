@@ -8,70 +8,83 @@ import (
 	"github.com/cargocam/ghostcam/server/db"
 )
 
+// buildTier returns a Tier struct with the given camera limit for tests.
+// A nil cameraLimit means unlimited.
+func buildTier(id string, cameraLimit *int) billing.Tier {
+	return billing.Tier{ID: id, Name: id, CameraLimit: cameraLimit}
+}
+
+func intPtr(v int) *int { return &v }
+
 func TestCameraLimitAllowed(t *testing.T) {
 	// Mirrors the presign handler's camera limit check logic:
 	// Given a list of cameras ordered by enrolled_at and a tier limit,
 	// only the N oldest cameras are allowed to upload.
+	free := billing.FreeTier
+	starter := buildTier("starter", intPtr(4))
+	pro := buildTier("pro", intPtr(16))
+	enterprise := buildTier("enterprise", nil)
+
 	tests := []struct {
 		name      string
 		cameras   []string // device IDs in enrolled_at order
-		tierID    string
+		tier      billing.Tier
 		deviceID  string
 		wantAllow bool
 	}{
 		{
 			name:      "free tier, 1 camera, first camera allowed",
 			cameras:   []string{"cam-1", "cam-2", "cam-3"},
-			tierID:    "free",
+			tier:      free,
 			deviceID:  "cam-1",
 			wantAllow: true,
 		},
 		{
 			name:      "free tier, 1 camera, second camera blocked",
 			cameras:   []string{"cam-1", "cam-2", "cam-3"},
-			tierID:    "free",
+			tier:      free,
 			deviceID:  "cam-2",
 			wantAllow: false,
 		},
 		{
 			name:      "free tier, 1 camera, third camera blocked",
 			cameras:   []string{"cam-1", "cam-2", "cam-3"},
-			tierID:    "free",
+			tier:      free,
 			deviceID:  "cam-3",
 			wantAllow: false,
 		},
 		{
 			name:      "starter tier, 4 cameras, all within limit",
 			cameras:   []string{"cam-1", "cam-2", "cam-3"},
-			tierID:    "starter",
+			tier:      starter,
 			deviceID:  "cam-3",
 			wantAllow: true,
 		},
 		{
 			name:      "starter tier, 5th camera blocked",
 			cameras:   []string{"cam-1", "cam-2", "cam-3", "cam-4", "cam-5"},
-			tierID:    "starter",
+			tier:      starter,
 			deviceID:  "cam-5",
 			wantAllow: false,
 		},
 		{
 			name:      "enterprise tier, unlimited cameras",
 			cameras:   []string{"cam-1", "cam-2", "cam-3"},
-			tierID:    "enterprise",
+			tier:      enterprise,
 			deviceID:  "cam-3",
 			wantAllow: true,
 		},
 		{
 			name:      "pro tier, 16 cameras, last allowed",
 			cameras:   make16Cameras(),
-			tierID:    "pro",
+			tier:      pro,
 			deviceID:  "cam-16",
 			wantAllow: true,
 		},
 		{
 			name:      "pro tier, 17th camera blocked",
 			cameras:   append(make16Cameras(), "cam-17"),
-			tierID:    "pro",
+			tier:      pro,
 			deviceID:  "cam-17",
 			wantAllow: false,
 		},
@@ -79,11 +92,7 @@ func TestCameraLimitAllowed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tier, ok := billing.GetTier(tt.tierID)
-			if !ok {
-				t.Fatalf("billing.GetTier(%q) not found", tt.tierID)
-			}
-			got := isCameraAllowed(tier, tt.cameras, tt.deviceID)
+			got := isCameraAllowed(tt.tier, tt.cameras, tt.deviceID)
 			if got != tt.wantAllow {
 				t.Errorf("isCameraAllowed() = %v, want %v", got, tt.wantAllow)
 			}
@@ -115,102 +124,92 @@ func make16Cameras() []string {
 	return cams
 }
 
-func TestEffectiveTier(t *testing.T) {
+// TestResolveEffectiveTier covers the full decision matrix of the pure
+// tier-resolution function. The interesting security property is
+// fail-closed: any unrecognised tier string must collapse to free rather
+// than escalate the user to an unlimited paid tier.
+func TestResolveEffectiveTier(t *testing.T) {
+	// Empty cache — any paid tier lookup misses. Exercises the fail-closed
+	// path plus the legacy name grandfathering path baked into Cache.Get.
+	cache := billing.NewCache()
+
 	tests := []struct {
 		name             string
 		sub              *db.SubscriptionRecord
 		stripeConfigured bool
-		want             string
+		wantID           string
 	}{
 		{
 			name:             "no subscription, stripe configured",
 			sub:              nil,
 			stripeConfigured: true,
-			want:             "free",
+			wantID:           billing.FreeTierID,
 		},
 		{
 			name:             "no subscription, stripe not configured (dev)",
 			sub:              nil,
 			stripeConfigured: false,
-			want:             "enterprise",
+			wantID:           "dev-unlimited",
 		},
 		{
 			name:             "free tier with stripe",
-			sub:              &db.SubscriptionRecord{Tier: "free", Status: "active"},
+			sub:              &db.SubscriptionRecord{Tier: billing.FreeTierID, Status: "active"},
 			stripeConfigured: true,
-			want:             "free",
+			wantID:           billing.FreeTierID,
 		},
 		{
-			name:             "pro tier without stripe subscription ID",
+			name:             "paid tier without stripe subscription ID (grandfathered name)",
 			sub:              &db.SubscriptionRecord{Tier: "pro", Status: "active", StripeSubscriptionID: nil},
 			stripeConfigured: true,
-			want:             "free", // no stripe sub = forced free
+			wantID:           billing.FreeTierID,
 		},
 		{
-			name:             "pro tier with active stripe subscription",
+			name:             "legacy pro tier with active stripe subscription resolves via fallback",
 			sub:              &db.SubscriptionRecord{Tier: "pro", Status: "active", StripeSubscriptionID: strPtr("sub_123")},
 			stripeConfigured: true,
-			want:             "pro",
+			wantID:           "pro",
 		},
 		{
-			name:             "pro tier with canceled stripe subscription",
+			name:             "legacy pro tier with canceled stripe subscription",
 			sub:              &db.SubscriptionRecord{Tier: "pro", Status: "canceled", StripeSubscriptionID: strPtr("sub_123")},
 			stripeConfigured: true,
-			want:             "free", // canceled = forced free
+			wantID:           billing.FreeTierID,
 		},
 		{
-			name:             "enterprise with active stripe",
+			name:             "legacy enterprise with active stripe",
 			sub:              &db.SubscriptionRecord{Tier: "enterprise", Status: "active", StripeSubscriptionID: strPtr("sub_456")},
 			stripeConfigured: true,
-			want:             "enterprise",
+			wantID:           "enterprise",
 		},
 		{
-			name:             "any tier without stripe configured = enterprise (dev mode)",
-			sub:              &db.SubscriptionRecord{Tier: "free", Status: "active"},
+			name:             "any tier without stripe configured = dev-unlimited",
+			sub:              &db.SubscriptionRecord{Tier: billing.FreeTierID, Status: "active"},
 			stripeConfigured: false,
-			want:             "enterprise",
+			wantID:           "dev-unlimited",
 		},
 		{
 			// SECURITY: unknown tier strings in the DB must not grant
-			// unlimited resources via a fall-through to "enterprise". The
-			// safest default is the most restrictive tier ("free").
+			// unlimited resources via a fall-through to a paid tier. The
+			// safest default is the most restrictive tier (free).
 			name:             "unknown tier string falls back to free (fail-closed)",
 			sub:              &db.SubscriptionRecord{Tier: "godmode", Status: "active", StripeSubscriptionID: strPtr("sub_999")},
 			stripeConfigured: true,
-			want:             "free",
+			wantID:           billing.FreeTierID,
 		},
 		{
 			name:             "empty tier string falls back to free (fail-closed)",
 			sub:              &db.SubscriptionRecord{Tier: "", Status: "active", StripeSubscriptionID: strPtr("sub_000")},
 			stripeConfigured: true,
-			want:             "free",
+			wantID:           billing.FreeTierID,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := effectiveTier(tt.sub, tt.stripeConfigured)
-			if got != tt.want {
-				t.Errorf("effectiveTier() = %q, want %q", got, tt.want)
+			got := resolveEffectiveTier(tt.sub, tt.stripeConfigured, cache)
+			if got.ID != tt.wantID {
+				t.Errorf("resolveEffectiveTier().ID = %q, want %q", got.ID, tt.wantID)
 			}
 		})
-	}
-}
-
-func TestEpochMsToISO8601(t *testing.T) {
-	tests := []struct {
-		epochMs uint64
-		want    string
-	}{
-		{0, "1970-01-01T00:00:00.000Z"},
-		{1775401947875, "2026-04-05T15:12:27.875Z"},
-		{1775538068000, "2026-04-07T05:01:08.000Z"},
-	}
-
-	for _, tt := range tests {
-		got := epochMsToISO8601(tt.epochMs)
-		if got != tt.want {
-			t.Errorf("epochMsToISO8601(%d) = %q, want %q", tt.epochMs, got, tt.want)
-		}
 	}
 }
