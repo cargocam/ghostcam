@@ -30,27 +30,45 @@
 	}
 
 	function toggleFullscreen() {
-		// iOS Safari doesn't support Fullscreen API on arbitrary elements —
-		// only on <video> via webkitEnterFullscreen. Detect that path first
-		// so mobile viewers aren't stuck with a no-op fullscreen button.
+		if (document.fullscreenElement) {
+			document.exitFullscreen();
+			return;
+		}
+
 		const v = videoElement as HTMLVideoElement & {
 			webkitEnterFullscreen?: () => void;
 			webkitDisplayingFullscreen?: boolean;
 		} | undefined;
-		if (!document.fullscreenEnabled && v?.webkitEnterFullscreen) {
-			if (!v.webkitDisplayingFullscreen) v.webkitEnterFullscreen();
+
+		// Touch devices (phones, tablets) get native video-element fullscreen.
+		// The custom overlay UI is less useful there and the native video
+		// controls are what users expect on mobile, plus it's the only path
+		// that works on iOS Safari (container-level fullscreen is desktop-only
+		// on WebKit). On Android it also avoids the case where the custom
+		// overlay is already filling the visible area via h-[100svh] so
+		// container fullscreen is visually a no-op.
+		const isTouch =
+			typeof window !== 'undefined' &&
+			(window.matchMedia('(hover: none)').matches || 'ontouchstart' in window);
+
+		if (isTouch && v) {
+			if (typeof v.requestFullscreen === 'function') {
+				v.requestFullscreen().catch(() => {
+					if (v.webkitEnterFullscreen) v.webkitEnterFullscreen();
+				});
+			} else if (v.webkitEnterFullscreen) {
+				v.webkitEnterFullscreen();
+			}
 			return;
 		}
+
+		// Desktop: prefer container-level fullscreen to keep the custom
+		// overlay (snapshot, PiP, back buttons) visible over the video.
 		if (!containerEl) return;
-		if (document.fullscreenElement) {
-			document.exitFullscreen();
-		} else {
-			containerEl.requestFullscreen().catch(() => {
-				// Android Chrome can reject on some gestures; fall back to
-				// video-element fullscreen if the standard path fails.
-				if (v?.webkitEnterFullscreen) v.webkitEnterFullscreen();
-			});
-		}
+		containerEl.requestFullscreen().catch(() => {
+			if (v?.requestFullscreen) v.requestFullscreen().catch(() => {});
+			else if (v?.webkitEnterFullscreen) v.webkitEnterFullscreen();
+		});
 	}
 
 	function toggleMute() {

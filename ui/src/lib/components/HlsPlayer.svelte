@@ -32,6 +32,8 @@
 	let hls: Hls | null = null;
 	let loading = $state<boolean>(false);
 	let noFootage = $state<boolean>(false);
+	/** Short diagnostic shown under "No footage" so real errors aren't invisible. */
+	let noFootageDetail = $state<string>('');
 	/** PDT of first fragment in ms — used to map currentTime ↔ epoch time for looping. */
 	let firstPDTMs = $state(0);
 	/** Set when an auto-play() promise rejected (mobile autoplay policy, typically
@@ -88,6 +90,7 @@
 		const targetSeek = seekTo;
 		loading = false;
 		noFootage = false;
+		noFootageDetail = '';
 		firstPDTMs = 0;
 		needsUserPlay = false;
 
@@ -121,10 +124,18 @@
 			instance.on(Hls.Events.FRAG_LOADED, () => { loading = false; });
 			instance.on(Hls.Events.ERROR, (_event, data) => {
 				const errMsg = data.error instanceof Error ? data.error.message : String(data.error ?? '');
-				onError?.(`type=${data.type} details=${data.details} fatal=${data.fatal ? '1' : '0'} msg=${errMsg}`);
+				const status = (data.response && data.response.code) || '';
+				onError?.(`type=${data.type} details=${data.details} fatal=${data.fatal ? '1' : '0'} status=${status} msg=${errMsg}`);
 				if (data.fatal) {
-					if (data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) {
+					if (
+						data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR ||
+						data.details === Hls.ErrorDetails.MANIFEST_PARSING_ERROR ||
+						data.details === Hls.ErrorDetails.MANIFEST_INCOMPATIBLE_CODECS_ERROR
+					) {
 						noFootage = true;
+						noFootageDetail = status
+							? `HTTP ${status} · ${data.details}`
+							: data.details;
 						loading = false;
 						instance.destroy();
 						if (hls === instance) hls = null;
@@ -133,6 +144,8 @@
 					} else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
 						instance.recoverMediaError();
 					} else {
+						noFootage = true;
+						noFootageDetail = `${data.type} · ${data.details}`;
 						instance.destroy();
 						if (hls === instance) hls = null;
 					}
@@ -160,9 +173,26 @@
 				}
 				tryAutoplay(videoEl);
 			};
+			const onNativeError = () => {
+				if (!videoEl) return;
+				const err = videoEl.error;
+				const code = err?.code ?? 0;
+				const codeName = ({
+					1: 'MEDIA_ERR_ABORTED',
+					2: 'MEDIA_ERR_NETWORK',
+					3: 'MEDIA_ERR_DECODE',
+					4: 'MEDIA_ERR_SRC_NOT_SUPPORTED',
+				} as Record<number, string>)[code] ?? `code ${code}`;
+				noFootage = true;
+				noFootageDetail = `native · ${codeName}`;
+				loading = false;
+				onError?.(`type=nativeError code=${code} msg=${err?.message ?? ''}`);
+			};
 			videoEl.addEventListener('loadedmetadata', onMetadata);
+			videoEl.addEventListener('error', onNativeError);
 			return () => {
 				videoEl?.removeEventListener('loadedmetadata', onMetadata);
+				videoEl?.removeEventListener('error', onNativeError);
 				if (hls) { hls.destroy(); hls = null; }
 			};
 		}
@@ -214,9 +244,12 @@
 	></video>
 	{#if noFootage}
 		<div class="absolute inset-0 grid place-items-center bg-black/80">
-			<div class="flex flex-col items-center gap-2 text-muted-foreground">
+			<div class="flex flex-col items-center gap-1.5 text-muted-foreground px-4 text-center">
 				<VideoOff class="h-8 w-8 opacity-40" />
 				<span class="text-xs">No footage</span>
+				{#if noFootageDetail}
+					<span class="text-[10px] font-mono opacity-60 break-all">{noFootageDetail}</span>
+				{/if}
 			</div>
 		</div>
 	{:else if needsUserPlay}
