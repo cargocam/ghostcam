@@ -215,7 +215,23 @@ func (a *App) StripeWebhook(w http.ResponseWriter, r *http.Request) {
 
 	var event stripe.Event
 	if a.Config.StripeWebhookSecret != "" {
-		event, err = webhook.ConstructEvent(body, r.Header.Get("Stripe-Signature"), a.Config.StripeWebhookSecret)
+		// Ignore API version mismatches between the webhook endpoint
+		// (pinned to the Stripe account's default at creation time) and
+		// the stripe-go version we link against. We only read a small,
+		// stable subset of fields on the events we handle
+		// (checkout.session.completed, customer.subscription.*,
+		// product.*, price.*), so a version skew does not meaningfully
+		// affect deserialization for our use. Without this flag,
+		// stripe-go refuses to construct events at all when the
+		// versions differ, which means any webhook endpoint created in
+		// the Stripe dashboard against an older account default will be
+		// rejected with 400 until the account is upgraded.
+		event, err = webhook.ConstructEventWithOptions(
+			body,
+			r.Header.Get("Stripe-Signature"),
+			a.Config.StripeWebhookSecret,
+			webhook.ConstructEventOptions{IgnoreAPIVersionMismatch: true},
+		)
 		if err != nil {
 			slog.Warn("stripe webhook signature verification failed", "error", err)
 			http.Error(w, "", http.StatusBadRequest)
