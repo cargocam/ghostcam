@@ -241,12 +241,47 @@ type AdminListBillingTiersResponse struct {
 }
 
 // AdminUpdateBillingTierRequest is the body of PATCH
-// /api/v1/admin/billing/tiers/{priceID}. Either field set to null means
-// "unlimited" for that dimension. Both fields are required on every
-// request to prevent half-configured products.
+// /api/v1/admin/billing/tiers/{priceID}. Either limit field set to null
+// means "unlimited" for that dimension. Name is optional — omit or pass
+// an empty string to leave the product name unchanged. The two limit
+// fields are always applied together to prevent half-configured products.
 type AdminUpdateBillingTierRequest struct {
-	CameraLimit *int `json:"camera_limit"`
-	StorageGB   *int `json:"storage_gb"`
+	CameraLimit *int   `json:"camera_limit"`
+	StorageGB   *int   `json:"storage_gb"`
+	Name        string `json:"name,omitempty"`
+}
+
+// AdminCreateBillingTierRequest is the body of POST
+// /api/v1/admin/billing/tiers. Creates a brand-new Stripe product and a
+// single recurring price on it in one call. The server validates the
+// inputs and, on success, refreshes the tier cache so the new tier
+// appears immediately in the public settings dialog.
+type AdminCreateBillingTierRequest struct {
+	Name        string `json:"name"`
+	CameraLimit *int   `json:"camera_limit"` // null = unlimited
+	StorageGB   *int   `json:"storage_gb"`   // null = unlimited
+	PriceCents  int64  `json:"price_cents"`  // non-negative; 0 rejected for paid tiers
+	Currency    string `json:"currency"`     // 3-letter ISO, e.g. "usd"
+	Interval    string `json:"interval"`     // "month" or "year"
+}
+
+// AdminArchiveBillingTierRequest is the body of POST
+// /api/v1/admin/billing/tiers/{priceID}/archive. Archives the Stripe
+// price (and the product if this was its last active price). If the
+// price has live subscribers the server returns 409 with an
+// ActiveSubscribers count unless Confirm is true — the UI uses this
+// to gate a "yes, I know, archive anyway" dialog so CFOs don't
+// accidentally orphan a paid customer.
+type AdminArchiveBillingTierRequest struct {
+	Confirm bool `json:"confirm"`
+}
+
+// AdminArchiveConflictResponse is returned with HTTP 409 when the
+// archive target still has active subscribers and Confirm was false.
+// The UI uses the count to phrase an informed confirmation prompt.
+type AdminArchiveConflictResponse struct {
+	Error             string `json:"error"`
+	ActiveSubscribers int64  `json:"active_subscribers"`
 }
 
 // ====================================================================

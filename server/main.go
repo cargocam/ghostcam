@@ -267,7 +267,9 @@ func (a *App) router() http.Handler {
 		r.Use(a.adminAuth)
 		r.Post("/api/v1/admin/firmware", a.FirmwareUpload)
 		r.Get("/api/v1/admin/billing/tiers", a.AdminListBillingTiers)
+		r.Post("/api/v1/admin/billing/tiers", a.AdminCreateBillingTier)
 		r.Patch("/api/v1/admin/billing/tiers/{priceID}", a.AdminUpdateBillingTier)
+		r.Post("/api/v1/admin/billing/tiers/{priceID}/archive", a.AdminArchiveBillingTier)
 	})
 
 	// Static SPA files

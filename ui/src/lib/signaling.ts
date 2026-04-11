@@ -16,13 +16,28 @@ import type {
 	UsageResponse,
 } from '$lib/api-types';
 
-// AdminUpdateBillingTierRequest on the wire sends `null` for unlimited,
-// but tygo generates `number | undefined` from Go's `*int`. Declare the
-// client-facing shape explicitly so callers can pass `null` without a
-// cast — the JSON round-trips cleanly either way.
+// AdminUpdateBillingTier / AdminCreateBillingTier on the wire use `null`
+// for unlimited, but tygo generates `number | undefined` from Go's `*int`.
+// Declare the client-facing shapes explicitly so callers can pass `null`
+// without a cast — the JSON round-trips cleanly either way.
 export type AdminUpdateBillingTier = {
 	camera_limit: number | null;
 	storage_gb: number | null;
+	name?: string;
+};
+
+export type AdminCreateBillingTier = {
+	name: string;
+	camera_limit: number | null;
+	storage_gb: number | null;
+	price_cents: number;
+	currency: string;
+	interval: 'month' | 'year';
+};
+
+export type AdminArchiveConflict = {
+	error: 'active_subscribers';
+	active_subscribers: number;
 };
 
 const API_BASE = '/api/v1';
@@ -99,6 +114,46 @@ export async function adminUpdateBillingTier(
 	});
 	if (!res.ok) throw new Error(`adminUpdateBillingTier failed: ${res.status}`);
 	return res.json();
+}
+
+export async function adminCreateBillingTier(
+	create: AdminCreateBillingTier,
+): Promise<AdminListBillingTiersResponse> {
+	const res = await fetch(`${API_BASE}/admin/billing/tiers`, {
+		method: 'POST',
+		headers: headers(),
+		body: JSON.stringify(create),
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`adminCreateBillingTier failed: ${res.status}`);
+	return res.json();
+}
+
+/**
+ * Archive a tier. Returns the fresh list on success, or a typed
+ * AdminArchiveConflict when the tier still has active subscribers and
+ * `confirm` was false — the caller is expected to show a confirmation
+ * dialog and retry with `confirm=true`.
+ */
+export async function adminArchiveBillingTier(
+	priceID: string,
+	confirm: boolean,
+): Promise<{ ok: true; tiers: AdminListBillingTiersResponse } | { ok: false; conflict: AdminArchiveConflict }> {
+	const res = await fetch(
+		`${API_BASE}/admin/billing/tiers/${encodeURIComponent(priceID)}/archive`,
+		{
+			method: 'POST',
+			headers: headers(),
+			body: JSON.stringify({ confirm }),
+			credentials: 'include',
+		},
+	);
+	if (res.status === 409) {
+		const conflict = (await res.json()) as AdminArchiveConflict;
+		return { ok: false, conflict };
+	}
+	if (!res.ok) throw new Error(`adminArchiveBillingTier failed: ${res.status}`);
+	return { ok: true, tiers: await res.json() };
 }
 
 export async function getUsage(): Promise<UsageResponse> {

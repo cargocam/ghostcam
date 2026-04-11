@@ -4,10 +4,28 @@
 	import {
 		adminListBillingTiers,
 		adminUpdateBillingTier,
+		adminCreateBillingTier,
+		adminArchiveBillingTier,
 		type AdminUpdateBillingTier,
+		type AdminCreateBillingTier,
 	} from '$lib/signaling.js';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import { ArrowLeft, RefreshCw, Save, CheckCircle2, AlertTriangle } from 'lucide-svelte';
+	import {
+		Dialog,
+		DialogContent,
+		DialogHeader,
+		DialogTitle,
+		DialogDescription,
+	} from '$lib/components/ui/dialog/index.js';
+	import {
+		ArrowLeft,
+		RefreshCw,
+		Save,
+		CheckCircle2,
+		AlertTriangle,
+		Plus,
+		Archive,
+	} from 'lucide-svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { cn } from '$lib/utils.js';
 
@@ -134,6 +152,151 @@
 		return tier.interval ? `${amountStr}/${tier.interval}` : amountStr;
 	}
 
+	// --- Create ---
+
+	let createOpen = $state<boolean>(false);
+	let createForm = $state<{
+		name: string;
+		cameraLimitText: string;
+		storageGBText: string;
+		priceDollars: string;
+		currency: string;
+		interval: 'month' | 'year';
+	}>({
+		name: '',
+		cameraLimitText: '',
+		storageGBText: '',
+		priceDollars: '',
+		currency: 'USD',
+		interval: 'month',
+	});
+	let createSaving = $state<boolean>(false);
+	let createError = $state<string | null>(null);
+
+	function openCreate() {
+		createForm = {
+			name: '',
+			cameraLimitText: '',
+			storageGBText: '',
+			priceDollars: '',
+			currency: 'USD',
+			interval: 'month',
+		};
+		createError = null;
+		createOpen = true;
+	}
+
+	async function submitCreate() {
+		createError = null;
+
+		const name = createForm.name.trim();
+		if (!name) {
+			createError = 'Name is required';
+			return;
+		}
+		const cam = draftToLimit(createForm.cameraLimitText);
+		const stor = draftToLimit(createForm.storageGBText);
+		if (cam.error || stor.error) {
+			createError = cam.error ?? stor.error;
+			return;
+		}
+		const dollars = parseFloat(createForm.priceDollars);
+		if (!isFinite(dollars) || dollars <= 0) {
+			createError = 'Price must be a positive number';
+			return;
+		}
+		const priceCents = Math.round(dollars * 100);
+		const currency = createForm.currency.trim().toLowerCase();
+		if (currency.length !== 3) {
+			createError = 'Currency must be a 3-letter ISO code';
+			return;
+		}
+
+		const payload: AdminCreateBillingTier = {
+			name,
+			camera_limit: cam.value,
+			storage_gb: stor.value,
+			price_cents: priceCents,
+			currency,
+			interval: createForm.interval,
+		};
+
+		createSaving = true;
+		try {
+			const resp = await adminCreateBillingTier(payload);
+			tiers = resp.tiers ?? [];
+			drafts = Object.fromEntries(
+				tiers.map((t) => [
+					t.price_id,
+					{
+						cameraLimitText: parseLimitToInput(t.camera_limit_raw),
+						storageGBText: parseLimitToInput(t.storage_gb_raw),
+						dirty: false,
+						saving: false,
+						error: null,
+					},
+				]),
+			);
+			createOpen = false;
+		} catch (e) {
+			createError = e instanceof Error ? e.message : 'Create failed';
+		} finally {
+			createSaving = false;
+		}
+	}
+
+	// --- Archive ---
+	//
+	// Archiving is a two-step confirmation flow when the target has
+	// active subscribers. First click triggers a server probe which
+	// returns 409 + a count; the UI then renders a confirmation prompt
+	// that the admin can accept or cancel. Second click (confirm=true)
+	// proceeds.
+
+	let archiveConfirm = $state<{
+		tier: AdminBillingTier;
+		activeSubscribers: number;
+	} | null>(null);
+	let archiveInFlight = $state<string | null>(null); // price_id currently archiving
+
+	async function archive(tier: AdminBillingTier, confirm: boolean) {
+		archiveInFlight = tier.price_id;
+		try {
+			const result = await adminArchiveBillingTier(tier.price_id, confirm);
+			if (result.ok) {
+				tiers = result.tiers.tiers ?? [];
+				drafts = Object.fromEntries(
+					tiers.map((t) => [
+						t.price_id,
+						{
+							cameraLimitText: parseLimitToInput(t.camera_limit_raw),
+							storageGBText: parseLimitToInput(t.storage_gb_raw),
+							dirty: false,
+							saving: false,
+							error: null,
+						},
+					]),
+				);
+				archiveConfirm = null;
+			} else {
+				archiveConfirm = {
+					tier,
+					activeSubscribers: result.conflict.active_subscribers,
+				};
+			}
+		} catch (e) {
+			const d = drafts[tier.price_id];
+			if (d) {
+				drafts[tier.price_id] = {
+					...d,
+					error: e instanceof Error ? e.message : 'Archive failed',
+				};
+			}
+		} finally {
+			archiveInFlight = null;
+		}
+	}
+
 	onMount(load);
 </script>
 
@@ -159,16 +322,22 @@
 		<!-- Billing Tiers section -->
 		<section class="rounded-lg border bg-card">
 			<div class="flex items-center justify-between gap-3 px-4 py-3 border-b">
-				<div>
+				<div class="min-w-0">
 					<h2 class="text-sm font-semibold">Billing Tiers</h2>
 					<p class="text-xs text-muted-foreground mt-0.5">
 						Per-product entitlements stored as Stripe metadata. Changes take
 						effect immediately — no deploy required.
 					</p>
 				</div>
-				<Button variant="ghost" size="icon" onclick={load} title="Reload" disabled={loading}>
-					<RefreshCw class={cn('h-4 w-4', loading && 'animate-spin')} />
-				</Button>
+				<div class="flex items-center gap-1 shrink-0">
+					<Button variant="outline" size="sm" onclick={openCreate} title="Create a new tier">
+						<Plus class="h-3.5 w-3.5 mr-1" />
+						New tier
+					</Button>
+					<Button variant="ghost" size="icon" onclick={load} title="Reload" disabled={loading}>
+						<RefreshCw class={cn('h-4 w-4', loading && 'animate-spin')} />
+					</Button>
+				</div>
 			</div>
 
 			{#if loading && tiers.length === 0}
@@ -249,7 +418,17 @@
 								<p class="text-xs text-destructive break-words">{draft.error}</p>
 							{/if}
 
-							<div class="flex items-center justify-end">
+							<div class="flex items-center justify-end gap-2">
+								<Button
+									variant="outline"
+									size="sm"
+									onclick={() => archive(tier, false)}
+									disabled={archiveInFlight === tier.price_id || draft?.saving}
+									title="Archive this tier"
+								>
+									<Archive class="h-3.5 w-3.5 mr-1.5" />
+									{archiveInFlight === tier.price_id ? 'Archiving…' : 'Archive'}
+								</Button>
 								<Button
 									size="sm"
 									onclick={() => save(tier)}
@@ -273,3 +452,163 @@
 		</section>
 	</div>
 </div>
+
+<!-- Create dialog -->
+<Dialog bind:open={createOpen}>
+	<DialogContent>
+		<DialogHeader>
+			<DialogTitle>New billing tier</DialogTitle>
+			<DialogDescription>
+				Creates a Stripe product and a recurring price in one step, then
+				tags the product with ghostcam limits. Visible to customers
+				immediately.
+			</DialogDescription>
+		</DialogHeader>
+		<form
+			class="space-y-3 mt-2"
+			onsubmit={(e) => {
+				e.preventDefault();
+				submitCreate();
+			}}
+		>
+			<label class="block">
+				<span class="text-xs text-muted-foreground block mb-1">Product name</span>
+				<input
+					type="text"
+					value={createForm.name}
+					oninput={(e) => (createForm.name = e.currentTarget.value)}
+					placeholder="e.g. Pro"
+					required
+					class="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+				/>
+			</label>
+
+			<div class="grid grid-cols-2 gap-3">
+				<label class="block">
+					<span class="text-xs text-muted-foreground block mb-1">Camera limit</span>
+					<input
+						type="text"
+						inputmode="numeric"
+						placeholder="Unlimited"
+						value={createForm.cameraLimitText}
+						oninput={(e) => (createForm.cameraLimitText = e.currentTarget.value)}
+						class="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					/>
+				</label>
+				<label class="block">
+					<span class="text-xs text-muted-foreground block mb-1">Storage (GB)</span>
+					<input
+						type="text"
+						inputmode="numeric"
+						placeholder="Unlimited"
+						value={createForm.storageGBText}
+						oninput={(e) => (createForm.storageGBText = e.currentTarget.value)}
+						class="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					/>
+				</label>
+			</div>
+
+			<div class="grid grid-cols-[1fr_auto_auto] gap-3">
+				<label class="block">
+					<span class="text-xs text-muted-foreground block mb-1">Price</span>
+					<input
+						type="text"
+						inputmode="decimal"
+						placeholder="29.99"
+						value={createForm.priceDollars}
+						oninput={(e) => (createForm.priceDollars = e.currentTarget.value)}
+						required
+						class="w-full rounded-md border bg-transparent px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					/>
+				</label>
+				<label class="block">
+					<span class="text-xs text-muted-foreground block mb-1">Currency</span>
+					<input
+						type="text"
+						maxlength="3"
+						value={createForm.currency}
+						oninput={(e) => (createForm.currency = e.currentTarget.value.toUpperCase())}
+						class="w-20 rounded-md border bg-transparent px-3 py-1.5 text-sm uppercase focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					/>
+				</label>
+				<label class="block">
+					<span class="text-xs text-muted-foreground block mb-1">Billing</span>
+					<select
+						value={createForm.interval}
+						onchange={(e) => (createForm.interval = e.currentTarget.value as 'month' | 'year')}
+						class="rounded-md border bg-transparent px-3 py-1.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					>
+						<option value="month">Monthly</option>
+						<option value="year">Yearly</option>
+					</select>
+				</label>
+			</div>
+
+			{#if createError}
+				<p class="text-xs text-destructive break-words">{createError}</p>
+			{/if}
+
+			<div class="flex justify-end gap-2 pt-2">
+				<Button
+					type="button"
+					variant="outline"
+					onclick={() => (createOpen = false)}
+					disabled={createSaving}
+				>
+					Cancel
+				</Button>
+				<Button type="submit" disabled={createSaving}>
+					{createSaving ? 'Creating…' : 'Create tier'}
+				</Button>
+			</div>
+		</form>
+	</DialogContent>
+</Dialog>
+
+<!-- Archive confirmation dialog (only shown when the price has live subs) -->
+{#if archiveConfirm}
+	<Dialog
+		bind:open={
+			() => true,
+			(v) => { if (!v) archiveConfirm = null; }
+		}
+	>
+		<DialogContent>
+			<DialogHeader>
+				<DialogTitle class="flex items-center gap-2">
+					<AlertTriangle class="h-4 w-4 text-warning" />
+					Archive tier with active subscribers?
+				</DialogTitle>
+				<DialogDescription>
+					<span class="font-semibold">{archiveConfirm.tier.product_name}</span>
+					has
+					<span class="font-semibold">{archiveConfirm.activeSubscribers}</span>
+					active subscriber{archiveConfirm.activeSubscribers === 1 ? '' : 's'}.
+					Archiving hides the tier from new checkouts but leaves existing
+					subscriptions billing at the current price until they cancel.
+					Migrate subscribers in the Stripe dashboard first if you need them
+					on a different plan.
+				</DialogDescription>
+			</DialogHeader>
+			<div class="flex justify-end gap-2 mt-4">
+				<Button
+					type="button"
+					variant="outline"
+					onclick={() => (archiveConfirm = null)}
+					disabled={archiveInFlight !== null}
+				>
+					Cancel
+				</Button>
+				<Button
+					type="button"
+					onclick={() => {
+						if (archiveConfirm) archive(archiveConfirm.tier, true);
+					}}
+					disabled={archiveInFlight !== null}
+				>
+					{archiveInFlight ? 'Archiving…' : 'Archive anyway'}
+				</Button>
+			</div>
+		</DialogContent>
+	</Dialog>
+{/if}

@@ -246,13 +246,51 @@ export interface AdminListBillingTiersResponse {
 }
 /**
  * AdminUpdateBillingTierRequest is the body of PATCH
- * /api/v1/admin/billing/tiers/{priceID}. Either field set to null means
- * "unlimited" for that dimension. Both fields are required on every
- * request to prevent half-configured products.
+ * /api/v1/admin/billing/tiers/{priceID}. Either limit field set to null
+ * means "unlimited" for that dimension. Name is optional — omit or pass
+ * an empty string to leave the product name unchanged. The two limit
+ * fields are always applied together to prevent half-configured products.
  */
 export interface AdminUpdateBillingTierRequest {
   camera_limit?: number /* int */;
   storage_gb?: number /* int */;
+  name?: string;
+}
+/**
+ * AdminCreateBillingTierRequest is the body of POST
+ * /api/v1/admin/billing/tiers. Creates a brand-new Stripe product and a
+ * single recurring price on it in one call. The server validates the
+ * inputs and, on success, refreshes the tier cache so the new tier
+ * appears immediately in the public settings dialog.
+ */
+export interface AdminCreateBillingTierRequest {
+  name: string;
+  camera_limit?: number /* int */; // null = unlimited
+  storage_gb?: number /* int */; // null = unlimited
+  price_cents: number /* int64 */; // non-negative; 0 rejected for paid tiers
+  currency: string; // 3-letter ISO, e.g. "usd"
+  interval: string; // "month" or "year"
+}
+/**
+ * AdminArchiveBillingTierRequest is the body of POST
+ * /api/v1/admin/billing/tiers/{priceID}/archive. Archives the Stripe
+ * price (and the product if this was its last active price). If the
+ * price has live subscribers the server returns 409 with an
+ * ActiveSubscribers count unless Confirm is true — the UI uses this
+ * to gate a "yes, I know, archive anyway" dialog so CFOs don't
+ * accidentally orphan a paid customer.
+ */
+export interface AdminArchiveBillingTierRequest {
+  confirm: boolean;
+}
+/**
+ * AdminArchiveConflictResponse is returned with HTTP 409 when the
+ * archive target still has active subscribers and Confirm was false.
+ * The UI uses the count to phrase an informed confirmation prompt.
+ */
+export interface AdminArchiveConflictResponse {
+  error: string;
+  active_subscribers: number /* int64 */;
 }
 /**
  * ClientLogEntry is the body of POST /api/v1/client-log. The endpoint is
