@@ -311,24 +311,32 @@ func (a *App) handleCheckoutCompleted(ctx context.Context, event *stripe.Event) 
 		return
 	}
 
-	// Resolve the tier from the subscription's price. If we don't recognise
-	// the price ID (missing product metadata, not yet picked up by the tier
-	// cache, or a completely unknown product) we do NOT escalate to a paid
-	// tier — leaving the row at "free" is the fail-closed default and
-	// surfaces the misconfiguration via the log.
-	tier, ok := a.stripeTierFromSubscription(session.Subscription)
-	if !ok {
-		slog.Error("stripe: checkout with malformed subscription, keeping user on free",
-			"user_id", userID, "subscription_id", stripeSubID(session.Subscription))
-		tier = billing.FreeTierID
-	} else if _, known := a.Tiers.Get(tier); !known {
-		slog.Error("stripe: checkout with unknown price ID, keeping user on free",
-			"user_id", userID, "price_id", tier, "subscription_id", stripeSubID(session.Subscription))
-		tier = billing.FreeTierID
-	}
-
-	customerID := session.Customer.ID
 	subID := stripeSubID(session.Subscription)
+	customerID := session.Customer.ID
+
+	// Re-fetch the subscription via the API rather than reading it from
+	// the event payload. Stripe delivers webhooks pinned to the account's
+	// default API version (often older than what stripe-go expects), so
+	// fields like items.data[i].price may be missing from the event's
+	// subscription object — subscription.Get returns it in stripe-go's
+	// pinned API version, with the shape the rest of the code assumes.
+	tier := billing.FreeTierID
+	if subID != "" {
+		stripe.Key = a.Config.StripeSecretKey
+		freshSub, err := subscription.Get(subID, nil)
+		if err != nil || freshSub == nil {
+			slog.Error("stripe: checkout — subscription.Get failed, keeping user on free",
+				"user_id", userID, "subscription_id", subID, "error", err)
+		} else if resolved, ok := a.stripeTierFromSubscription(freshSub); !ok {
+			slog.Error("stripe: checkout with malformed subscription, keeping user on free",
+				"user_id", userID, "subscription_id", subID)
+		} else if _, known := a.Tiers.Get(resolved); !known {
+			slog.Error("stripe: checkout with unknown price ID, keeping user on free",
+				"user_id", userID, "price_id", resolved, "subscription_id", subID)
+		} else {
+			tier = resolved
+		}
+	}
 
 	if err := a.DB.UpdateSubscription(ctx, userID, &db.SubscriptionUpdate{
 		Tier:                 &tier,
@@ -356,14 +364,32 @@ func (a *App) handleSubscriptionUpdated(ctx context.Context, event *stripe.Event
 		return
 	}
 
+	// Re-fetch the subscription via the API: the event payload is pinned
+	// to the account's default API version, which may omit fields that
+	// stripe-go expects (items.data[i].price, most importantly). See the
+	// note in handleCheckoutCompleted.
+	stripe.Key = a.Config.StripeSecretKey
+	freshSub, err := subscription.Get(sub.ID, nil)
+	if err != nil || freshSub == nil {
+		slog.Error("stripe: subscription.updated — subscription.Get failed, status-only update",
+			"user_id", existing.UserID, "subscription_id", sub.ID, "error", err)
+		status := string(sub.Status)
+		if err := a.DB.UpdateSubscription(ctx, existing.UserID, &db.SubscriptionUpdate{
+			Status: &status,
+		}); err != nil {
+			slog.Error("stripe: failed to update subscription status", "user_id", existing.UserID, "error", err)
+		}
+		return
+	}
+
 	// Fail-closed: unrecognised prices must not escalate the user to a paid
 	// tier. Keep the stored tier unchanged and log loudly so the
 	// configuration drift is visible.
-	tier, ok := a.stripeTierFromSubscription(&sub)
+	tier, ok := a.stripeTierFromSubscription(freshSub)
 	if !ok {
 		slog.Error("stripe: subscription.updated with malformed payload, leaving tier unchanged",
 			"user_id", existing.UserID, "subscription_id", sub.ID)
-		status := string(sub.Status)
+		status := string(freshSub.Status)
 		if err := a.DB.UpdateSubscription(ctx, existing.UserID, &db.SubscriptionUpdate{
 			Status: &status,
 		}); err != nil {
@@ -374,7 +400,7 @@ func (a *App) handleSubscriptionUpdated(ctx context.Context, event *stripe.Event
 	if _, known := a.Tiers.Get(tier); !known {
 		slog.Error("stripe: subscription.updated with unknown price ID, leaving tier unchanged",
 			"user_id", existing.UserID, "price_id", tier, "subscription_id", sub.ID)
-		status := string(sub.Status)
+		status := string(freshSub.Status)
 		if err := a.DB.UpdateSubscription(ctx, existing.UserID, &db.SubscriptionUpdate{
 			Status: &status,
 		}); err != nil {
@@ -382,7 +408,7 @@ func (a *App) handleSubscriptionUpdated(ctx context.Context, event *stripe.Event
 		}
 		return
 	}
-	status := string(sub.Status)
+	status := string(freshSub.Status)
 
 	if err := a.DB.UpdateSubscription(ctx, existing.UserID, &db.SubscriptionUpdate{
 		Tier:   &tier,
