@@ -9,11 +9,16 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.98.0
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/google/uuid v1.6.0
-	github.com/gzuidhof/tygo v0.2.21
 	github.com/jackc/pgx/v5 v5.9.1
+	github.com/makiuchi-d/gozxing v0.1.1
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/stripe/stripe-go/v82 v82.5.1
 	golang.org/x/crypto v0.49.0
+)
+
+require (
+	github.com/gzuidhof/tygo v0.2.21 // indirect
+	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 )
 
 require (

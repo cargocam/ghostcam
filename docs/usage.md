@@ -23,14 +23,17 @@ xzcat ghostcam-zero2w-v0.1.0.img.xz | sudo dd of=/dev/diskN bs=4M
 xzcat ghostcam-zero2w-v0.1.0.img.xz | sudo dd of=/dev/sdX bs=4M status=progress
 ```
 
-The image comes pre-configured with all dependencies (ffmpeg, gpsd, modemmanager, ALSA, NetworkManager) and the camera service enabled. On first boot:
+The image comes pre-configured with all dependencies (ffmpeg, gpsd, modemmanager, ALSA, NetworkManager) and the camera service enabled. On first boot you can provision in two ways:
 
+**QR code (recommended):** Generate a QR code from the web UI (see [Enrolling a Camera](#enrolling-a-camera)), including your WiFi credentials if the Pi isn't wired. Hold the QR code in front of the Pi camera. The camera scans it automatically on boot, joins WiFi if included, and provisions itself — no SSH needed.
+
+**Manual (headless / no camera access):**
 1. SSH in (user: `ghostcam`, password: `ghostcam`)
 2. Set the server URL: `echo "GHOSTCAM_SERVER_URL=https://your-server.example.com" >> /etc/ghostcam/env`
 3. Provision the camera from the web UI (generates a one-time token — see [Enrolling a Camera](#enrolling-a-camera) below), then write it: `echo "<token>" > /var/ghostcam/provision_token`
 4. Restart: `sudo systemctl restart ghostcam-camera`
 
-The camera provisions itself on the next start and begins streaming. Subsequent boots are automatic.
+Either way, subsequent boots are automatic — credentials are persisted after the first successful provision.
 
 ## Option 2: Install the .deb Package (existing Pi with Raspberry Pi OS)
 
@@ -134,20 +137,28 @@ The dialog shows:
 
 ### Deliver the Token to the Camera
 
-Depending on which setup option you used in Part 1:
+There are three ways to get the provision token to the camera, from easiest to most flexible:
 
-**Flashed Pi image / installed .deb**:
+**QR scan (recommended for Pi hardware):**
+Simply hold the QR code in front of the Pi camera. On first boot without credentials, the camera automatically scans for a QR code using `rpicam-still` for up to 5 minutes. If the QR includes WiFi credentials, the camera joins the network first, then provisions. No SSH or file copying needed.
+
+> **Tip:** Include WiFi credentials in the QR if the Pi isn't on a wired connection yet — the camera will configure WiFi before attempting to reach the server.
+
+**Flat file (headless / SSH)**:
 ```bash
 echo "<provision_token>" > /var/ghostcam/provision_token
+echo "https://your-server.example.com" > /var/ghostcam/server_url
 sudo systemctl restart ghostcam-camera
 ```
 
-**Raw binary (dev/test)**:
+**Environment variable (dev/test)**:
 ```bash
 GHOSTCAM_SERVER_URL=https://your-server.example.com \
 GHOSTCAM_PROVISION_TOKEN=<paste token here> \
   ghostcam-camera
 ```
+
+The camera resolves provisioning inputs in order: CLI/env → flat files → QR scan. The first source that provides both a token and server URL wins.
 
 Once the camera connects, it appears in the sidebar. It shows **offline (gray dot)** until the first telemetry arrives (usually within 10 seconds), then turns **online (green dot)**.
 
@@ -293,6 +304,7 @@ Double-click a camera tile to open full-screen view, then:
 ## Troubleshooting
 
 - **Camera stuck offline after enrollment** — Check that the provision token hasn't expired and that the camera can reach the server URL. Inspect logs with `./scripts/pi.sh logs`.
+- **QR scan not working** — Ensure `rpicam-still` is installed and the camera module is connected. The scan runs for 5 minutes on boot; hold the QR steady and well-lit, ~15–30 cm from the lens. Check logs for "scanning for provisioning QR code" to confirm the scan started. QR scanning is only available on real Pi hardware (not synthetic/Docker builds).
 - **No live stream** — Verify the camera is uploading segments: check the `segments` table or look for recent activity in camera logs. HLS playback needs at least one segment in the 90-second sliding window.
 - **"Storage full. Camera uploads paused."** — You've hit your tier's storage limit. Wait for retention, delete cameras, or upgrade.
 - **Video export fails in browser** — ffmpeg.wasm requires Cross-Origin Isolation (COOP/COEP headers) and SharedArrayBuffer support. Check browser compatibility (Chrome/Edge/Firefox recent versions).
