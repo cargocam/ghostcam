@@ -47,14 +47,30 @@
 		Users,
 		Camera as CameraIcon,
 		ArrowRightLeft,
+		ChevronRight,
+		DollarSign,
 	} from 'lucide-svelte';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { cn } from '$lib/utils.js';
 
-	// Admin view. Designed as a top-level surface with a list of cards so
-	// additional admin modules can drop in without restructuring the page.
-	// Right now there's one card: Billing Tiers (Stripe product metadata
-	// editor). Future cards should follow the same section pattern.
+	// Admin view. Two-level hierarchy: a landing page lists the admin
+	// modules with summary counts, and each module has its own sub-page.
+	// Keeps the surface scannable as more modules drop in over time and
+	// avoids one infinitely-long scroll column. Navigation is local
+	// state (not wired into settingsStore) so a back button on a
+	// sub-page returns to the landing; back from the landing returns
+	// to the live view.
+
+	type AdminPage = 'landing' | 'billing' | 'users' | 'cameras';
+	let adminPage = $state<AdminPage>('landing');
+
+	function goBack() {
+		if (adminPage === 'landing') {
+			settingsStore.setView('live');
+		} else {
+			adminPage = 'landing';
+		}
+	}
 
 	type Draft = {
 		nameText: string;
@@ -584,6 +600,19 @@
 		return `${Math.floor(secs / 86400)}d ago`;
 	}
 
+	// Derived stats for the landing cards. Updated reactively as each
+	// load() resolves so the summary counts flip from dashes to numbers
+	// as the data arrives.
+	const billingConfiguredCount = $derived<number>(
+		tiers.filter((t) => t.configured).length,
+	);
+	const usersDisabledCount = $derived<number>(
+		users.filter((u) => u.disabled_at != null && u.deleted_at == null).length,
+	);
+	const usersDeletedCount = $derived<number>(
+		users.filter((u) => u.deleted_at != null).length,
+	);
+
 	onMount(() => {
 		load();
 		loadUsers();
@@ -598,18 +627,132 @@
 				<Button
 					variant="ghost"
 					size="icon"
-					onclick={() => settingsStore.setView('live')}
-					title="Back to live"
+					onclick={goBack}
+					title={adminPage === 'landing' ? 'Back to live' : 'Back to admin'}
 				>
 					<ArrowLeft class="h-5 w-5" />
 				</Button>
 				<div>
-					<h1 class="text-lg font-semibold">Admin</h1>
-					<p class="text-xs text-muted-foreground">Platform-level configuration</p>
+					<h1 class="text-lg font-semibold">
+						{#if adminPage === 'landing'}
+							Admin
+						{:else if adminPage === 'billing'}
+							Admin &rsaquo; Billing Tiers
+						{:else if adminPage === 'users'}
+							Admin &rsaquo; Users
+						{:else if adminPage === 'cameras'}
+							Admin &rsaquo; Cameras
+						{/if}
+					</h1>
+					<p class="text-xs text-muted-foreground">
+						{#if adminPage === 'landing'}
+							Platform-level configuration
+						{:else if adminPage === 'billing'}
+							Per-product entitlements stored as Stripe metadata
+						{:else if adminPage === 'users'}
+							Platform user accounts
+						{:else if adminPage === 'cameras'}
+							Every camera across every user
+						{/if}
+					</p>
 				</div>
 			</div>
 		</header>
 
+		{#if adminPage === 'landing'}
+			<!-- Landing: one card per admin module with summary counts. -->
+			<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+				<button
+					type="button"
+					onclick={() => (adminPage = 'billing')}
+					class="group text-left rounded-lg border bg-card p-4 transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+				>
+					<div class="flex items-center justify-between gap-2 mb-2">
+						<div class="flex items-center gap-2 text-sm font-semibold">
+							<DollarSign class="h-4 w-4 text-muted-foreground" />
+							Billing Tiers
+						</div>
+						<ChevronRight class="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+					</div>
+					<p class="text-xs text-muted-foreground mb-2">
+						Per-product entitlements stored as Stripe metadata. Edit
+						prices, limits, and archive tiers in place.
+					</p>
+					<div class="text-xs text-muted-foreground flex items-center gap-3 flex-wrap">
+						{#if loading && tiers.length === 0}
+							<span>Loading…</span>
+						{:else if loadError}
+							<span class="text-destructive">Failed to load</span>
+						{:else}
+							<span>{tiers.length} tier{tiers.length === 1 ? '' : 's'}</span>
+							<span>{billingConfiguredCount} configured</span>
+						{/if}
+					</div>
+				</button>
+
+				<button
+					type="button"
+					onclick={() => (adminPage = 'users')}
+					class="group text-left rounded-lg border bg-card p-4 transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+				>
+					<div class="flex items-center justify-between gap-2 mb-2">
+						<div class="flex items-center gap-2 text-sm font-semibold">
+							<Users class="h-4 w-4 text-muted-foreground" />
+							Users
+						</div>
+						<ChevronRight class="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+					</div>
+					<p class="text-xs text-muted-foreground mb-2">
+						Create, disable, and soft-delete user accounts. Admin
+						grants and hard deletes remain DB-only.
+					</p>
+					<div class="text-xs text-muted-foreground flex items-center gap-3 flex-wrap">
+						{#if usersLoading && users.length === 0}
+							<span>Loading…</span>
+						{:else if usersError}
+							<span class="text-destructive">Failed to load</span>
+						{:else}
+							<span>{users.length} user{users.length === 1 ? '' : 's'}</span>
+							{#if usersDisabledCount > 0}
+								<span>{usersDisabledCount} disabled</span>
+							{/if}
+							{#if usersDeletedCount > 0}
+								<span>{usersDeletedCount} deleted</span>
+							{/if}
+						{/if}
+					</div>
+				</button>
+
+				<button
+					type="button"
+					onclick={() => (adminPage = 'cameras')}
+					class="group text-left rounded-lg border bg-card p-4 transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+				>
+					<div class="flex items-center justify-between gap-2 mb-2">
+						<div class="flex items-center gap-2 text-sm font-semibold">
+							<CameraIcon class="h-4 w-4 text-muted-foreground" />
+							Cameras
+						</div>
+						<ChevronRight class="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+					</div>
+					<p class="text-xs text-muted-foreground mb-2">
+						Every enrolled camera across the platform. Reassign
+						ownership or force-delete orphans.
+					</p>
+					<div class="text-xs text-muted-foreground flex items-center gap-3 flex-wrap">
+						{#if camerasLoading && cameras.length === 0}
+							<span>Loading…</span>
+						{:else if camerasError}
+							<span class="text-destructive">Failed to load</span>
+						{:else}
+							<span>{cameras.length} camera{cameras.length === 1 ? '' : 's'}</span>
+						{/if}
+					</div>
+				</button>
+			</div>
+		{/if}
+
+		{#if adminPage === 'billing'}
 		<!-- Billing Tiers section -->
 		<section class="rounded-lg border bg-card">
 			<div class="flex items-center justify-between gap-3 px-4 py-3 border-b">
@@ -772,7 +915,9 @@
 				<code class="font-mono">ghostcam_storage_gb</code>.
 			</div>
 		</section>
+		{/if}
 
+		{#if adminPage === 'users'}
 		<!-- Users section -->
 		<section class="rounded-lg border bg-card">
 			<div class="flex items-center justify-between gap-3 px-4 py-3 border-b">
@@ -892,7 +1037,9 @@
 				</div>
 			{/if}
 		</section>
+		{/if}
 
+		{#if adminPage === 'cameras'}
 		<!-- Cameras section -->
 		<section class="rounded-lg border bg-card">
 			<div class="flex items-center justify-between gap-3 px-4 py-3 border-b">
@@ -986,6 +1133,7 @@
 				</div>
 			{/if}
 		</section>
+		{/if}
 	</div>
 </div>
 
