@@ -87,7 +87,7 @@ without regenerating is hard-rejected — the drift check uses
 **Go** (`go test ./...`): Table-driven tests for pure functions. No mocking framework — tests cover:
 - `server/`: `effectiveTier()` billing logic, `epochMsToISO8601` formatting, `TestCameraLimitAllowed` (tier-based camera upload enforcement)
 - `server/billing/`: `GetTier()` tier resolution, `StorageLimitBytes()` computation
-- `camera/`: motion detector (file-size fallback, rolling window), MPEG-TS sync byte validation, pending confirms persistence, config helpers (`coalesceStr`, `resolveVideoProfile`, `trimString`)
+- `camera/`: motion detector (file-size fallback, rolling window), MPEG-TS sync byte validation, pending confirms persistence, config helpers (`coalesceStr`, `resolveVideoProfile`, `trimString`), H.264 NAL parser (start code detection, IDR identification, ring buffer overflow)
 
 **UI** (`bun run test`): Vitest unit tests in `ui/src/lib/__tests__/`:
 - Coverage merge logic (gap threshold, motion promotion, overlap handling)
@@ -177,22 +177,25 @@ The Pi camera connects to the Docker server via the host's LAN IP (`GHOSTCAM_PUB
 
 - `3000/tcp` — HTTP API + static viewer
 - `5173/tcp` — Vite dev server (proxies `/api`, `/hls`, `/events` → :3000)
+- `50000-50200/udp` — WebRTC ICE-lite (server → viewer media)
 
 ## Architecture
 
-The server is a stateless HTTP API (Go/chi). Cameras upload MPEG-TS segments directly to S3 via presigned PUT URLs and POST telemetry over HTTP. Viewers stream HLS from the server, which generates manifests on the fly and serves segment requests via 302 redirects to S3 (re-presigning on each request to avoid mid-stream URL expiry).
+The server is an HTTP API (Go/chi) with an in-memory WebRTC SFU for low-latency live viewing. Cameras upload MPEG-TS segments directly to S3 via presigned PUT URLs, POST telemetry over HTTP, and maintain a WebSocket to relay raw H.264 frames for live WebRTC viewers. The HLS path (manifests from DB, 302 redirects to S3) is unchanged and serves as the recording backbone, VOD/timeline transport, and automatic fallback when WebRTC is unavailable.
 
 ```
-Camera (rpicam-vid | ffmpeg) → MPEG-TS segments → S3 (Tigris)
-                                                      ↓
-Server (Go) ← presigned URLs → Browser (hls.js)
-     ↓
-  Postgres (segments, users, cameras, billing)
+Camera (rpicam-vid) ─── raw H.264 ───┬──→ ffmpeg → MPEG-TS segments → S3
+                                      └──→ WebSocket → Server (live relay)
+                                                           ↓
+Server (Go) ← presigned URLs → Browser (hls.js)      pion SFU
+     ↓                                                ↓
+  Postgres (segments, users, cameras, billing)    Browser (RTCPeerConnection)
   Redis (telemetry streams, SSE pub/sub, events)
 ```
 
-- **No persistent connections** -- cameras POST telemetry every 10s, upload segments via presigned PUT URLs
-- **Stateless server** -- JWT auth, no sessions table, horizontally scalable
+- **Hybrid HLS/WebRTC** -- WebRTC provides sub-second live viewing via pion SFU (ICE-lite, no TURN). HLS always runs as fallback. Viewer shows "LIVE" (WebRTC) or "DELAYED" (HLS fallback). VOD/clip/timeline uses HLS only.
+- **On-demand media relay** -- cameras maintain a persistent WebSocket but only send H.264 frames when a viewer is watching. Server sends `start_stream`/`stop_stream` control messages.
+- **Camera telemetry over HTTP** -- cameras POST telemetry every 10s, upload segments via presigned PUT URLs
 - **S3-native** -- segments served directly from Tigris edge via 302 redirect, no proxy
 - **No cleanup daemons** -- retention is enforced by opportunistic prune in the presign handler (DB rows + matching S3 objects, bounded LIMIT 100 per call); there are no hourly session/segment/stale-camera sweep goroutines. We do not use an S3 bucket lifecycle rule because firmware binaries share the bucket and must not be auto-expired.
 - **Fail-closed tier handling** -- `billing.GetTier` returns `(Tier, bool)`; unknown tier IDs never fall back to an unlimited tier. `effectiveTier` validates the DB-stored tier string and falls back to free on unknown. Stripe webhooks log loudly and refuse to escalate the user to a paid tier if the price ID is unrecognised.
@@ -235,6 +238,8 @@ For detailed subsystem documentation see:
 | `github.com/BurntSushi/toml` | Config file parsing |
 | `github.com/google/uuid` | UUID generation for segment IDs |
 | `golang.org/x/crypto/argon2` | Password hashing (Argon2id) |
+| `github.com/pion/webrtc/v4` | WebRTC SFU for low-latency live viewing (ICE-lite, H.264 RTP) |
+| `nhooyr.io/websocket` | WebSocket for camera→server live H.264 relay |
 | `svelte` (5) | Frontend. Runes: `$state`, `$derived`, `$effect` |
 | `tailwindcss` (4) | OKLCH color system, `@import "tailwindcss"` |
 | `hls.js` (1) | HLS playback in browser |

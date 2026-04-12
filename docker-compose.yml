@@ -57,6 +57,7 @@ services:
     restart: unless-stopped
     ports:
       - "3000:3000"
+      - "50000-50200:50000-50200/udp"  # WebRTC ICE-lite UDP range
     depends_on: [postgres, redis, minio-init]
     environment:
       - GHOSTCAM_DATABASE_URL=postgres://ghostcam:dev-password@postgres:5432/ghostcam
@@ -73,6 +74,8 @@ services:
       - GHOSTCAM_S3_REGION=us-east-1
       - AWS_ACCESS_KEY_ID=minioadmin
       - AWS_SECRET_ACCESS_KEY=minioadmin
+      # Public IP for WebRTC ICE-lite candidate (same IP used for MinIO presigned URLs)
+      - GHOSTCAM_PUBLIC_IP=${GHOSTCAM_PUBLIC_IP:?Set GHOSTCAM_PUBLIC_IP to your LAN IP}
       # Stripe (test mode) — enables real tier enforcement locally
       # Replace with your Stripe test dashboard values for checkout/portal to work.
       # Note: use `:-` default only if unset OR empty would normally both get the

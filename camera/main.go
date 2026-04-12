@@ -73,7 +73,20 @@ func main() {
 
 	segments := make(chan NewSegment, 256)
 
+	// Live relay: parses H.264 NAL units from the capture pipeline tee
+	// and makes them available for the WebSocket sender.
+	liveRelay := NewLiveRelay(120) // ~4s at 30fps
+
 	var wg sync.WaitGroup
+
+	// Live WebSocket relay — connects to the server and streams H.264
+	// NAL units when a viewer is watching. Purely additive; the camera
+	// works fine without it (viewers fall back to HLS).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		RunLiveRelay(ctx, client, liveRelay)
+	}()
 
 	// Capture pipeline with crash recovery.
 	wg.Add(1)
@@ -99,7 +112,7 @@ func main() {
 			}
 
 			start := time.Now()
-			err := StartCapturePipeline(ctx, cfg)
+			err := StartCapturePipeline(ctx, cfg, liveRelay)
 			if ctx.Err() != nil {
 				return
 			}

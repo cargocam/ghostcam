@@ -1,5 +1,5 @@
 <script lang="ts">
-	import HlsPlayer from '$lib/components/HlsPlayer.svelte';
+	import LivePlayer from '$lib/components/LivePlayer.svelte';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
@@ -105,6 +105,7 @@
 
 
 	let videoElement = $state<HTMLVideoElement | undefined>(undefined);
+	let webrtcActive = $state(false);
 	let cardEl = $state<HTMLButtonElement | undefined>(undefined);
 
 	function captureSnapshot(e: MouseEvent) {
@@ -157,7 +158,8 @@
 >
 	<div class="absolute inset-0">
 		{#if hlsSrc}
-			<HlsPlayer
+			<LivePlayer
+				{deviceId}
 				src={hlsSrc}
 				muted={isMuted}
 				seekTo={clipSnapshot ? clipSnapshot.seekTo : (scrubberStore.seekTarget ?? -1)}
@@ -166,6 +168,7 @@
 				loopSeekRevision={clipStore.seekRevision}
 				mode={clipStore.enabled ? 'clip' : isPlayback ? 'vod' : 'live'}
 				bind:videoEl={videoElement}
+				bind:webrtcActive
 				onError={(err) => {
 					console.warn(`HLS error for ${deviceId}:`, err);
 					reportClientLog({
@@ -202,9 +205,9 @@
 			</div>
 			<span class={cn(
 				"text-[10px] uppercase tracking-wider font-semibold px-1.5 py-0.5 rounded",
-				clipStore.enabled ? "bg-yellow-400/20 text-yellow-400" : isPlayback ? "bg-sky-400/20 text-sky-400" : isOnline ? "bg-primary/20 text-primary" : "bg-white/10 text-white/40"
+				clipStore.enabled ? "bg-yellow-400/20 text-yellow-400" : isPlayback ? "bg-sky-400/20 text-sky-400" : isOnline ? (webrtcActive ? "bg-primary/20 text-primary" : "bg-orange-400/20 text-orange-400") : "bg-white/10 text-white/40"
 			)}>
-				{clipStore.enabled ? 'CLIP' : isPlayback ? 'PLAYBACK' : isOnline ? 'LIVE' : 'OFFLINE'}
+				{clipStore.enabled ? 'CLIP' : isPlayback ? 'PLAYBACK' : isOnline ? (webrtcActive ? 'LIVE' : 'DELAYED') : 'OFFLINE'}
 			</span>
 		</div>
 	</div>
