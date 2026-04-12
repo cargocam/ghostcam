@@ -21,6 +21,14 @@ type liveWSMsg struct {
 // RunLiveRelay maintains a persistent WebSocket to the server and
 // streams H.264 NAL units + Opus audio when a viewer is watching.
 // It reconnects with exponential backoff on failure.
+//
+// The WebSocket stays open even when no viewer is watching (only
+// keepalives flow). This gives instant WebRTC startup when a viewer
+// connects. On battery-powered cellular cameras this prevents the
+// modem from entering deep sleep (DRX/PSM) between uploads. A future
+// battery-saver mode could instead establish the WebSocket on-demand
+// via a start_stream command piggy-backed on the telemetry poll,
+// trading ~10s of WebRTC startup latency for radio idle time.
 func RunLiveRelay(ctx context.Context, client *Client, relay *LiveRelay) {
 	backoff := 2 * time.Second
 	const maxBackoff = 30 * time.Second
