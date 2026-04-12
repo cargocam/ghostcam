@@ -40,7 +40,13 @@ camera/            (package main — binary builds from this directory)
   client.go        HTTP client for server API (telemetry POST, presign, provision, S3 upload)
   credentials.go   LoadCredentials / SaveCredentials — flat files (api_key, device_id, server_url) with 0600 permissions
   provisioning.go  Token-based provisioning via POST /api/v1/cameras/provision
+                   Resolution order: CLI/env → flat files → QR scan
                    Supports --provision-token CLI flag / GHOSTCAM_PROVISION_TOKEN env var for headless provisioning
+  qr_linux.go      QR code scanning via rpicam-still (YUV420 frames) + gozxing (pure Go ZXing)
+                   5-minute timeout, process group cleanup, graceful fallback if rpicam-still missing
+                   Build tag: //go:build linux && !synthetic
+  qr_other.go      No-op QR stub for non-Linux/synthetic platforms
+                   Build tag: //go:build !linux || synthetic
   commands.go      HandleCommand: processes server-issued commands (reboot, unregister, set_resolution, etc.)
   telemetry_poll.go RunTelemetryPoll: 10s poll loop with backoff, processes piggy-backed commands
   motion.go        ffprobe P-frame analysis with file-size fallback for motion detection

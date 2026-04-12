@@ -14,7 +14,8 @@ Ghostcam is a camera surveillance system built in Go. Cameras capture H.264 vide
 ghostcam/
 ├── common/          Shared Go types: camera<->server contract (telemetry, presign, provisioning)
 ├── camera/          Camera binary (package main): capture pipeline, upload, telemetry,
-│                    provisioning, gpsd, firmware. main.go lives here — no cmd/ wrapper.
+│                    provisioning (CLI/env → flat files → QR scan), gpsd, firmware.
+│                    main.go lives here — no cmd/ wrapper.
 ├── server/          Server binary (package main): chi router + HTTP handlers as methods
 │                    on *App, middleware, rate limiting. main.go lives here — no cmd/ wrapper.
 │   ├── apitypes/    Viewer<->server HTTP request/response + SSE payload types.
@@ -191,6 +192,7 @@ Server (Go) ← presigned URLs → Browser (hls.js)
   Redis (telemetry streams, SSE pub/sub, events)
 ```
 
+- **QR provisioning** -- on first boot without credentials, the camera scans for a provisioning QR code via `rpicam-still` + `gozxing` (pure Go, no CGO). QR payload carries server URL, token, and optional WiFi creds. Resolution order: CLI/env → flat files → QR scan (5-min timeout). Build-tag gated (`linux && !synthetic`); no-op stub on other platforms.
 - **No persistent connections** -- cameras POST telemetry every 10s, upload segments via presigned PUT URLs
 - **Stateless server** -- JWT auth, no sessions table, horizontally scalable
 - **S3-native** -- segments served directly from Tigris edge via 302 redirect, no proxy
@@ -214,7 +216,7 @@ For detailed subsystem documentation see:
 - **HTTP**: chi router. Handlers are methods on `*App` in the `server` package. JSON responses via `writeJSON()`.
 - **Database**: pgx v5 pool, concrete `*db.DB` type (no `Database` interface — tests cover pure functions). Batch inserts via `pgx.Batch`.
 - **Concurrency**: `sync.WaitGroup` for goroutine lifecycle, `sync/atomic` for flags, channels for inter-goroutine communication.
-- **Build tags**: `//go:build linux && !synthetic` for real sensors (gpsd, /proc, nmcli). `//go:build !linux || synthetic` for synthetic sensors. Docker camera target uses `-tags synthetic`. Production Pi builds use real sensors with no synthetic code.
+- **Build tags**: `//go:build linux && !synthetic` for real sensors (gpsd, /proc, nmcli) and QR scanning (rpicam-still). `//go:build !linux || synthetic` for synthetic sensors and QR no-op stubs. Docker camera target uses `-tags synthetic`. Production Pi builds use real sensors with no synthetic code.
 
 ### Svelte / TypeScript
 
@@ -234,6 +236,7 @@ For detailed subsystem documentation see:
 | `github.com/aws/aws-sdk-go-v2` | S3/Tigris presigned URLs |
 | `github.com/BurntSushi/toml` | Config file parsing |
 | `github.com/google/uuid` | UUID generation for segment IDs |
+| `github.com/makiuchi-d/gozxing` | Pure Go QR code decoder (camera-side provisioning) |
 | `golang.org/x/crypto/argon2` | Password hashing (Argon2id) |
 | `svelte` (5) | Frontend. Runes: `$state`, `$derived`, `$effect` |
 | `tailwindcss` (4) | OKLCH color system, `@import "tailwindcss"` |
