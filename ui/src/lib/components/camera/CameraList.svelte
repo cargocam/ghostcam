@@ -153,7 +153,7 @@
 
 	{#if cameraStore.cameras.length === 0}
 		<div class="px-3 py-8 text-center text-xs text-muted-foreground">
-			No cameras connected
+			Follow the setup guide to add your first camera
 		</div>
 	{/if}
 </div>

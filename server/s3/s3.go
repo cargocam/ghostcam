@@ -103,6 +103,13 @@ func FirmwareKey(version string) string {
 	return fmt.Sprintf("firmware/%s/ghostcam-camera", version)
 }
 
+// PiImageKey returns the S3 key for a Pi device image
+// (e.g. ghostcam-pi4-v0.5.0.img.xz). Mirrors FirmwareKey so both live
+// under firmware/{version}/.
+func PiImageKey(version, device string) string {
+	return fmt.Sprintf("firmware/%s/ghostcam-%s.img.xz", version, device)
+}
+
 // InitKey returns the S3 key for a camera's init segment.
 func InitKey(deviceID string) string {
 	return fmt.Sprintf("%s/init.mp4", deviceID)

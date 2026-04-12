@@ -621,6 +621,23 @@ type FirmwareMeta struct {
 	SHA256    string `json:"sha256"`
 }
 
+// PiImage is a single downloadable Pi device image served by
+// GET /api/v1/firmware/images. One per device (zero2w / pi4 / pi5).
+type PiImage struct {
+	Device      string `json:"device"`
+	Version     string `json:"version"`
+	DownloadURL string `json:"download_url"`
+	SizeBytes   int64  `json:"size_bytes"`
+	SHA256      string `json:"sha256"`
+}
+
+// PiImagesResponse is the body of GET /api/v1/firmware/images.
+// Only populated devices are included — if the webhook has not ingested
+// a given device yet, it is omitted.
+type PiImagesResponse struct {
+	Images []PiImage `json:"images"`
+}
+
 // ====================================================================
 // SSE / pub-sub payloads
 // ====================================================================

@@ -119,7 +119,3 @@ func (a *App) FirmwareUpload(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// GithubWebhook handles POST /api/v1/webhooks/github.
-func (a *App) GithubWebhook(w http.ResponseWriter, _ *http.Request) {
-	w.WriteHeader(http.StatusOK)
-}

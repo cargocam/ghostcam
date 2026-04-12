@@ -202,6 +202,7 @@ func (a *App) router() http.Handler {
 	r.With(provisionRL.Middleware).Post("/api/v1/cameras/provision", a.Provision)
 	r.Get("/api/v1/billing/tiers", a.ListTiers)
 	r.Get("/api/v1/firmware/latest", a.FirmwareLatest)
+	r.Get("/api/v1/firmware/images", a.PiImagesList)
 	r.With(forgotRL.Middleware).Post("/api/v1/auth/forgot-password", a.ForgotPassword)
 	r.Post("/api/v1/auth/reset-password", a.ResetPassword)
 	r.Post("/api/v1/auth/verify-email", a.VerifyEmail)

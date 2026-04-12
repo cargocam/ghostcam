@@ -644,6 +644,25 @@ export interface FirmwareMeta {
   sha256: string;
 }
 /**
+ * PiImage is a single downloadable Pi device image served by
+ * GET /api/v1/firmware/images. One per device (zero2w / pi4 / pi5).
+ */
+export interface PiImage {
+  device: string;
+  version: string;
+  download_url: string;
+  size_bytes: number /* int64 */;
+  sha256: string;
+}
+/**
+ * PiImagesResponse is the body of GET /api/v1/firmware/images.
+ * Only populated devices are included — if the webhook has not ingested
+ * a given device yet, it is omitted.
+ */
+export interface PiImagesResponse {
+  images: PiImage[];
+}
+/**
  * TelemetryStreamEvent is the payload of the SSE `telemetry` event, emitted
  * for every camera telemetry update.
  */

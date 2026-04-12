@@ -13,7 +13,18 @@ There are three ways to set up a camera, from easiest to most flexible.
 
 ## Option 1: Flash a Pi Image (recommended for new hardware)
 
-Download the `.img.xz` for your Pi model from the [latest release](../../../releases/latest) and flash it to an SD card:
+> **Easiest path:** log in to the web UI with no cameras enrolled and
+> follow the built-in **Get Started** card — it picks the right Pi
+> model, offers a presigned download of the image your server is
+> hosting, renders the flashing instructions, and shows the enrollment
+> QR code all in one place. The card watches for your camera to come
+> online and dismisses itself automatically. Everything below is the
+> manual equivalent.
+
+Download the `.img.xz` for your Pi model — either from the Get Started
+card (the server pulls images into S3 automatically on every GitHub
+release via the `/api/v1/webhooks/github` webhook) or directly from the
+[latest release](../../../releases/latest) — and flash it to an SD card:
 
 ```bash
 # macOS
