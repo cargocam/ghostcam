@@ -19,10 +19,8 @@ type liveWSMsg struct {
 }
 
 // RunLiveRelay maintains a persistent WebSocket to the server and
-// streams H.264 NAL units when a viewer is watching. It reconnects
-// with exponential backoff on failure. The WebSocket is purely
-// additive — the camera works fine without it (live viewers just
-// fall back to HLS).
+// streams H.264 NAL units + Opus audio when a viewer is watching.
+// It reconnects with exponential backoff on failure.
 func RunLiveRelay(ctx context.Context, client *Client, relay *LiveRelay) {
 	backoff := 2 * time.Second
 	const maxBackoff = 30 * time.Second
@@ -99,13 +97,13 @@ func runLiveWSSession(ctx context.Context, client *Client, relay *LiveRelay) err
 		}
 	}()
 
-	// Main loop: forward NAL units when streaming is active.
+	// Main loop: forward frames when streaming is active.
 	for {
 		select {
 		case <-controlCtx.Done():
 			conn.Close(websocket.StatusNormalClosure, "closing")
 			return controlCtx.Err()
-		case nal, ok := <-relay.C():
+		case frame, ok := <-relay.C():
 			if !ok {
 				conn.Close(websocket.StatusNormalClosure, "relay closed")
 				return nil
@@ -113,30 +111,37 @@ func runLiveWSSession(ctx context.Context, client *Client, relay *LiveRelay) err
 			if !streaming.Load() {
 				continue // discard frames when no viewer is watching
 			}
-			if err := sendNAL(ctx, conn, nal); err != nil {
+			if err := sendFrame(ctx, conn, frame); err != nil {
 				return err
 			}
 		}
 	}
 }
 
-// sendNAL writes a binary WebSocket frame with the wire format:
+// sendFrame writes a binary WebSocket frame with the wire format:
 //
-//	[4 bytes big-endian timestamp_ms] [1 byte flags] [NAL data]
+//	[4 bytes big-endian timestamp_ms] [1 byte flags] [payload]
 //
-// The timestamp is milliseconds since an arbitrary epoch (we use
-// time.Now); the server doesn't need absolute time, just ordering.
-// Flag bit 0 = is_keyframe.
-func sendNAL(ctx context.Context, conn *websocket.Conn, nal NALUnit) error {
+// Flags:
+//
+//	bit 0: is_keyframe (video IDR)
+//	bit 1: is_audio (1 = Opus, 0 = H.264)
+func sendFrame(ctx context.Context, conn *websocket.Conn, frame LiveFrame) error {
 	header := make([]byte, 5)
 	binary.BigEndian.PutUint32(header[0:4], uint32(time.Now().UnixMilli()&0xFFFFFFFF))
-	if nal.IsKeyframe {
-		header[4] = 0x01
-	}
 
-	msg := make([]byte, 0, len(header)+len(nal.Data))
+	var flags byte
+	if frame.IsKeyframe {
+		flags |= 0x01
+	}
+	if frame.IsAudio {
+		flags |= 0x02
+	}
+	header[4] = flags
+
+	msg := make([]byte, 0, len(header)+len(frame.Data))
 	msg = append(msg, header...)
-	msg = append(msg, nal.Data...)
+	msg = append(msg, frame.Data...)
 
 	return conn.Write(ctx, websocket.MessageBinary, msg)
 }
@@ -145,7 +150,6 @@ func sendNAL(ctx context.Context, conn *websocket.Conn, nal NALUnit) error {
 // live relay endpoint.
 func buildWSURL(serverURL, deviceID string) string {
 	base := strings.TrimRight(serverURL, "/")
-	// http:// → ws://, https:// → wss://
 	if strings.HasPrefix(base, "https://") {
 		base = "wss://" + base[8:]
 	} else if strings.HasPrefix(base, "http://") {

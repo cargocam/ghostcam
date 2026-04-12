@@ -13,23 +13,23 @@ import (
 
 // LiveManager tracks per-camera live streaming sessions. Each camera
 // that connects via WebSocket gets a LiveSession; each viewer that
-// requests WHEP subscribes to that session's NAL fan-out.
+// requests WHEP subscribes to that session's media fan-out.
 type LiveManager struct {
 	mu       sync.Mutex
 	sessions map[string]*LiveSession // deviceID → session
 }
 
-// NewLiveManager creates a manager with no active sessions.
 func NewLiveManager() *LiveManager {
 	return &LiveManager{
 		sessions: make(map[string]*LiveSession),
 	}
 }
 
-// NALFrame is an H.264 NAL unit received from a camera.
-type NALFrame struct {
-	Data       []byte
-	IsKeyframe bool
+// MediaFrame is a video or audio frame received from a camera.
+type MediaFrame struct {
+	Data        []byte
+	IsKeyframe  bool   // video only: true for IDR NAL units
+	IsAudio     bool   // true = Opus audio, false = H.264 video
 	TimestampMs uint32
 }
 
@@ -37,19 +37,17 @@ type NALFrame struct {
 type LiveSession struct {
 	mu         sync.Mutex
 	deviceID   string
-	cameraConn *websocket.Conn // camera's ingest WebSocket
+	cameraConn *websocket.Conn
 
-	// Ring buffer: latest keyframe + subsequent frames. Viewers joining
-	// mid-stream receive the buffered keyframe so they can decode
-	// immediately without waiting for the next GOP.
-	keyframe *NALFrame   // latest IDR + preceding SPS/PPS
-	sps      []byte      // latest SPS NAL
-	pps      []byte      // latest PPS NAL
-	ring     []NALFrame  // recent non-keyframe NALs after the last keyframe
+	// Video state: latest parameter sets + keyframe for viewer sync.
+	sps      []byte
+	pps      []byte
+	keyframe *MediaFrame
+	ring     []MediaFrame // recent frames after keyframe
 	ringCap  int
 
 	// Fan-out: registered viewer channels.
-	viewers map[uint64]chan NALFrame
+	viewers map[uint64]chan MediaFrame
 	nextID  uint64
 }
 
@@ -57,34 +55,33 @@ func newLiveSession(deviceID string, conn *websocket.Conn) *LiveSession {
 	return &LiveSession{
 		deviceID:   deviceID,
 		cameraConn: conn,
-		ringCap:    90, // ~3 seconds at 30fps
-		viewers:    make(map[uint64]chan NALFrame),
+		ringCap:    90,
+		viewers:    make(map[uint64]chan MediaFrame),
 	}
 }
 
-// subscribe registers a viewer and returns a channel + ID. The channel
-// receives NAL frames as they arrive from the camera. Call unsubscribe
-// with the returned ID when done.
-func (ls *LiveSession) subscribe() (uint64, <-chan NALFrame) {
+// subscribe registers a viewer and returns a channel + ID. The viewer
+// receives the buffered keyframe (with SPS/PPS) immediately so it can
+// start decoding without waiting for the next GOP.
+func (ls *LiveSession) subscribe() (uint64, <-chan MediaFrame) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 
 	id := ls.nextID
 	ls.nextID++
-	ch := make(chan NALFrame, 120) // buffered so slow viewers don't block
+	ch := make(chan MediaFrame, 120)
 	ls.viewers[id] = ch
 
-	// Send buffered parameter sets + keyframe so the viewer can start
-	// decoding immediately.
+	// Send buffered parameter sets + keyframe.
 	if ls.sps != nil {
 		select {
-		case ch <- NALFrame{Data: ls.sps}:
+		case ch <- MediaFrame{Data: ls.sps}:
 		default:
 		}
 	}
 	if ls.pps != nil {
 		select {
-		case ch <- NALFrame{Data: ls.pps}:
+		case ch <- MediaFrame{Data: ls.pps}:
 		default:
 		}
 	}
@@ -113,28 +110,28 @@ func (ls *LiveSession) viewerCount() int {
 	return len(ls.viewers)
 }
 
-// push delivers a NAL frame to all subscribed viewers.
-func (ls *LiveSession) push(frame NALFrame) {
+// push delivers a media frame to all subscribed viewers.
+func (ls *LiveSession) push(frame MediaFrame) {
 	ls.mu.Lock()
 	defer ls.mu.Unlock()
 
-	nalType := nalUnitType(frame.Data)
-
-	// Track SPS/PPS parameter sets — sent to new viewers on subscribe.
-	switch nalType {
-	case 7: // SPS
-		ls.sps = append([]byte(nil), frame.Data...)
-		return // don't fan-out SPS by itself, it's sent with keyframe
-	case 8: // PPS
-		ls.pps = append([]byte(nil), frame.Data...)
-		return
-	case 5: // IDR
-		frame.IsKeyframe = true
-		ls.keyframe = &frame
-		ls.ring = ls.ring[:0] // reset ring on keyframe
-	default:
-		if len(ls.ring) < ls.ringCap {
-			ls.ring = append(ls.ring, frame)
+	if !frame.IsAudio {
+		nalType := nalUnitType(frame.Data)
+		switch nalType {
+		case 7: // SPS
+			ls.sps = append([]byte(nil), frame.Data...)
+			return // sent to new viewers on subscribe, not fanned out
+		case 8: // PPS
+			ls.pps = append([]byte(nil), frame.Data...)
+			return
+		case 5: // IDR
+			frame.IsKeyframe = true
+			ls.keyframe = &frame
+			ls.ring = ls.ring[:0]
+		default:
+			if len(ls.ring) < ls.ringCap {
+				ls.ring = append(ls.ring, frame)
+			}
 		}
 	}
 
@@ -142,16 +139,12 @@ func (ls *LiveSession) push(frame NALFrame) {
 		select {
 		case ch <- frame:
 		default:
-			// Viewer too slow — skip frame rather than blocking the
-			// camera ingest. The viewer's WebRTC jitter buffer will
-			// handle the gap, or they'll see a brief glitch until the
-			// next keyframe.
-			slog.Debug("live: viewer too slow, dropping frame", "viewer_id", id, "device_id", ls.deviceID)
+			slog.Debug("live: viewer too slow, dropping frame",
+				"viewer_id", id, "device_id", ls.deviceID, "audio", frame.IsAudio)
 		}
 	}
 }
 
-// nalUnitType extracts the NAL unit type from the first byte.
 func nalUnitType(data []byte) byte {
 	if len(data) == 0 {
 		return 0
@@ -159,8 +152,7 @@ func nalUnitType(data []byte) byte {
 	return data[0] & 0x1F
 }
 
-// GetSession returns the live session for a device, or nil if no camera
-// is connected.
+// GetSession returns the live session for a device, or nil.
 func (lm *LiveManager) GetSession(deviceID string) *LiveSession {
 	lm.mu.Lock()
 	defer lm.mu.Unlock()
@@ -173,12 +165,11 @@ type liveWSMsg struct {
 }
 
 // CameraLiveWS handles GET /api/v1/cameras/{deviceID}/live — upgrades
-// to a WebSocket for receiving the camera's live H.264 stream.
+// to a WebSocket for receiving the camera's live H.264 + Opus stream.
 func (a *App) CameraLiveWS(w http.ResponseWriter, r *http.Request) {
 	deviceID := getCameraDeviceID(r)
 
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		// Camera connects from Docker/LAN — accept any origin.
 		InsecureSkipVerify: true,
 	})
 	if err != nil {
@@ -204,7 +195,6 @@ func (a *App) CameraLiveWS(w http.ResponseWriter, r *http.Request) {
 	session := newLiveSession(deviceID, conn)
 
 	a.Live.mu.Lock()
-	// Close existing session for this device if any.
 	if old, ok := a.Live.sessions[deviceID]; ok {
 		old.cameraConn.Close(websocket.StatusGoingAway, "replaced")
 	}
@@ -220,7 +210,6 @@ func (a *App) CameraLiveWS(w http.ResponseWriter, r *http.Request) {
 		}
 		a.Live.mu.Unlock()
 
-		// Close all viewer channels.
 		session.mu.Lock()
 		for id, ch := range session.viewers {
 			close(ch)
@@ -231,7 +220,7 @@ func (a *App) CameraLiveWS(w http.ResponseWriter, r *http.Request) {
 		slog.Info("live: camera disconnected", "device_id", deviceID)
 	}()
 
-	// Read binary frames (H.264 NALs) from the camera.
+	// Read binary frames from the camera.
 	for {
 		msgType, data, err := conn.Read(ctx)
 		if err != nil {
@@ -239,23 +228,23 @@ func (a *App) CameraLiveWS(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if msgType == websocket.MessageText {
-			// Text frame = control message (shouldn't normally come from
-			// camera after ready, but ignore gracefully).
 			continue
 		}
 
-		// Binary frame: [4 bytes timestamp_ms] [1 byte flags] [NAL data]
+		// Binary frame: [4B timestamp_ms] [1B flags] [payload]
+		// flags bit 0: is_keyframe, bit 1: is_audio
 		if len(data) < 6 {
 			continue
 		}
 
 		tsMs := binary.BigEndian.Uint32(data[0:4])
 		flags := data[4]
-		nalData := data[5:]
+		payload := data[5:]
 
-		frame := NALFrame{
-			Data:        nalData,
+		frame := MediaFrame{
+			Data:        payload,
 			IsKeyframe:  flags&0x01 != 0,
+			IsAudio:     flags&0x02 != 0,
 			TimestampMs: tsMs,
 		}
 
@@ -263,8 +252,7 @@ func (a *App) CameraLiveWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// sendStreamControl sends a start_stream or stop_stream message to the
-// camera. Uses the request context (or a background context for cleanup).
+// sendStreamControl sends a start_stream or stop_stream message to the camera.
 func sendStreamControl(ctx context.Context, conn *websocket.Conn, msgType string) error {
 	msg, _ := json.Marshal(liveWSMsg{Type: msgType})
 	return conn.Write(ctx, websocket.MessageText, msg)

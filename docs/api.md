@@ -55,10 +55,13 @@ Camera connects to `GET /api/v1/cameras/:id/live` (WebSocket upgrade) with beare
 - Server → Camera: `{"type": "start_stream"}` (first viewer connected)
 - Server → Camera: `{"type": "stop_stream"}` (last viewer disconnected)
 
-**Binary frames** (H.264 NAL units, camera → server only):
+**Binary frames** (media, camera → server only):
 - Bytes 0-3: timestamp (uint32 big-endian, ms since arbitrary epoch)
-- Byte 4: flags (bit 0 = is_keyframe)
-- Bytes 5+: raw H.264 NAL unit data
+- Byte 4: flags (bit 0 = is_keyframe/video, bit 1 = is_audio)
+- Bytes 5+: payload (H.264 NAL unit when !is_audio, Opus packet when is_audio)
+
+Audio: ffmpeg encodes ALSA input to Opus (32kbps, low-delay, 20ms frames)
+alongside the AAC used for HLS segments. Opus adds ~4 KB/s to the WebSocket.
 
 ## Telemetry
 

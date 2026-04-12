@@ -5,10 +5,12 @@
 
 	let {
 		deviceId,
+		muted = true,
 		class: className = '',
 		onStateChange = undefined,
 	}: {
 		deviceId: string;
+		muted?: boolean;
 		class?: string;
 		onStateChange?: (state: WebRtcState) => void;
 	} = $props();
@@ -38,8 +40,9 @@
 			});
 			peerConn = pc;
 
-			// Receive video track from server.
+			// Receive video and audio tracks from server.
 			pc.addTransceiver('video', { direction: 'recvonly' });
+			pc.addTransceiver('audio', { direction: 'recvonly' });
 
 			pc.ontrack = (event) => {
 				if (videoEl && event.streams[0]) {
@@ -147,6 +150,6 @@
 	bind:this={videoEl}
 	autoplay
 	playsinline
-	muted
+	{muted}
 	class={cn('w-full h-full object-cover', className)}
 ></video>

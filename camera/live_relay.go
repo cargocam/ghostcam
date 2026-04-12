@@ -5,35 +5,48 @@ import (
 	"sync"
 )
 
-// NALUnit represents a single H.264 Network Abstraction Layer unit
-// extracted from an Annex B bytestream.
-type NALUnit struct {
+// LiveFrame carries a single media frame — either an H.264 NAL unit
+// (video) or an Opus packet (audio). The Type field discriminates.
+type LiveFrame struct {
 	Data       []byte
-	IsKeyframe bool // true for IDR NAL units (type 5)
+	IsKeyframe bool // video only: true for IDR NAL units (type 5)
+	IsAudio    bool // true = Opus audio, false = H.264 video
 }
 
 // LiveRelay accepts raw H.264 Annex B bytes via the io.Writer interface,
 // parses NAL unit boundaries, and makes them available to consumers via
-// a channel. It uses a ring buffer so a slow consumer (e.g. a stalled
-// WebSocket) never blocks the capture pipeline.
+// a channel. Audio frames are pushed separately via PushAudio.
+//
+// The ring buffer drops oldest frames so a slow consumer never blocks
+// the capture pipeline.
 type LiveRelay struct {
 	mu   sync.Mutex
-	buf  []byte   // accumulates bytes between start codes
-	ring chan NALUnit
+	buf  []byte // accumulates bytes between start codes
+	ring chan LiveFrame
 }
 
 // NewLiveRelay creates a relay with the given ring buffer capacity.
-// A capacity of ~60 NAL units covers ~2 seconds at 30fps, which is
+// A capacity of ~120 covers ~4 seconds of interleaved video+audio,
 // enough for the WebSocket sender to keep up under normal conditions.
 func NewLiveRelay(ringSize int) *LiveRelay {
 	return &LiveRelay{
-		ring: make(chan NALUnit, ringSize),
+		ring: make(chan LiveFrame, ringSize),
 	}
 }
 
-// C returns the channel from which consumers read parsed NAL units.
-func (lr *LiveRelay) C() <-chan NALUnit {
+// C returns the channel from which consumers read parsed frames.
+func (lr *LiveRelay) C() <-chan LiveFrame {
 	return lr.ring
+}
+
+// PushAudio enqueues an Opus audio frame into the ring buffer.
+// Called by the OGG reader goroutine, not by the io.Writer path.
+func (lr *LiveRelay) PushAudio(data []byte) {
+	frame := LiveFrame{
+		Data:    append([]byte(nil), data...),
+		IsAudio: true,
+	}
+	lr.enqueue(frame)
 }
 
 // Write implements io.Writer. It is called by io.MultiWriter from the
@@ -63,57 +76,51 @@ func (lr *LiveRelay) Close() error {
 // code) is also emitted.
 func (lr *LiveRelay) flush(final bool) {
 	for {
-		// Find first start code in buffer.
 		start := findStartCode(lr.buf, 0)
 		if start < 0 {
 			if final && len(lr.buf) > 0 {
-				lr.emit(lr.buf)
+				lr.emitVideo(lr.buf)
 				lr.buf = nil
 			}
 			return
 		}
 
-		// Discard bytes before the first start code (shouldn't happen in
-		// a clean stream, but be defensive).
 		if start > 0 {
 			lr.buf = lr.buf[start:]
-			start = 0
 		}
 
-		// Skip past the start code to find the NAL data.
 		scLen := startCodeLen(lr.buf)
 
-		// Find the next start code — that marks the end of this NAL.
 		end := findStartCode(lr.buf, scLen)
 		if end < 0 {
 			if final {
-				lr.emit(lr.buf[scLen:])
+				lr.emitVideo(lr.buf[scLen:])
 				lr.buf = nil
 			}
 			return
 		}
 
-		// Emit the NAL unit (without the start code prefix).
-		lr.emit(lr.buf[scLen:end])
+		lr.emitVideo(lr.buf[scLen:end])
 		lr.buf = lr.buf[end:]
 	}
 }
 
-// emit sends a NAL unit to the ring channel. If the channel is full,
-// the oldest entry is dropped to make room — we never block the
-// capture pipeline.
-func (lr *LiveRelay) emit(data []byte) {
+// emitVideo sends a video NAL unit to the ring.
+func (lr *LiveRelay) emitVideo(data []byte) {
 	if len(data) == 0 {
 		return
 	}
-
-	nal := NALUnit{
-		Data:       append([]byte(nil), data...), // copy — buffer will be reused
+	frame := LiveFrame{
+		Data:       append([]byte(nil), data...),
 		IsKeyframe: isIDR(data[0]),
 	}
+	lr.enqueue(frame)
+}
 
+// enqueue adds a frame to the ring, dropping the oldest if full.
+func (lr *LiveRelay) enqueue(frame LiveFrame) {
 	select {
-	case lr.ring <- nal:
+	case lr.ring <- frame:
 	default:
 		// Ring full — drop oldest to make room.
 		select {
@@ -121,7 +128,7 @@ func (lr *LiveRelay) emit(data []byte) {
 		default:
 		}
 		select {
-		case lr.ring <- nal:
+		case lr.ring <- frame:
 		default:
 		}
 	}
@@ -133,10 +140,10 @@ func findStartCode(buf []byte, offset int) int {
 	for i := offset; i < len(buf)-2; i++ {
 		if buf[i] == 0 && buf[i+1] == 0 {
 			if buf[i+2] == 1 {
-				return i // 3-byte start code
+				return i
 			}
 			if i+3 < len(buf) && buf[i+2] == 0 && buf[i+3] == 1 {
-				return i // 4-byte start code
+				return i
 			}
 		}
 	}
@@ -153,19 +160,18 @@ func startCodeLen(buf []byte) int {
 }
 
 // isIDR returns true if the NAL unit type (encoded in the first byte
-// after the start code) is an IDR slice (type 5). The NAL unit type
-// is the low 5 bits of the first byte.
+// after the start code) is an IDR slice (type 5).
 func isIDR(firstByte byte) bool {
-	nalType := firstByte & 0x1F
-	return nalType == 5
+	return firstByte&0x1F == 5
 }
 
 // NullLiveRelay is an io.Writer that discards everything. Used when
-// the live relay is disabled (no server WebSocket configured).
+// the live relay is disabled.
 type NullLiveRelay struct{}
 
 func (NullLiveRelay) Write(p []byte) (int, error) { return len(p), nil }
 func (NullLiveRelay) Close() error                { return nil }
+func (NullLiveRelay) PushAudio([]byte)             {}
 
 // LiveWriter is the interface satisfied by both LiveRelay and
 // NullLiveRelay, allowing the capture pipeline to tee without caring
@@ -173,4 +179,5 @@ func (NullLiveRelay) Close() error                { return nil }
 type LiveWriter interface {
 	io.Writer
 	Close() error
+	PushAudio(data []byte)
 }

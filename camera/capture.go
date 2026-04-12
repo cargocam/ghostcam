@@ -19,7 +19,8 @@ const segmentDurationSecs = 6
 // real hardware it pipes rpicam-vid into ffmpeg.
 //
 // The liveWriter receives a copy of the raw H.264 bytestream for WebRTC live
-// relay. Pass NullLiveRelay{} to disable live streaming.
+// relay. Audio Opus packets are pushed via liveWriter.PushAudio from the OGG
+// reader goroutine. Pass NullLiveRelay{} to disable live streaming.
 func StartCapturePipeline(ctx context.Context, cfg *CameraConfig, liveWriter LiveWriter) error {
 	startNum := nextSegmentNumber(cfg.SegmentDir)
 	pattern := filepath.Join(cfg.SegmentDir, "seg%05d.ts")
@@ -59,8 +60,17 @@ func runTestPipeline(ctx context.Context, cfg *CameraConfig, pattern, kfInterval
 	videoInput := fmt.Sprintf("testsrc2=size=%s:rate=%d", size, cfg.VideoFPS)
 	audioInput := "sine=frequency=440:sample_rate=48000"
 
-	// ffmpeg writes segments to disk AND raw H.264 to stdout for live relay.
-	// The -map flags route video to both outputs and audio only to the segment output.
+	// Create pipe for Opus audio output (fd 3 inside ffmpeg).
+	audioPipeR, audioPipeW, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("creating audio pipe: %w", err)
+	}
+	defer audioPipeR.Close()
+
+	// ffmpeg outputs:
+	//   0: MPEG-TS segments (H.264 + AAC) — for HLS recording
+	//   1: raw H.264 to stdout — for WebRTC video
+	//   2: OGG/Opus to fd 3 — for WebRTC audio
 	cmd := exec.CommandContext(ctx, "ffmpeg",
 		"-re",
 		"-f", "lavfi", "-i", videoInput,
@@ -77,28 +87,49 @@ func runTestPipeline(ctx context.Context, cfg *CameraConfig, pattern, kfInterval
 		"-segment_start_number", fmt.Sprintf("%d", startNum),
 		"-reset_timestamps", "1",
 		pattern,
-		// Output 1: raw H.264 to stdout for live relay
+		// Output 1: raw H.264 to stdout for WebRTC video
 		"-map", "0:v",
 		"-c:v", "libx264",
 		"-preset", "ultrafast",
 		"-x264-params", kfInterval,
 		"-f", "h264",
 		"pipe:1",
+		// Output 2: OGG/Opus to fd 3 for WebRTC audio
+		"-map", "1:a",
+		"-c:a", "libopus", "-b:a", "32k",
+		"-application", "lowdelay",
+		"-frame_duration", "20",
+		"-f", "ogg",
+		"pipe:3",
 	)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		audioPipeW.Close()
 		return fmt.Errorf("creating stdout pipe: %w", err)
 	}
 
+	// Pass the audio pipe write end as fd 3.
+	cmd.ExtraFiles = []*os.File{audioPipeW}
+
 	if err := cmd.Start(); err != nil {
+		audioPipeW.Close()
 		return fmt.Errorf("starting ffmpeg: %w", err)
 	}
+	// Close the write end in the parent — ffmpeg owns it now.
+	audioPipeW.Close()
 	slog.Info("ffmpeg test pipeline started", "pid", cmd.Process.Pid)
 
-	// Copy stdout (raw H.264) to the live writer in a goroutine.
+	// Copy stdout (raw H.264) to the live writer.
 	go func() {
 		io.Copy(liveWriter, stdout)
+	}()
+
+	// Read OGG/Opus from the audio pipe and push to the live relay.
+	go func() {
+		if err := ReadOggOpusPackets(audioPipeR, liveWriter.PushAudio); err != nil {
+			slog.Debug("opus reader finished", "err", err)
+		}
 	}()
 
 	err = cmd.Wait()
@@ -116,7 +147,13 @@ func runTestPipeline(ctx context.Context, cfg *CameraConfig, pattern, kfInterval
 func runTestFileLoop(ctx context.Context, testFile, pattern string, startNum int, liveWriter LiveWriter) error {
 	slog.Info("starting test capture pipeline (pre-encoded loop, -c copy)", "file", testFile, "segment_start", startNum)
 
-	// Two outputs: segments to disk + raw H.264 to stdout for live relay.
+	// Create pipe for Opus audio output.
+	audioPipeR, audioPipeW, err := os.Pipe()
+	if err != nil {
+		return fmt.Errorf("creating audio pipe: %w", err)
+	}
+	defer audioPipeR.Close()
+
 	cmd := exec.CommandContext(ctx, "ffmpeg",
 		"-re",
 		"-stream_loop", "-1",
@@ -129,25 +166,43 @@ func runTestFileLoop(ctx context.Context, testFile, pattern string, startNum int
 		"-segment_format", "mpegts",
 		"-segment_start_number", fmt.Sprintf("%d", startNum),
 		pattern,
-		// Output 1: raw H.264 to stdout for live relay
+		// Output 1: raw H.264 to stdout
 		"-map", "0:v",
 		"-c:v", "copy",
 		"-f", "h264",
 		"pipe:1",
+		// Output 2: OGG/Opus to fd 3
+		"-map", "0:a",
+		"-c:a", "libopus", "-b:a", "32k",
+		"-application", "lowdelay",
+		"-frame_duration", "20",
+		"-f", "ogg",
+		"pipe:3",
 	)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		audioPipeW.Close()
 		return fmt.Errorf("creating stdout pipe: %w", err)
 	}
 
+	cmd.ExtraFiles = []*os.File{audioPipeW}
+
 	if err := cmd.Start(); err != nil {
+		audioPipeW.Close()
 		return fmt.Errorf("starting ffmpeg: %w", err)
 	}
+	audioPipeW.Close()
 	slog.Info("ffmpeg test file loop started", "pid", cmd.Process.Pid)
 
 	go func() {
 		io.Copy(liveWriter, stdout)
+	}()
+
+	go func() {
+		if err := ReadOggOpusPackets(audioPipeR, liveWriter.PushAudio); err != nil {
+			slog.Debug("opus reader finished", "err", err)
+		}
 	}()
 
 	err = cmd.Wait()
@@ -182,7 +237,7 @@ func runRealPipeline(ctx context.Context, cfg *CameraConfig, pattern string, sta
 		return fmt.Errorf("rpicam stdout pipe: %w", err)
 	}
 
-	// --- ffmpeg: reads H.264 from stdin, muxes to MPEG-TS segments ---
+	// --- ffmpeg: reads H.264 from stdin, muxes MPEG-TS segments + Opus audio ---
 	ffmpegArgs := []string{
 		"-nostdin", "-loglevel", "warning",
 		"-probesize", "5M", "-analyzeduration", "5M",
@@ -190,17 +245,24 @@ func runRealPipeline(ctx context.Context, cfg *CameraConfig, pattern string, sta
 		"-i", "pipe:0",
 	}
 
-	if !cfg.NoAudio {
+	hasAudio := !cfg.NoAudio
+	var audioPipeR, audioPipeW *os.File
+
+	if hasAudio {
 		audioDevice := "default"
 		if cfg.AudioDevice != "" {
 			audioDevice = cfg.AudioDevice
 		}
 		ffmpegArgs = append(ffmpegArgs, "-f", "alsa", "-i", audioDevice)
 		ffmpegArgs = append(ffmpegArgs,
+			"-map", "0:v", "-map", "1:a",
 			"-c:v", "copy", "-c:a", "aac", "-b:a", "64k",
 		)
 	} else {
-		ffmpegArgs = append(ffmpegArgs, "-c:v", "copy")
+		ffmpegArgs = append(ffmpegArgs,
+			"-map", "0:v",
+			"-c:v", "copy",
+		)
 	}
 
 	ffmpegArgs = append(ffmpegArgs,
@@ -212,11 +274,36 @@ func runRealPipeline(ctx context.Context, cfg *CameraConfig, pattern string, sta
 		pattern,
 	)
 
+	// Opus output to fd 3 for WebRTC audio.
+	if hasAudio {
+		audioPipeR, audioPipeW, err = os.Pipe()
+		if err != nil {
+			return fmt.Errorf("creating audio pipe: %w", err)
+		}
+		defer audioPipeR.Close()
+
+		ffmpegArgs = append(ffmpegArgs,
+			"-map", "1:a",
+			"-c:a", "libopus", "-b:a", "32k",
+			"-application", "lowdelay",
+			"-frame_duration", "20",
+			"-f", "ogg",
+			"pipe:3",
+		)
+	}
+
 	ffmpegCmd := exec.CommandContext(ctx, "ffmpeg", ffmpegArgs...)
 	ffmpegCmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
+	if audioPipeW != nil {
+		ffmpegCmd.ExtraFiles = []*os.File{audioPipeW}
+	}
+
 	ffmpegStdin, err := ffmpegCmd.StdinPipe()
 	if err != nil {
+		if audioPipeW != nil {
+			audioPipeW.Close()
+		}
 		return fmt.Errorf("ffmpeg stdin pipe: %w", err)
 	}
 
@@ -244,13 +331,18 @@ func runRealPipeline(ctx context.Context, cfg *CameraConfig, pattern string, sta
 
 	if err := ffmpegCmd.Start(); err != nil {
 		rpicamCmd.Process.Kill()
+		if audioPipeW != nil {
+			audioPipeW.Close()
+		}
 		return fmt.Errorf("starting ffmpeg: %w", err)
+	}
+	// Close the write end in the parent — ffmpeg owns it now.
+	if audioPipeW != nil {
+		audioPipeW.Close()
 	}
 	slog.Info("ffmpeg started", "pid", ffmpegCmd.Process.Pid)
 
 	// Tee rpicam-vid's stdout to both ffmpeg's stdin and the live writer.
-	// When rpicam-vid's stdout closes (exit/cancel), the tee goroutine
-	// closes ffmpeg's stdin, causing ffmpeg to flush and exit cleanly.
 	teeDone := make(chan error, 1)
 	go func() {
 		_, err := io.Copy(io.MultiWriter(ffmpegStdin, liveWriter), rpicamStdout)
@@ -258,8 +350,15 @@ func runRealPipeline(ctx context.Context, cfg *CameraConfig, pattern string, sta
 		teeDone <- err
 	}()
 
-	// Wait for both processes. rpicam-vid exiting triggers the tee to
-	// close ffmpeg's stdin, so ffmpeg follows shortly.
+	// Read Opus audio from the pipe if enabled.
+	if hasAudio && audioPipeR != nil {
+		go func() {
+			if err := ReadOggOpusPackets(audioPipeR, liveWriter.PushAudio); err != nil {
+				slog.Debug("opus reader finished", "err", err)
+			}
+		}()
+	}
+
 	rpicamErr := rpicamCmd.Wait()
 	ffmpegErr := ffmpegCmd.Wait()
 	<-teeDone

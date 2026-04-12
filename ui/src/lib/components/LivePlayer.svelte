@@ -62,6 +62,7 @@
 		<div class={cn('absolute inset-0', webrtcState !== 'connected' ? 'invisible' : '')}>
 			<WebRtcPlayer
 				{deviceId}
+				{muted}
 				onStateChange={(s) => { webrtcState = s; }}
 			/>
 		</div>

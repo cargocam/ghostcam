@@ -184,22 +184,27 @@ The Pi camera connects to the Docker server via the host's LAN IP (`GHOSTCAM_PUB
 The server is an HTTP API (Go/chi) with an in-memory WebRTC SFU for low-latency live viewing. Cameras upload MPEG-TS segments directly to S3 via presigned PUT URLs, POST telemetry over HTTP, and maintain a WebSocket to relay raw H.264 frames for live WebRTC viewers. The HLS path (manifests from DB, 302 redirects to S3) is unchanged and serves as the recording backbone, VOD/timeline transport, and automatic fallback when WebRTC is unavailable.
 
 ```
-Camera (rpicam-vid) ─── raw H.264 ───┬──→ ffmpeg → MPEG-TS segments → S3
-                                      └──→ WebSocket → Server (live relay)
-                                                           ↓
-Server (Go) ← presigned URLs → Browser (hls.js)      pion SFU
-     ↓                                                ↓
-  Postgres (segments, users, cameras, billing)    Browser (RTCPeerConnection)
-  Redis (telemetry streams, SSE pub/sub, events)
+Camera (rpicam-vid) ─── raw H.264 ───┬──→ ffmpeg ──┬─→ MPEG-TS segments → S3 (HLS recording)
+                                      │             └─→ Opus audio ──┐
+                                      └──→ H.264 via WebSocket ──────┤
+                                                                     ↓
+Server (Go) ← presigned URLs → Browser (hls.js)              pion SFU
+     ↓                                                    (H.264 + Opus)
+  Postgres (segments, users, cameras, billing)                   ↓
+  Redis (telemetry streams, SSE pub/sub, events)    Browser (RTCPeerConnection)
 ```
 
-- **Hybrid HLS/WebRTC** -- WebRTC provides sub-second live viewing via pion SFU (ICE-lite, no TURN). HLS always runs as fallback. Viewer shows "LIVE" (WebRTC) or "DELAYED" (HLS fallback). VOD/clip/timeline uses HLS only.
-- **On-demand media relay** -- cameras maintain a persistent WebSocket but only send H.264 frames when a viewer is watching. Server sends `start_stream`/`stop_stream` control messages.
+Note: when a viewer is watching via WebRTC, the camera uploads video to
+both S3 (segments for recording) and the server (WebSocket for live relay).
+This doubles upload bandwidth during active viewing but is idle otherwise.
+
+- **Hybrid HLS/WebRTC** -- WebRTC provides sub-second live viewing via pion SFU (ICE-lite, no TURN). HLS always runs as fallback. Viewer shows "LIVE" (WebRTC) or "DELAYED" (HLS fallback). VOD/clip/timeline uses HLS only. Camera sends both H.264 video and Opus audio (32kbps, low-delay) over the WebSocket; ffmpeg encodes Opus alongside AAC from the same ALSA input.
+- **On-demand media relay** -- cameras maintain a persistent WebSocket but only send media when a viewer is watching. Server sends `start_stream`/`stop_stream` control messages. **Bandwidth note**: when a viewer is watching live via WebRTC, the camera uploads video twice — once to S3 (HLS segments) and once to the server (WebSocket). This roughly doubles upload bandwidth during active viewing. On cellular links this can degrade HLS upload reliability; the system handles this gracefully (retry with backoff, pending confirms). When no one is watching, bandwidth is identical to before.
 - **Camera telemetry over HTTP** -- cameras POST telemetry every 10s, upload segments via presigned PUT URLs
 - **S3-native** -- segments served directly from Tigris edge via 302 redirect, no proxy
 - **No cleanup daemons** -- retention is enforced by opportunistic prune in the presign handler (DB rows + matching S3 objects, bounded LIMIT 100 per call); there are no hourly session/segment/stale-camera sweep goroutines. We do not use an S3 bucket lifecycle rule because firmware binaries share the bucket and must not be auto-expired.
 - **Fail-closed tier handling** -- `billing.GetTier` returns `(Tier, bool)`; unknown tier IDs never fall back to an unlimited tier. `effectiveTier` validates the DB-stored tier string and falls back to free on unknown. Stripe webhooks log loudly and refuse to escalate the user to a paid tier if the price ID is unrecognised.
-- **Single-instance deployment** -- one server behind Fly.io, one Postgres, one Redis (not designed for horizontal scaling)
+- **Single-instance required for WebRTC** -- the server holds in-memory state for live WebRTC sessions (camera WebSocket connections, viewer PeerConnections). This pins WebRTC to a single server instance. HLS remains fully stateless and distributable. If horizontal scaling is needed, the path is sticky routing by deviceID: a consistent hash on the device ID in the URL ensures the camera WebSocket and viewer WHEP request hit the same instance. Alternatively, the WebRTC SFU can be extracted into a dedicated media service.
 
 For detailed subsystem documentation see:
 - **[docs/usage.md](docs/usage.md)** — Camera setup (flash/deb/binary) and viewer walkthrough: enrolling, playback, clips, billing
