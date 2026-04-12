@@ -35,6 +35,8 @@ type App struct {
 	HMACSecret []byte
 	Tiers      *billing.Cache
 	Mailer     *mailer.Client
+	Live       *LiveManager // WebRTC live streaming sessions
+	WHEP       *WHEPManager // WebRTC viewer sessions
 }
 
 // stripeConfigured reports whether a Stripe secret key is set. Paid tier
@@ -148,6 +150,8 @@ func run() error {
 		HMACSecret: hmacSecret,
 		Tiers:      tierCache,
 		Mailer:     mailerClient,
+		Live:       NewLiveManager(),
+		WHEP:       NewWHEPManager(),
 	}
 
 	srv := &http.Server{
@@ -223,6 +227,7 @@ func (a *App) router() http.Handler {
 		r.Use(a.cameraAuth)
 		r.Post("/api/v1/cameras/{deviceID}/presign", a.Presign)
 		r.Post("/api/v1/cameras/{deviceID}/telemetry", a.PostTelemetry)
+		r.Get("/api/v1/cameras/{deviceID}/live", a.CameraLiveWS)
 	})
 
 	// Viewer auth (session or API token)
@@ -259,6 +264,10 @@ func (a *App) router() http.Handler {
 		r.Patch("/api/v1/events/{eventID}/read", a.MarkEventRead)
 		r.Post("/api/v1/events/read-all", a.MarkAllEventsRead)
 		r.Delete("/api/v1/events/{eventID}", a.DismissEvent)
+
+		// WebRTC WHEP endpoints for low-latency live viewing.
+		r.Post("/api/v1/whep/{deviceID}", a.WHEPOffer)
+		r.Delete("/api/v1/whep/{deviceID}/{sessionID}", a.WHEPDelete)
 
 		r.Get("/hls/{deviceID}/live.m3u8", a.GetLiveManifest)
 		r.Get("/hls/{deviceID}/vod.m3u8", a.GetVodManifest)

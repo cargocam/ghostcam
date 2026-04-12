@@ -33,6 +33,10 @@ type ServerConfig struct {
 	StripeSecretKey      string
 	StripeWebhookSecret  string
 	StripePortalConfigID string
+	// Public IP for WebRTC ICE-lite candidate. The server's externally-
+	// reachable IP address. Typically the same as GHOSTCAM_PUBLIC_IP used
+	// for MinIO presigned URLs.
+	PublicIP string
 	// Segment retention in days (default 30)
 	SegmentRetentionDays int
 	// Resend (optional — email disabled if ResendAPIKey is empty, logs only).
@@ -88,6 +92,7 @@ func LoadConfig() (*ServerConfig, error) {
 	cfg.RedisURL = envOrFileOrDefault("GHOSTCAM_REDIS_URL", file.RedisURL, "")
 	cfg.AdminPassword = os.Getenv("GHOSTCAM_ADMIN_PASSWORD")
 	cfg.PublicURL = os.Getenv("GHOSTCAM_PUBLIC_URL")
+	cfg.PublicIP = os.Getenv("GHOSTCAM_PUBLIC_IP")
 
 	// Stripe (env only — sensitive)
 	cfg.StripeSecretKey = os.Getenv("STRIPE_SECRET_KEY")

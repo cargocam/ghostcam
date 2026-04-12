@@ -37,7 +37,7 @@
 		}>
 			<ToggleGroupItem value="live">
 				<Video class="h-3.5 w-3.5 sm:mr-1" />
-				<span class="text-xs hidden sm:inline">LIVE</span>
+				<span class="text-xs hidden sm:inline">VIDEO</span>
 			</ToggleGroupItem>
 			<ToggleGroupItem value="map">
 				<Map class="h-3.5 w-3.5 sm:mr-1" />

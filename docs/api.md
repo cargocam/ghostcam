@@ -32,8 +32,36 @@ DELETE /api/v1/cameras/:id                 Delete camera
 
 POST   /api/v1/cameras/:id/telemetry       Camera telemetry POST (camera auth) → returns pending commands
 POST   /api/v1/cameras/:id/presign         Request presigned S3 URLs + confirm uploads (camera auth)
+GET    /api/v1/cameras/:id/live            WebSocket upgrade for live H.264 relay (camera auth)
 POST   /api/v1/cameras/provision            Camera provisioning with one-time token (rate limited: 10/min per IP)
 ```
+
+## WebRTC (WHEP)
+
+Low-latency live viewing via WebRTC. The server acts as an ICE-lite SFU
+relaying H.264 from the camera's WebSocket to viewers.
+
+```
+POST   /api/v1/whep/:deviceID              SDP offer (application/sdp) → SDP answer + Location header
+DELETE /api/v1/whep/:deviceID/:sessionID    Tear down viewer session
+```
+
+### Camera Live WebSocket Protocol
+
+Camera connects to `GET /api/v1/cameras/:id/live` (WebSocket upgrade) with bearer auth.
+
+**Text frames** (JSON control messages):
+- Camera → Server: `{"type": "ready"}` (sent after connect)
+- Server → Camera: `{"type": "start_stream"}` (first viewer connected)
+- Server → Camera: `{"type": "stop_stream"}` (last viewer disconnected)
+
+**Binary frames** (media, camera → server only):
+- Bytes 0-3: timestamp (uint32 big-endian, ms since arbitrary epoch)
+- Byte 4: flags (bit 0 = is_keyframe/video, bit 1 = is_audio)
+- Bytes 5+: payload (H.264 NAL unit when !is_audio, Opus packet when is_audio)
+
+Audio: ffmpeg encodes ALSA input to Opus (32kbps, low-delay, 20ms frames)
+alongside the AAC used for HLS segments. Opus adds ~4 KB/s to the WebSocket.
 
 ## Telemetry
 

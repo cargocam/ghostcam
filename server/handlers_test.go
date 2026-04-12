@@ -33,24 +33,31 @@ func TestCameraLimitAllowed(t *testing.T) {
 		wantAllow bool
 	}{
 		{
-			name:      "free tier, 1 camera, first camera allowed",
+			name:      "free tier, 5 cameras, all three allowed",
 			cameras:   []string{"cam-1", "cam-2", "cam-3"},
 			tier:      free,
 			deviceID:  "cam-1",
 			wantAllow: true,
 		},
 		{
-			name:      "free tier, 1 camera, second camera blocked",
+			name:      "free tier, 5 cameras, second allowed",
 			cameras:   []string{"cam-1", "cam-2", "cam-3"},
 			tier:      free,
 			deviceID:  "cam-2",
-			wantAllow: false,
+			wantAllow: true,
 		},
 		{
-			name:      "free tier, 1 camera, third camera blocked",
+			name:      "free tier, 5 cameras, third allowed",
 			cameras:   []string{"cam-1", "cam-2", "cam-3"},
 			tier:      free,
 			deviceID:  "cam-3",
+			wantAllow: true,
+		},
+		{
+			name:      "free tier, 5 cameras, sixth blocked",
+			cameras:   []string{"cam-1", "cam-2", "cam-3", "cam-4", "cam-5", "cam-6"},
+			tier:      free,
+			deviceID:  "cam-6",
 			wantAllow: false,
 		},
 		{

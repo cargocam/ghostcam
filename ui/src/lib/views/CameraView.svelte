@@ -5,7 +5,7 @@
 	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 	import { clipStore } from '$lib/stores/clip.svelte.js';
 	import { reportClientLog } from '$lib/stores/dev.svelte.js';
-	import HlsPlayer from '$lib/components/HlsPlayer.svelte';
+	import LivePlayer from '$lib/components/LivePlayer.svelte';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { ArrowLeft, Maximize, Minimize, Volume2, VolumeOff, Camera, PictureInPicture2 } from 'lucide-svelte';
 	import { cn } from '$lib/utils.js';
@@ -40,6 +40,9 @@
 		}
 		const target = scrubberStore.seekTarget;
 		if (target === null) return `/hls/${id}/live.m3u8`;
+		// If scrubbed within 30s of now, snap to live manifest so hls.js
+		// polls for new segments instead of stopping at EXT-X-ENDLIST.
+		if (Date.now() / 1000 - target < 30) return `/hls/${id}/live.m3u8`;
 		const from = Math.floor(target * 1000);
 		const to = from + 30 * 60 * 1000;
 		return `/hls/${id}/vod.m3u8?from=${from}&to=${to}`;
@@ -54,6 +57,7 @@
 	let isFullscreen = $state(false);
 	let containerEl = $state<HTMLDivElement | undefined>(undefined);
 	let videoElement = $state<HTMLVideoElement | undefined>(undefined);
+	let webrtcActive = $state(false);
 
 	function goBack() {
 		settingsStore.closeCameraView();
@@ -173,7 +177,8 @@
 		onclick={resetOverlayTimer}
 	>
 		<div class="absolute inset-0">
-			<HlsPlayer
+			<LivePlayer
+				deviceId={cameraId ?? ''}
 				src={hlsSrc}
 				muted={isMuted}
 				seekTo={clipSnapshot ? clipSnapshot.seekTo : (scrubberStore.seekTarget ?? -1)}
@@ -182,6 +187,7 @@
 				loopSeekRevision={clipStore.seekRevision}
 				mode={streamMode}
 				bind:videoEl={videoElement}
+				bind:webrtcActive
 				onError={(err) => {
 					console.warn(`HLS error (CameraView) for ${cameraId}:`, err);
 					reportClientLog({
@@ -228,7 +234,7 @@
 								: streamMode === 'vod'
 									? "bg-sky-400/20 text-sky-400"
 									: camera.online
-										? "bg-primary/20 text-primary"
+										? (webrtcActive ? "bg-primary/20 text-primary" : "bg-orange-400/20 text-orange-400")
 										: "bg-white/10 text-white/40"
 						)}>
 							{streamMode === 'clip'
@@ -236,7 +242,7 @@
 								: streamMode === 'vod'
 									? 'PLAYBACK'
 									: camera.online
-										? 'LIVE'
+										? (webrtcActive ? 'LIVE' : 'DELAYED')
 										: 'OFFLINE'}
 						</span>
 					</div>

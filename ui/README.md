@@ -1,6 +1,6 @@
 # Ghostcam Viewer
 
-Svelte 5 SPA for the Ghostcam surveillance system. Provides live WebRTC video viewing, HLS playback of recorded footage with a timeline scrubber, a GPS map, telemetry dashboards, and camera management.
+Svelte 5 SPA for the Ghostcam surveillance system. Provides hybrid WebRTC/HLS live viewing (sub-second latency via WebRTC with automatic HLS fallback), HLS playback of recorded footage with a timeline scrubber, a GPS map, telemetry dashboards, and camera management.
 
 ## Setup
 
@@ -28,8 +28,8 @@ The Vite dev server proxies `/api`, `/hls`, and `/events` to the server at `:300
 
 - Password-protected login (session cookie)
 - Multi-camera grid — auto-fit and 1+5 featured layouts
-- Live WebRTC video + audio with per-camera mute (one camera at a time)
-- HLS playback mode — switches each camera card from WebRTC to HLS player
+- Hybrid WebRTC/HLS live viewing — WebRTC for sub-second latency, automatic HLS fallback
+- Badge shows "LIVE" (WebRTC active, green) or "DELAYED" (HLS fallback, orange)
 - Timeline scrubber — global playhead for navigating recorded footage and historical telemetry
 - Telemetry history — fetch and display CPU, memory, temperature, GPS at any past point in time
 - GPS map with camera markers and playback trail overlay
@@ -44,15 +44,13 @@ The Vite dev server proxies `/api`, `/hls`, and `/events` to the server at `:300
 
 ### Transport Layer
 
-Camera events and state arrive via **Server-Sent Events** (`/events`), not WebRTC data channel. Each camera's live video and audio arrive via a separate **WebRTC** `RTCPeerConnection` (`/api/v1/watch`). Historical telemetry is fetched on demand via the **REST API** (`/api/v1/telemetry/:id`).
-
-`connection-manager.ts` ties these together: on SSE `camera_online`, a `WebRtcSession` is created for that camera. On `camera_offline`, the session is torn down.
+Camera events and state arrive via **Server-Sent Events** (`/events`). Live video uses a **hybrid WebRTC/HLS** approach: the `LivePlayer` component renders both an `HlsPlayer` (always running) and a `WebRtcPlayer` (live mode only). When WebRTC connects (via WHEP: `POST /api/v1/whep/:deviceID`), it overlays the HLS player for sub-second latency. On WebRTC failure, the already-buffered HLS stream shows instantly. Historical telemetry is fetched on demand via the **REST API** (`/api/v1/telemetry/:id`).
 
 ### Stores
 
 | Store | File | Purpose |
 |-------|------|---------|
-| `transportStore` | `transport.svelte.ts` | SSE connection, WebRTC session map, authentication state |
+| `transportStore` | `transport.svelte.ts` | SSE connection, authentication state |
 | `cameraStore` | `cameras.svelte.ts` | Camera registry, live streams, telemetry, online status, selection |
 | `scrubberStore` | `scrubber.svelte.ts` | Timeline mode (`live`/`playback`), playhead time, mode change callbacks |
 | `groupStore` | `groups.svelte.ts` | Group list and active group |
@@ -60,7 +58,7 @@ Camera events and state arrive via **Server-Sent Events** (`/events`), not WebRT
 | `alertStore` | `alerts.svelte.ts` | Disconnect/reconnect event log |
 | `clipStore` | `clip.svelte.ts` | Clip mode state: range, phase, progress, seekRevision |
 | `cameraConfigStore` | `cameraConfig.svelte.ts` | Per-camera display name overrides (localStorage) |
-| `videoStatsStore` | `videoStats.svelte.ts` | Per-track WebRTC inbound-rtp stats |
+| `videoStatsStore` | `videoStats.svelte.ts` | Per-track inbound-rtp stats |
 | `thumbnailStore` | `thumbnails.svelte.ts` | Canvas-captured frame thumbnails (data URLs) |
 
 ### Key Library Files
@@ -69,24 +67,27 @@ Camera events and state arrive via **Server-Sent Events** (`/events`), not WebRT
 |------|---------|
 | `auth.ts` | Login, logout, session check |
 | `sse.ts` | SSE client — parses events, drives cameraStore and transportStore |
-| `signaling.ts` | `watchCamera` / `unwatchCamera` — WebRTC SDP exchange with server; `fetchTelemetryRangeCached`; `prepareClip`; `exportTelemetry` |
+| `signaling.ts` | API client helpers — `listCameras`, `fetchCoverage`, billing, events, clips, telemetry |
 | `ffmpeg.ts` | Lazy-loaded ffmpeg.wasm 0.11.x — `concatSegments()` downloads TS segments, remuxes to MP4 |
-| `webrtc.ts` | `WebRtcSession` — `RTCPeerConnection` per camera, ICE candidate handling, `stripCandidates()` for Firefox mDNS compat |
-| `connection-manager.ts` | Orchestrates SSE events → WebRTC session lifecycle |
 | `telemetry-history.ts` | Fetch telemetry time ranges from API with in-memory cache; `nearestTelemetryEntryWithin` |
 
 ### Views
 
 | View | Description |
 |------|-------------|
-| `LiveView` | Camera grid — WebRTC or HLS per card depending on scrubber mode. Online cameras sorted first. |
+| `LiveView` | Camera grid — LivePlayer per card (hybrid WebRTC+HLS). Online cameras sorted first. |
 | `CameraView` | Single fullscreen camera — keyboard shortcuts F/M/S/P/Esc |
 | `MapView` | Leaflet map with camera markers at live or historical GPS positions; playback trail overlay |
 | `DashboardView` | Aggregate telemetry — stats panels and sparklines, historical data on scrub |
 
-### Firefox WebRTC Note
+### WebRTC Components
 
-Firefox obfuscates ICE candidates as mDNS hostnames (e.g. `a1b2c3.local`). `webrtc.ts` strips all `a=candidate` lines from the SDP offer before posting it to the server — safe because the server is ICE-lite and ignores browser candidates entirely. The server's `GHOSTCAM_PUBLIC_IP` must be a reachable LAN IP (not `127.0.0.1`) so Firefox can send STUN from its LAN-bound UDP socket.
+| Component | Description |
+|-----------|-------------|
+| `WebRtcPlayer.svelte` | WHEP client — creates `RTCPeerConnection`, POSTs SDP offer to `/api/v1/whep/:id`, receives answer. Retries 3 times then gives up. |
+| `LivePlayer.svelte` | Orchestrator — always renders `HlsPlayer`, overlays `WebRtcPlayer` in live mode. Shows WebRTC when connected, falls back to HLS instantly. |
+
+No TURN server or STUN configuration needed — the server is ICE-lite with a known public IP (`GHOSTCAM_PUBLIC_IP`). If a viewer's network blocks UDP, WebRTC fails silently and HLS takes over.
 
 ## E2E Testing
 

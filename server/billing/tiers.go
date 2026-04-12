@@ -51,8 +51,8 @@ const FreeTierID = "free"
 var FreeTier = Tier{
 	ID:             FreeTierID,
 	Name:           "Free",
-	CameraLimit:    intPtr(1),
-	StorageLimitGB: intPtr(5),
+	CameraLimit:    intPtr(5),
+	StorageLimitGB: intPtr(50),
 }
 
 // LegacyTierNames is the set of pre-refactor tier identifiers that may

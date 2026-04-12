@@ -28,7 +28,7 @@ CMD ["bun", "run", "dev"]
 
 # --- Camera target (test/Docker — synthetic sensors) ---
 FROM alpine:3.21 AS camera
-RUN apk add --no-cache ca-certificates ffmpeg wget
+RUN apk add --no-cache ca-certificates ffmpeg wget font-dejavu tzdata
 COPY --from=builder /ghostcam-camera-synthetic /usr/local/bin/ghostcam-camera
 COPY docker/camera-entrypoint.sh /usr/local/bin/camera-entrypoint.sh
 ENTRYPOINT ["camera-entrypoint.sh"]
