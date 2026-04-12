@@ -66,6 +66,31 @@ func WaitForRoute(ctx context.Context) {
 	}
 }
 
+// WaitForRouteTimeout waits up to timeout for a default route to appear.
+// Returns true if a route was found, false if the timeout or context expired.
+func WaitForRouteTimeout(ctx context.Context, timeout time.Duration) bool {
+	if readDefaultInterface() != "" {
+		return true
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-ticker.C:
+			if readDefaultInterface() != "" {
+				return true
+			}
+		}
+	}
+}
+
 // readDefaultInterface reads the default route interface from /proc/net/route.
 func readDefaultInterface() string {
 	data, err := os.ReadFile("/proc/net/route")
