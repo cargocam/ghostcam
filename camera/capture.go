@@ -57,7 +57,7 @@ func runTestPipeline(ctx context.Context, cfg *CameraConfig, pattern, kfInterval
 	slog.Info("starting test capture pipeline (ffmpeg testsrc2 + sine audio)", "segment_start", startNum)
 
 	size := fmt.Sprintf("%dx%d", cfg.VideoWidth, cfg.VideoHeight)
-	videoInput := fmt.Sprintf("testsrc2=size=%s:rate=%d", size, cfg.VideoFPS)
+	videoInput := fmt.Sprintf("testsrc2=size=%s:rate=%d,drawtext=fontfile=/usr/share/fonts/dejavu/DejaVuSansMono.ttf:text='%%{localtime\\:%%T}':fontsize=48:fontcolor=white:x=10:y=10", size, cfg.VideoFPS)
 	audioInput := "sine=frequency=440:sample_rate=48000"
 
 	// Create pipe for Opus audio output (fd 3 inside ffmpeg).

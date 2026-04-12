@@ -124,6 +124,7 @@ services:
       - GHOSTCAM_SERVER_URL=http://server:3000
       - GHOSTCAM_ADMIN_EMAIL=admin@ghostcam.dev
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
+      - TZ=${TZ:-America/Los_Angeles}
     volumes:
       - camera-1-data:/var/ghostcam
     command: ["--test-source"]
@@ -140,6 +141,7 @@ services:
       - GHOSTCAM_SERVER_URL=http://server:3000
       - GHOSTCAM_ADMIN_EMAIL=admin@ghostcam.dev
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
+      - TZ=${TZ:-America/Los_Angeles}
     volumes:
       - camera-2-data:/var/ghostcam
     command: ["--test-source"]
@@ -156,6 +158,7 @@ services:
       - GHOSTCAM_SERVER_URL=http://server:3000
       - GHOSTCAM_ADMIN_EMAIL=admin@ghostcam.dev
       - GHOSTCAM_ADMIN_PASSWORD=dev-password
+      - TZ=${TZ:-America/Los_Angeles}
     volumes:
       - camera-3-data:/var/ghostcam
     command: ["--test-source"]

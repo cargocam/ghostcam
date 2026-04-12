@@ -18,11 +18,11 @@ func TestCacheGet_Free(t *testing.T) {
 	if tier.Name != "Free" {
 		t.Errorf("Free tier Name = %q, want %q", tier.Name, "Free")
 	}
-	if tier.CameraLimit == nil || *tier.CameraLimit != 1 {
-		t.Errorf("Free tier CameraLimit = %v, want 1", tier.CameraLimit)
+	if tier.CameraLimit == nil || *tier.CameraLimit != 5 {
+		t.Errorf("Free tier CameraLimit = %v, want 5", tier.CameraLimit)
 	}
-	if tier.StorageLimitBytes() != 5*1024*1024*1024 {
-		t.Errorf("Free tier StorageLimitBytes = %d, want 5 GiB", tier.StorageLimitBytes())
+	if tier.StorageLimitBytes() != 50*1024*1024*1024 {
+		t.Errorf("Free tier StorageLimitBytes = %d, want 50 GiB", tier.StorageLimitBytes())
 	}
 
 	// Empty string is treated as the free tier (defensive for DB rows that
@@ -209,8 +209,8 @@ func TestParseLimit(t *testing.T) {
 
 func TestStorageLimitBytes(t *testing.T) {
 	// Free tier: finite limit, multiplied into bytes.
-	if FreeTier.StorageLimitBytes() != 5*1024*1024*1024 {
-		t.Errorf("free tier storage = %d, want 5 GiB", FreeTier.StorageLimitBytes())
+	if FreeTier.StorageLimitBytes() != 50*1024*1024*1024 {
+		t.Errorf("free tier storage = %d, want 50 GiB", FreeTier.StorageLimitBytes())
 	}
 
 	// Nil limit: treated as unlimited, returned as zero so callers can

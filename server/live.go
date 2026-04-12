@@ -120,10 +120,8 @@ func (ls *LiveSession) push(frame MediaFrame) {
 		switch nalType {
 		case 7: // SPS
 			ls.sps = append([]byte(nil), frame.Data...)
-			return // sent to new viewers on subscribe, not fanned out
 		case 8: // PPS
 			ls.pps = append([]byte(nil), frame.Data...)
-			return
 		case 5: // IDR
 			frame.IsKeyframe = true
 			ls.keyframe = &frame
@@ -178,6 +176,9 @@ func (a *App) CameraLiveWS(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.CloseNow()
 
+	// H.264 keyframes (IDR NALs) can exceed the default 32KB read limit.
+	conn.SetReadLimit(2 * 1024 * 1024) // 2MB
+
 	ctx := r.Context()
 
 	// Wait for "ready" message from camera.
@@ -224,6 +225,7 @@ func (a *App) CameraLiveWS(w http.ResponseWriter, r *http.Request) {
 	for {
 		msgType, data, err := conn.Read(ctx)
 		if err != nil {
+			slog.Warn("live: camera read error", "device_id", deviceID, "error", err)
 			return
 		}
 

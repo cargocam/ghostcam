@@ -6,17 +6,17 @@ import (
 	"log/slog"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
-	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
+	"github.com/pion/webrtc/v4/pkg/media"
 )
 
 const (
 	h264ClockRate = 90000
 	opusClockRate = 48000
-	maxNALSize    = 1200
 )
 
 // whepSession tracks one viewer's WebRTC peer connection.
@@ -24,8 +24,8 @@ type whepSession struct {
 	id         string
 	deviceID   string
 	pc         *webrtc.PeerConnection
-	videoTrack *webrtc.TrackLocalStaticRTP
-	audioTrack *webrtc.TrackLocalStaticRTP
+	videoTrack *webrtc.TrackLocalStaticSample
+	audioTrack *webrtc.TrackLocalStaticSample
 	viewerID   uint64
 	viewerChan <-chan MediaFrame
 	done       chan struct{}
@@ -82,11 +82,12 @@ func (a *App) WHEPOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Video track: H.264
-	videoTrack, err := webrtc.NewTrackLocalStaticRTP(
+	// Video track: H.264 via sample-based API (pion handles RTP packetization).
+	videoTrack, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{
-			MimeType:  webrtc.MimeTypeH264,
-			ClockRate: h264ClockRate,
+			MimeType:    webrtc.MimeTypeH264,
+			ClockRate:   h264ClockRate,
+			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01f",
 		},
 		"video",
 		"ghostcam-"+deviceID,
@@ -104,8 +105,8 @@ func (a *App) WHEPOffer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Audio track: Opus
-	audioTrack, err := webrtc.NewTrackLocalStaticRTP(
+	// Audio track: Opus via sample-based API.
+	audioTrack, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{
 			MimeType:  webrtc.MimeTypeOpus,
 			ClockRate: opusClockRate,
@@ -154,7 +155,7 @@ func (a *App) WHEPOffer(w http.ResponseWriter, r *http.Request) {
 	viewerID, viewerChan := session.subscribe()
 
 	if session.viewerCount() == 1 {
-		sendStreamControl(r.Context(), session.cameraConn, "start_stream")
+		sendStreamControl(context.Background(), session.cameraConn, "start_stream")
 	}
 
 	sessionID := uuid.New().String()
@@ -228,12 +229,11 @@ func (a *App) cleanupWHEPSession(sessionID string) {
 }
 
 // forwardToTrack reads media frames from the live session and writes
-// them as RTP packets to the appropriate WebRTC track.
+// them as samples to the appropriate WebRTC track. Pion handles RTP
+// packetization (FU-A fragmentation, timestamps, marker bits).
 func (a *App) forwardToTrack(ws *whepSession) {
-	var videoSeq uint16
-	var audioSeq uint16
-	var videoTS uint32
-	var audioTS uint32
+	frameDuration := time.Second / 30 // ~33ms at 30fps
+	audioDuration := 20 * time.Millisecond
 
 	for {
 		select {
@@ -245,114 +245,20 @@ func (a *App) forwardToTrack(ws *whepSession) {
 			}
 
 			if frame.IsAudio {
-				// Opus: each packet is one frame. Advance timestamp by
-				// 960 samples (20ms at 48kHz).
-				audioTS += 960
-				pkt := &rtp.Packet{
-					Header: rtp.Header{
-						Version:        2,
-						PayloadType:    111, // dynamic PT for Opus
-						SequenceNumber: audioSeq,
-						Timestamp:      audioTS,
-						SSRC:           2,
-						Marker:         true,
-					},
-					Payload: frame.Data,
-				}
-				raw, err := pkt.Marshal()
-				if err != nil {
-					continue
-				}
-				if _, err := ws.audioTrack.Write(raw); err != nil {
+				if err := ws.audioTrack.WriteSample(media.Sample{
+					Data:     frame.Data,
+					Duration: audioDuration,
+				}); err != nil {
 					return
 				}
-				audioSeq++
 			} else {
-				// H.264: advance by one frame period (~3000 ticks at 30fps).
-				videoTS += h264ClockRate / 30
-				packets := packetizeNAL(frame.Data, videoSeq, videoTS, 1, 96)
-				for _, pkt := range packets {
-					raw, err := pkt.Marshal()
-					if err != nil {
-						continue
-					}
-					if _, err := ws.videoTrack.Write(raw); err != nil {
-						return
-					}
-					videoSeq++
+				if err := ws.videoTrack.WriteSample(media.Sample{
+					Data:     frame.Data,
+					Duration: frameDuration,
+				}); err != nil {
+					return
 				}
 			}
 		}
 	}
-}
-
-// packetizeNAL wraps an H.264 NAL unit into one or more RTP packets.
-func packetizeNAL(nal []byte, startSeq uint16, ts uint32, ssrc uint32, pt uint8) []*rtp.Packet {
-	if len(nal) == 0 {
-		return nil
-	}
-
-	if len(nal) <= maxNALSize {
-		return []*rtp.Packet{{
-			Header: rtp.Header{
-				Version:        2,
-				PayloadType:    pt,
-				SequenceNumber: startSeq,
-				Timestamp:      ts,
-				SSRC:           ssrc,
-				Marker:         true,
-			},
-			Payload: nal,
-		}}
-	}
-
-	// FU-A fragmentation (RFC 6184 Section 5.8).
-	nalHeader := nal[0]
-	nalType := nalHeader & 0x1F
-	nri := nalHeader & 0x60
-
-	payload := nal[1:]
-	var packets []*rtp.Packet
-	seq := startSeq
-	first := true
-
-	for len(payload) > 0 {
-		chunkSize := maxNALSize - 2
-		if chunkSize > len(payload) {
-			chunkSize = len(payload)
-		}
-
-		fuIndicator := nri | 28
-		fuHeader := nalType
-		if first {
-			fuHeader |= 0x80
-			first = false
-		}
-		if chunkSize == len(payload) {
-			fuHeader |= 0x40
-		}
-
-		chunk := make([]byte, 2+chunkSize)
-		chunk[0] = fuIndicator
-		chunk[1] = fuHeader
-		copy(chunk[2:], payload[:chunkSize])
-
-		isLast := chunkSize == len(payload)
-		packets = append(packets, &rtp.Packet{
-			Header: rtp.Header{
-				Version:        2,
-				PayloadType:    pt,
-				SequenceNumber: seq,
-				Timestamp:      ts,
-				SSRC:           ssrc,
-				Marker:         isLast,
-			},
-			Payload: chunk,
-		})
-
-		payload = payload[chunkSize:]
-		seq++
-	}
-
-	return packets
 }

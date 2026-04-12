@@ -40,6 +40,9 @@
 		}
 		const target = scrubberStore.seekTarget;
 		if (target === null) return `/hls/${id}/live.m3u8`;
+		// If scrubbed within 30s of now, snap to live manifest so hls.js
+		// polls for new segments instead of stopping at EXT-X-ENDLIST.
+		if (Date.now() / 1000 - target < 30) return `/hls/${id}/live.m3u8`;
 		const from = Math.floor(target * 1000);
 		const to = from + 30 * 60 * 1000;
 		return `/hls/${id}/vod.m3u8?from=${from}&to=${to}`;

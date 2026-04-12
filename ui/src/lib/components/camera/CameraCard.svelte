@@ -97,6 +97,7 @@
 		}
 		const target = scrubberStore.seekTarget;
 		if (target === null) return `/hls/${id}/live.m3u8`;
+		if (Date.now() / 1000 - target < 30) return `/hls/${id}/live.m3u8`;
 		if (!hasCoverageAtSeek) return '';
 		const from = Math.floor(target * 1000);
 		const to = from + 30 * 60 * 1000;

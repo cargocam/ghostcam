@@ -14,7 +14,6 @@
 	const MIN_WINDOW_SECS = 5 * 60;
 	const ZOOMED_WINDOW_SECS = 600;
 	const LIVE_MARGIN_SECS = 5;
-	const SEEK_MARGIN_SECS = 30;
 	const GAP_THRESHOLD = 30;
 	const ZOOM_DELAY_MS = 1800;
 	const ZOOM_DURATION_MS = 600;
@@ -30,7 +29,7 @@
 	let zoomOverride = $state<{ start: number; end: number } | null>(null);
 	let isZoomed = $derived(zoomOverride !== null);
 
-	let margin = $derived(scrubberStore.isLive ? LIVE_MARGIN_SECS : SEEK_MARGIN_SECS);
+	const margin = LIVE_MARGIN_SECS;
 
 	let naturalEnd = $derived((scrubberStore.isLive ? scrubberStore.playheadTime : frozenEnd) + margin);
 	let naturalStart = $derived.by(() => {

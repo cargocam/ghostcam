@@ -80,13 +80,19 @@
 		});
 	}
 
-	// Reflect the video's actual paused state in `needsUserPlay` so the
-	// tap-to-resume overlay appears whenever playback halts (autoplay
-	// rejection, decode error, reaching VOD end, etc.).
+	// On pause, try to auto-resume. Buffer stalls cause transient
+	// pauses — a quick play() call resumes without user interaction.
+	// Only show the play overlay if play() is rejected (autoplay policy).
 	$effect(() => {
 		if (!videoEl) return;
 		const el = videoEl;
-		const onPause = () => { needsUserPlay = true; };
+		const onPause = () => {
+			el.play().then(() => {
+				needsUserPlay = false;
+			}).catch(() => {
+				needsUserPlay = true;
+			});
+		};
 		const onPlaying = () => { needsUserPlay = false; };
 		el.addEventListener('pause', onPause);
 		el.addEventListener('playing', onPlaying);
