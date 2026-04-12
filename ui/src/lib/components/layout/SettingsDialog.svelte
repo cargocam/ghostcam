@@ -32,6 +32,11 @@
 	let isFree = $derived(billingStore.currentTier === 'free');
 	let paidTiers = $derived(billingStore.paidTiers);
 
+	// Upgrade dialog state. The settings panel only shows a single
+	// "Upgrade" button — clicking it opens a dialog with the tier
+	// picker instead of inlining the cards in the panel.
+	let upgradeOpen = $state(false);
+
 	// Change email dialog state (stubbed — not yet implemented on the backend)
 	let changeEmailOpen = $state(false);
 	// Delete account dialog state (stubbed — not yet implemented on the backend)
@@ -206,33 +211,22 @@
 						</div>
 					{/if}
 
-					<!-- Actions -->
+					<!-- Actions: one button. On free, it opens the tier
+					     picker dialog; on a paid plan, it jumps to the
+					     Stripe Customer Portal. -->
 					{#if isFree}
-						<p class="text-xs text-muted-foreground mb-2">Upgrade to a paid plan</p>
-						<div class="space-y-2">
-							{#each paidTiers as tier (tier.id)}
-								<div class="rounded-md border p-3">
-									<div class="flex items-center justify-between gap-2 mb-1">
-										<span class="text-sm font-medium">{tier.name}</span>
-										<span class="text-xs text-muted-foreground whitespace-nowrap">
-											{formatTierPrice(tier)}
-										</span>
-									</div>
-									<div class="text-[11px] text-muted-foreground mb-2">
-										{formatCameraLimit(tier)} · {formatStorageLimit(tier)}
-									</div>
-									<Button
-										size="sm"
-										class="w-full"
-										disabled={billingStore.actionInFlight}
-										onclick={() => billingStore.checkout(tier.id)}
-									>
-										{billingStore.actionInFlight ? 'Opening…' : `Choose ${tier.name}`}
-										<ExternalLink class="h-3.5 w-3.5 ml-1.5" />
-									</Button>
-								</div>
-							{/each}
-						</div>
+						<Button
+							class="w-full"
+							disabled={paidTiers.length === 0}
+							onclick={() => (upgradeOpen = true)}
+						>
+							Upgrade
+						</Button>
+						{#if paidTiers.length === 0}
+							<p class="text-xs text-muted-foreground mt-2">
+								No paid tiers are currently available.
+							</p>
+						{/if}
 					{:else}
 						<Button
 							variant="outline"
@@ -478,6 +472,60 @@
 		</DialogHeader>
 		<div class="flex justify-end mt-4">
 			<Button type="button" onclick={() => (deleteAccountOpen = false)}>Close</Button>
+		</div>
+	</DialogContent>
+</Dialog>
+
+<!-- Upgrade dialog: opened from the single "Upgrade" button in the
+     billing section for free-tier users. Shows the same tier cards
+     the panel used to render inline, one per available paid tier. -->
+<Dialog bind:open={upgradeOpen}>
+	<DialogContent>
+		<DialogHeader>
+			<DialogTitle class="flex items-center gap-2">
+				<CreditCard class="h-4 w-4" />
+				Upgrade to a paid plan
+			</DialogTitle>
+			<DialogDescription>
+				Pick a tier to start a Stripe Checkout. You can change or cancel
+				later via Manage Subscription.
+			</DialogDescription>
+		</DialogHeader>
+		<div class="space-y-2 mt-2">
+			{#each paidTiers as tier (tier.id)}
+				<div class="rounded-md border p-3">
+					<div class="flex items-center justify-between gap-2 mb-1">
+						<span class="text-sm font-medium">{tier.name}</span>
+						<span class="text-xs text-muted-foreground whitespace-nowrap">
+							{formatTierPrice(tier)}
+						</span>
+					</div>
+					<div class="text-[11px] text-muted-foreground mb-2">
+						{formatCameraLimit(tier)} · {formatStorageLimit(tier)}
+					</div>
+					<Button
+						size="sm"
+						class="w-full"
+						disabled={billingStore.actionInFlight}
+						onclick={() => billingStore.checkout(tier.id)}
+					>
+						{billingStore.actionInFlight ? 'Opening…' : `Choose ${tier.name}`}
+						<ExternalLink class="h-3.5 w-3.5 ml-1.5" />
+					</Button>
+				</div>
+			{/each}
+			{#if billingStore.error}
+				<p class="text-xs text-destructive break-words">{billingStore.error}</p>
+			{/if}
+		</div>
+		<div class="flex justify-end mt-4">
+			<Button
+				type="button"
+				variant="outline"
+				onclick={() => (upgradeOpen = false)}
+			>
+				Close
+			</Button>
 		</div>
 	</DialogContent>
 </Dialog>
