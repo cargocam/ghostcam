@@ -258,7 +258,7 @@
 						<a
 							href={selectedImage.download_url}
 							target="_blank"
-							rel="noopener"
+							rel="noopener noreferrer"
 							class={buttonVariants()}
 						>
 							<Download class="h-4 w-4 mr-1.5" /> Download image

@@ -7,11 +7,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/cargocam/ghostcam/server/apitypes"
@@ -20,19 +22,34 @@ import (
 
 // piImageDevices is the fixed set of device slugs we build images for.
 // Kept in sync with the `device` matrix in .github/workflows/release.yml.
+//
+// IMPORTANT: piImageAssetRe below hard-codes the same three slugs in
+// its first capture group. If you add a device here, update the regex
+// in the same commit — both must list the same set.
 var piImageDevices = []string{"zero2w", "pi4", "pi5"}
-
-// maxPiImageSize caps the image body we'll buffer into memory during
-// webhook ingestion. Images compressed with xz typically come in well
-// under 1 GB per device; this upper bound protects the server against a
-// malformed asset size on the release payload.
-const maxPiImageSize = 2 << 30 // 2 GiB
 
 // piImageAssetRe matches release asset names of the form
 // `ghostcam-{device}-{version}.img.xz`, where device is one of the
 // piImageDevices values and version is the release tag (e.g. v0.5.0).
 // device and version are captured for routing + bookkeeping.
 var piImageAssetRe = regexp.MustCompile(`^ghostcam-(zero2w|pi4|pi5)-([^/]+)\.img\.xz$`)
+
+// trustedAssetHostPrefixes is the allow-list of host prefixes we'll
+// follow when pulling a release asset. The webhook payload is HMAC-
+// authenticated so we already know it came from GitHub, but the asset
+// URL is still attacker-controllable in principle (anyone with push
+// access to the repo could craft a release asset pointing elsewhere).
+// Restricting to GitHub's own domains closes the residual SSRF surface.
+var trustedAssetHostPrefixes = []string{
+	"https://github.com/",
+	"https://objects.githubusercontent.com/",
+	"https://api.github.com/",
+}
+
+// maxPiImageSize caps the image body we'll accept from a release asset.
+// Enforced via io.LimitReader. Pi images today run a few hundred MB;
+// 2 GiB is the safety ceiling.
+const maxPiImageSize = 2 << 30 // 2 GiB
 
 // piImageMeta is the JSON value stored at firmware:images:{device} in Redis.
 // Mirrors apitypes.FirmwareMeta for device images.
@@ -60,17 +77,21 @@ type githubReleasePayload struct {
 	} `json:"release"`
 }
 
-// piImageIngestedSummary reports what a webhook ingestion moved into S3.
-type piImageIngestedSummary struct {
-	Device    string `json:"device"`
-	Version   string `json:"version"`
-	SizeBytes int64  `json:"size_bytes"`
-	SHA256    string `json:"sha256"`
+// githubWebhookAccepted is the body we return when the webhook is
+// queued for async ingestion. The actual upload happens in a background
+// goroutine — see note on ingestion latency in GithubWebhook.
+type githubWebhookAccepted struct {
+	Status  string `json:"status"`  // always "accepted"
+	Version string `json:"version"` // release tag we queued
+	Queued  int    `json:"queued"`  // number of matching assets queued
 }
 
-type githubWebhookResponse struct {
-	Ingested []piImageIngestedSummary `json:"ingested"`
-}
+// piIngestionInFlight is a process-wide guard against overlapping
+// ingestion runs. If GitHub redelivers a webhook (e.g. after a 5xx
+// spike elsewhere on the server) we don't want two goroutines racing
+// the same S3 keys. A single in-flight counter is enough: ingestion is
+// idempotent on S3, so worst-case we drop a duplicate redelivery.
+var piIngestionInFlight atomic.Int32
 
 // PiImagesList handles GET /api/v1/firmware/images (public, no auth).
 // Iterates the known devices, reads metadata from Redis, presigns a GET
@@ -115,14 +136,24 @@ func (a *App) PiImagesList(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, apitypes.PiImagesResponse{Images: images})
 }
 
-// GithubWebhook handles POST /api/v1/webhooks/github. Validates the
-// X-Hub-Signature-256 HMAC, and for `release.published` events
-// downloads each matching Pi image asset, uploads it to S3, and writes
-// the metadata to Redis so PiImagesList can serve it.
+// GithubWebhook handles POST /api/v1/webhooks/github.
 //
-// A missing GITHUB_WEBHOOK_SECRET fails closed (403) unless the server
-// is running in a local dev config (no PublicURL), which matches the
-// StripeWebhook handling pattern.
+// Design constraints that shape this handler:
+//
+//   - The HTTP server's WriteTimeout is 60s (see server/main.go). A
+//     single Pi image can be hundreds of MB, and three of them sequentially
+//     blow past that ceiling on any residential-grade upstream.
+//   - GitHub retries non-2xx webhook deliveries, which would cause us
+//     to re-download + re-upload assets we've already persisted.
+//
+// So we validate the signature synchronously, parse + validate the
+// payload synchronously, then kick off ingestion in a background
+// goroutine and return 200 immediately. The goroutine uses
+// context.Background() (not r.Context(), which is cancelled on return)
+// and streams each asset directly from GitHub into S3 via a multipart
+// uploader — no []byte buffering. Partial progress on error is
+// acceptable: S3 writes are idempotent and a later redelivery just
+// overwrites the same keys.
 func (a *App) GithubWebhook(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20)) // 10 MiB — webhook bodies are small JSON
 	if err != nil {
@@ -133,7 +164,9 @@ func (a *App) GithubWebhook(w http.ResponseWriter, r *http.Request) {
 	if a.Config.GithubWebhookSecret != "" {
 		if !verifyGithubSignature(r.Header.Get("X-Hub-Signature-256"), body, a.Config.GithubWebhookSecret) {
 			slog.Warn("github webhook signature verification failed")
-			http.Error(w, "", http.StatusUnauthorized)
+			// 403 (not 401): the request did present a signature, it
+			// just didn't match. No challenge to reissue.
+			http.Error(w, "", http.StatusForbidden)
 			return
 		}
 	} else if a.Config.PublicURL != "" {
@@ -175,26 +208,75 @@ func (a *App) GithubWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ingested, err := a.ingestPiImages(r.Context(), payload.Release.TagName, payload.Release.Assets)
-	if err != nil {
-		slog.Error("github webhook: pi image ingestion failed", "version", payload.Release.TagName, "error", err)
-		http.Error(w, "", http.StatusInternalServerError)
+	// Count matching assets synchronously so the response can tell the
+	// operator how many we queued. We do not download anything yet.
+	matching := filterPiImageAssets(payload.Release.TagName, payload.Release.Assets)
+
+	if piIngestionInFlight.Load() > 0 {
+		slog.Warn("github webhook: ingestion already in flight, dropping redelivery",
+			"version", payload.Release.TagName)
+		writeJSON(w, http.StatusAccepted, githubWebhookAccepted{
+			Status: "already_in_flight", Version: payload.Release.TagName,
+		})
 		return
 	}
 
-	slog.Info("github webhook: pi image ingestion complete",
-		"version", payload.Release.TagName, "ingested_count", len(ingested))
-	writeJSON(w, http.StatusOK, githubWebhookResponse{Ingested: ingested})
+	// Launch ingestion in the background. We intentionally detach from
+	// r.Context(): the HTTP handler is about to return and the ctx
+	// would be cancelled. Use a generous timeout so a single stuck
+	// download can't wedge the goroutine forever.
+	piIngestionInFlight.Add(1)
+	go func(assets []githubReleaseAsset, version string) {
+		defer piIngestionInFlight.Add(-1)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+		defer cancel()
+		if err := a.ingestPiImages(ctx, version, assets); err != nil {
+			slog.Error("github webhook: pi image ingestion failed",
+				"version", version, "error", err)
+			return
+		}
+		slog.Info("github webhook: pi image ingestion complete",
+			"version", version, "count", len(assets))
+	}(matching, payload.Release.TagName)
+
+	writeJSON(w, http.StatusAccepted, githubWebhookAccepted{
+		Status:  "accepted",
+		Version: payload.Release.TagName,
+		Queued:  len(matching),
+	})
 }
 
-// ingestPiImages walks the release assets, downloads the ones that match
-// the ghostcam-{device}-{version}.img.xz pattern, streams them into S3,
-// and stores per-device metadata in Redis. The version must appear in
-// the asset name and match the release tag — this guards against a
-// mismatched asset slipping into the wrong version namespace.
-func (a *App) ingestPiImages(ctx context.Context, tag string, assets []githubReleaseAsset) ([]piImageIngestedSummary, error) {
-	ingested := make([]piImageIngestedSummary, 0, len(piImageDevices))
-	client := &http.Client{Timeout: 10 * time.Minute}
+// filterPiImageAssets returns the subset of assets whose name matches
+// the Pi image pattern for the given tag. Skips assets whose embedded
+// version doesn't match the release tag — guards against a
+// mistakenly-uploaded asset from a previous build slipping into a new
+// release's namespace.
+func filterPiImageAssets(tag string, assets []githubReleaseAsset) []githubReleaseAsset {
+	out := make([]githubReleaseAsset, 0, len(piImageDevices))
+	for _, asset := range assets {
+		m := piImageAssetRe.FindStringSubmatch(asset.Name)
+		if m == nil {
+			continue
+		}
+		if m[2] != tag {
+			slog.Warn("firmware: pi image asset version != release tag, skipping",
+				"asset", asset.Name, "asset_version", m[2], "tag", tag)
+			continue
+		}
+		out = append(out, asset)
+	}
+	return out
+}
+
+// ingestPiImages streams each matching asset directly from GitHub into
+// S3, tees through a SHA-256 hasher so we record the digest without a
+// second pass, and writes per-device metadata to Redis.
+//
+// Runs off-request in a goroutine (see GithubWebhook). Errors on an
+// individual asset short-circuit ingestion — a later redelivery or
+// retag will retry cleanly because S3 writes are idempotent on key.
+func (a *App) ingestPiImages(ctx context.Context, tag string, assets []githubReleaseAsset) error {
+	client := &http.Client{Timeout: 25 * time.Minute}
 
 	for _, asset := range assets {
 		m := piImageAssetRe.FindStringSubmatch(asset.Name)
@@ -203,75 +285,106 @@ func (a *App) ingestPiImages(ctx context.Context, tag string, assets []githubRel
 		}
 		device := m[1]
 		version := m[2]
-		if version != tag {
-			slog.Warn("firmware: pi image asset version != release tag, skipping",
-				"asset", asset.Name, "asset_version", version, "tag", tag)
+
+		if !isTrustedAssetURL(asset.BrowserDownloadURL) {
+			slog.Warn("firmware: skipping asset with untrusted URL",
+				"asset", asset.Name, "url", asset.BrowserDownloadURL)
 			continue
 		}
 
-		data, sha256hex, err := downloadPiImage(ctx, client, asset.BrowserDownloadURL)
+		size, sha256hex, err := a.streamAssetToS3(ctx, client, asset.BrowserDownloadURL, s3.PiImageKey(version, device))
 		if err != nil {
-			return ingested, fmt.Errorf("download %s: %w", asset.Name, err)
+			return fmt.Errorf("%s: %w", asset.Name, err)
 		}
 
-		key := s3.PiImageKey(version, device)
-		if err := a.S3.Upload(ctx, key, data, "application/octet-stream"); err != nil {
-			return ingested, fmt.Errorf("s3 upload %s: %w", key, err)
-		}
-
-		size := int64(len(data))
 		meta, _ := json.Marshal(piImageMeta{
 			Version:   version,
 			SizeBytes: size,
 			SHA256:    sha256hex,
 		})
 		if err := a.Redis.Set(ctx, redisPiImageKey(device), meta, 0).Err(); err != nil {
-			return ingested, fmt.Errorf("redis set %s: %w", redisPiImageKey(device), err)
+			return fmt.Errorf("redis set %s: %w", redisPiImageKey(device), err)
 		}
 
 		slog.Info("firmware: pi image ingested",
 			"device", device, "version", version, "size_bytes", size, "sha256", sha256hex)
-		ingested = append(ingested, piImageIngestedSummary{
-			Device:    device,
-			Version:   version,
-			SizeBytes: size,
-			SHA256:    sha256hex,
-		})
 	}
-
-	return ingested, nil
+	_ = tag // tag is carried for log context in the caller; kept in signature for symmetry
+	return nil
 }
 
-// downloadPiImage GETs the asset, buffers it into memory (bounded by
-// maxPiImageSize), and returns the bytes + hex-encoded SHA-256.
-// GitHub public release assets do not require auth; for private repos a
-// caller would need to inject an Authorization header here.
-func downloadPiImage(ctx context.Context, client *http.Client, url string) ([]byte, string, error) {
+// streamAssetToS3 GETs the asset and streams it into S3 via multipart
+// upload, hashing as it flows through. Never buffers the full body in
+// memory — the s3 manager reads from r in chunks.
+//
+// Returns (size, hex sha256, nil) on success.
+func (a *App) streamAssetToS3(ctx context.Context, client *http.Client, url, key string) (int64, string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, "", err
+		return 0, "", err
 	}
 	req.Header.Set("Accept", "application/octet-stream")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, "", err
+		return 0, "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", fmt.Errorf("asset GET %s returned %d", url, resp.StatusCode)
+		return 0, "", fmt.Errorf("asset GET %s returned %d", url, resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, maxPiImageSize+1))
-	if err != nil {
-		return nil, "", err
-	}
-	if int64(len(data)) > maxPiImageSize {
-		return nil, "", fmt.Errorf("asset exceeds %d bytes", maxPiImageSize)
+	hasher := sha256.New()
+	counter := &countingReader{}
+	// Order: body → size cap → tee(hasher) → counter → uploader.
+	// Hash must see the same bytes the uploader sees, so the tee sits
+	// on the read path the uploader actually consumes.
+	limited := io.LimitReader(resp.Body, maxPiImageSize+1)
+	tee := &teeReader{src: limited, hasher: hasher, counter: counter}
+
+	if err := a.S3.UploadStream(ctx, key, tee, "application/octet-stream"); err != nil {
+		return 0, "", err
 	}
 
-	sum := sha256.Sum256(data)
-	return data, hex.EncodeToString(sum[:]), nil
+	if counter.n > maxPiImageSize {
+		return 0, "", fmt.Errorf("asset exceeds %d bytes", maxPiImageSize)
+	}
+	return counter.n, hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+// teeReader is a tiny io.Reader that updates a hasher and a byte
+// counter on every successful read. Simpler than composing
+// io.TeeReader + a wrapper because we need both side effects.
+type teeReader struct {
+	src     io.Reader
+	hasher  hash.Hash
+	counter *countingReader
+}
+
+func (t *teeReader) Read(p []byte) (int, error) {
+	n, err := t.src.Read(p)
+	if n > 0 {
+		// hash.Hash.Write never fails.
+		_, _ = t.hasher.Write(p[:n])
+		t.counter.n += int64(n)
+	}
+	return n, err
+}
+
+// countingReader tracks bytes that passed through a teeReader.
+type countingReader struct{ n int64 }
+
+// isTrustedAssetURL returns true if url points at one of GitHub's own
+// hosts. The webhook is HMAC-authenticated so the URL itself is under
+// GitHub admin control, but a lax check here would still be a
+// gift-wrapped SSRF vector.
+func isTrustedAssetURL(url string) bool {
+	for _, p := range trustedAssetHostPrefixes {
+		if strings.HasPrefix(url, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // verifyGithubSignature validates the X-Hub-Signature-256 header against

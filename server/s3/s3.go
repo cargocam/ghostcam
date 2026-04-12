@@ -5,10 +5,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/feature/s3/manager"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
@@ -80,6 +82,27 @@ func (c *Client) Upload(ctx context.Context, key string, data []byte, contentTyp
 	})
 	if err != nil {
 		return fmt.Errorf("uploading to S3: %w", err)
+	}
+	return nil
+}
+
+// UploadStream streams an object into S3 via multipart upload, reading
+// from r without buffering the full body in memory. Used for large
+// objects (e.g. Pi device images, hundreds of MB) where Upload's
+// []byte signature would balloon the server's RSS. ContentType is
+// optional — pass "" to let S3 infer.
+func (c *Client) UploadStream(ctx context.Context, key string, r io.Reader, contentType string) error {
+	uploader := manager.NewUploader(c.client)
+	in := &s3.PutObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+		Body:   r,
+	}
+	if contentType != "" {
+		in.ContentType = aws.String(contentType)
+	}
+	if _, err := uploader.Upload(ctx, in); err != nil {
+		return fmt.Errorf("streaming upload to S3: %w", err)
 	}
 	return nil
 }

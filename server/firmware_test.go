@@ -42,6 +42,55 @@ func TestVerifyGithubSignature(t *testing.T) {
 	}
 }
 
+func TestIsTrustedAssetURL(t *testing.T) {
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		{"https://github.com/cargocam/ghostcam/releases/download/v0.5.0/ghostcam-pi4-v0.5.0.img.xz", true},
+		{"https://objects.githubusercontent.com/github-production-release-asset-abc", true},
+		{"https://api.github.com/repos/cargocam/ghostcam/releases/assets/1", true},
+		{"http://github.com/", false},       // http, not https
+		{"https://evil.example/a", false},   // wrong host
+		{"https://githubxcom/a.img.xz", false}, // typosquat
+		{"", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.url, func(t *testing.T) {
+			if got := isTrustedAssetURL(tc.url); got != tc.want {
+				t.Errorf("isTrustedAssetURL(%q) = %v; want %v", tc.url, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFilterPiImageAssets(t *testing.T) {
+	assets := []githubReleaseAsset{
+		{Name: "ghostcam-zero2w-v0.5.0.img.xz", BrowserDownloadURL: "https://github.com/x"},
+		{Name: "ghostcam-pi4-v0.5.0.img.xz", BrowserDownloadURL: "https://github.com/x"},
+		{Name: "ghostcam-pi5-v0.5.0.img.xz", BrowserDownloadURL: "https://github.com/x"},
+		{Name: "ghostcam-camera-aarch64", BrowserDownloadURL: "https://github.com/x"}, // irrelevant
+		{Name: "ghostcam-pi4-v0.4.9.img.xz", BrowserDownloadURL: "https://github.com/x"}, // wrong version
+	}
+	got := filterPiImageAssets("v0.5.0", assets)
+	if len(got) != 3 {
+		t.Fatalf("len(filtered) = %d; want 3", len(got))
+	}
+	names := map[string]bool{}
+	for _, a := range got {
+		names[a.Name] = true
+	}
+	for _, want := range []string{
+		"ghostcam-zero2w-v0.5.0.img.xz",
+		"ghostcam-pi4-v0.5.0.img.xz",
+		"ghostcam-pi5-v0.5.0.img.xz",
+	} {
+		if !names[want] {
+			t.Errorf("missing %q in filtered output", want)
+		}
+	}
+}
+
 func TestPiImageAssetRegex(t *testing.T) {
 	tests := []struct {
 		name       string
