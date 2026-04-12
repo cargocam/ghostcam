@@ -10,7 +10,7 @@ require (
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.1
-	github.com/pion/rtp v1.10.1
+	github.com/makiuchi-d/gozxing v0.1.1
 	github.com/pion/webrtc/v4 v4.2.11
 	github.com/redis/go-redis/v9 v9.18.0
 	github.com/stripe/stripe-go/v82 v82.5.1
@@ -37,6 +37,11 @@ require (
 	github.com/wlynxg/anet v0.0.5 // indirect
 	golang.org/x/net v0.51.0 // indirect
 	golang.org/x/time v0.10.0 // indirect
+)
+
+require (
+	github.com/pion/rtp v1.10.1 // indirect
+	golang.org/x/xerrors v0.0.0-20200804184101-5ec99f83aff1 // indirect
 )
 
 require (

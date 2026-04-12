@@ -35,14 +35,21 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	WaitForRoute(ctx)
-
 	deviceSerial := GetDeviceSerial(cfg.DataDir)
 	slog.Info("device identity", "serial", deviceSerial)
 	SetGPSSeed(deviceSerial)
 
 	creds := LoadCredentials(cfg.DataDir)
-	if creds == nil {
+	if creds != nil {
+		// Already provisioned — block until network is up.
+		WaitForRoute(ctx)
+	} else {
+		// Not provisioned — try briefly for existing network, then enter provisioning.
+		// QR scanning may provide WiFi credentials, so don't block forever.
+		if !WaitForRouteTimeout(ctx, 10*time.Second) {
+			slog.Info("no network after 10s, proceeding to provisioning (QR may provide WiFi)")
+		}
+
 		slog.Info("no credentials found, entering provisioning mode")
 		creds, err = RunProvisioning(ctx, cfg, deviceSerial)
 		if err != nil {
@@ -53,6 +60,10 @@ func main() {
 			slog.Error("no provision_token available and no credentials found")
 			os.Exit(1)
 		}
+
+		// Ensure network is up after provisioning (QR+WiFi path calls
+		// WaitForRoute internally, but file-based provisioning needs it here).
+		WaitForRoute(ctx)
 	}
 
 	if cfg.ServerURL == "" {

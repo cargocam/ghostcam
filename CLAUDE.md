@@ -14,7 +14,8 @@ Ghostcam is a camera surveillance system built in Go. Cameras capture H.264 vide
 ghostcam/
 ├── common/          Shared Go types: camera<->server contract (telemetry, presign, provisioning)
 ├── camera/          Camera binary (package main): capture pipeline, upload, telemetry,
-│                    provisioning, gpsd, firmware. main.go lives here — no cmd/ wrapper.
+│                    provisioning (CLI/env → flat files → QR scan), gpsd, firmware.
+│                    main.go lives here — no cmd/ wrapper.
 ├── server/          Server binary (package main): chi router + HTTP handlers as methods
 │                    on *App, middleware, rate limiting. main.go lives here — no cmd/ wrapper.
 │   ├── apitypes/    Viewer<->server HTTP request/response + SSE payload types.
@@ -200,7 +201,9 @@ This doubles upload bandwidth during active viewing but is idle otherwise.
 
 - **Hybrid HLS/WebRTC** -- WebRTC provides sub-second live viewing via pion SFU (ICE-lite, no TURN). HLS always runs as fallback. Viewer shows "LIVE" (WebRTC) or "DELAYED" (HLS fallback). VOD/clip/timeline uses HLS only. Camera sends both H.264 video and Opus audio (32kbps, low-delay) over the WebSocket; ffmpeg encodes Opus alongside AAC from the same ALSA input.
 - **On-demand media relay** -- cameras maintain a persistent WebSocket but only send media when a viewer is watching. Server sends `start_stream`/`stop_stream` control messages. **Bandwidth note**: when a viewer is watching live via WebRTC, the camera uploads video twice — once to S3 (HLS segments) and once to the server (WebSocket). This roughly doubles upload bandwidth during active viewing. On cellular links this can degrade HLS upload reliability; the system handles this gracefully (retry with backoff, pending confirms). When no one is watching, bandwidth is identical to before.
+- **QR provisioning** -- on first boot without credentials, the camera scans for a provisioning QR code via `rpicam-still` + `gozxing` (pure Go, no CGO). QR payload carries server URL, token, and optional WiFi creds. Resolution order: CLI/env → flat files → QR scan (5-min timeout). Build-tag gated (`linux && !synthetic`); no-op stub on other platforms.
 - **Camera telemetry over HTTP** -- cameras POST telemetry every 10s, upload segments via presigned PUT URLs
+- **Stateless server** -- JWT auth, no sessions table, horizontally scalable
 - **S3-native** -- segments served directly from Tigris edge via 302 redirect, no proxy
 - **No cleanup daemons** -- retention is enforced by opportunistic prune in the presign handler (DB rows + matching S3 objects, bounded LIMIT 100 per call); there are no hourly session/segment/stale-camera sweep goroutines. We do not use an S3 bucket lifecycle rule because firmware binaries share the bucket and must not be auto-expired.
 - **Fail-closed tier handling** -- `billing.GetTier` returns `(Tier, bool)`; unknown tier IDs never fall back to an unlimited tier. `effectiveTier` validates the DB-stored tier string and falls back to free on unknown. Stripe webhooks log loudly and refuse to escalate the user to a paid tier if the price ID is unrecognised.
@@ -222,7 +225,7 @@ For detailed subsystem documentation see:
 - **HTTP**: chi router. Handlers are methods on `*App` in the `server` package. JSON responses via `writeJSON()`.
 - **Database**: pgx v5 pool, concrete `*db.DB` type (no `Database` interface — tests cover pure functions). Batch inserts via `pgx.Batch`.
 - **Concurrency**: `sync.WaitGroup` for goroutine lifecycle, `sync/atomic` for flags, channels for inter-goroutine communication.
-- **Build tags**: `//go:build linux && !synthetic` for real sensors (gpsd, /proc, nmcli). `//go:build !linux || synthetic` for synthetic sensors. Docker camera target uses `-tags synthetic`. Production Pi builds use real sensors with no synthetic code.
+- **Build tags**: `//go:build linux && !synthetic` for real sensors (gpsd, /proc, nmcli) and QR scanning (rpicam-still). `//go:build !linux || synthetic` for synthetic sensors and QR no-op stubs. Docker camera target uses `-tags synthetic`. Production Pi builds use real sensors with no synthetic code.
 
 ### Svelte / TypeScript
 
@@ -242,6 +245,7 @@ For detailed subsystem documentation see:
 | `github.com/aws/aws-sdk-go-v2` | S3/Tigris presigned URLs |
 | `github.com/BurntSushi/toml` | Config file parsing |
 | `github.com/google/uuid` | UUID generation for segment IDs |
+| `github.com/makiuchi-d/gozxing` | Pure Go QR code decoder (camera-side provisioning) |
 | `golang.org/x/crypto/argon2` | Password hashing (Argon2id) |
 | `github.com/pion/webrtc/v4` | WebRTC SFU for low-latency live viewing (ICE-lite, H.264 RTP) |
 | `nhooyr.io/websocket` | WebSocket for camera→server live H.264 relay |

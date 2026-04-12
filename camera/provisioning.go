@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -10,13 +11,33 @@ import (
 
 // RunProvisioning provisions the camera via a one-time token. Token and server
 // URL are resolved in order: CLI/env (cfg.ProvisionToken, cfg.ServerURL) →
-// flat files ({dataDir}/provision_token, {dataDir}/server_url).
-// Returns nil credentials if no token is available.
+// flat files ({dataDir}/provision_token, {dataDir}/server_url) →
+// QR code scan via rpicam-still (Linux only, 5-min timeout).
+// Returns nil credentials if no token is available from any source.
 func RunProvisioning(ctx context.Context, cfg *CameraConfig, deviceSerial string) (*Credentials, error) {
 	token, serverURL := resolveProvisionInputs(cfg)
+
+	// Fallback: scan QR code from camera
 	if token == "" || serverURL == "" {
-		slog.Info("no provision token available, waiting for provisioning")
-		return nil, nil
+		qr, err := ScanQR(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("QR scan: %w", err)
+		}
+		if qr == nil {
+			slog.Info("no provision token available, waiting for provisioning")
+			return nil, nil
+		}
+		token = qr.Token
+		serverURL = qr.Server
+
+		// QR may include WiFi credentials
+		if qr.WifiSSID != "" {
+			psk := qr.WifiPassword
+			if err := EnsureWifi(ctx, qr.WifiSSID, &psk); err != nil {
+				slog.Warn("WiFi from QR failed", "ssid", qr.WifiSSID, "err", err)
+			}
+			WaitForRoute(ctx)
+		}
 	}
 
 	// Ensure server_url is a full URL
