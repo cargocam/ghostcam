@@ -340,6 +340,12 @@ type AdminRepriceBillingTierResponse struct {
 // AdminUser is a platform-wide view of a user for the admin Users
 // section. Joined with admin status, subscription tier, and camera
 // count so rendering the list never requires a per-row fan-out.
+//
+// `Tier` is the raw tier identifier stored on the subscription row
+// (either "free" or a Stripe price ID). `TierName` is the resolved
+// display name from the billing cache — "Free", "Ghostcam Pro", etc.
+// The UI should render TierName; Tier stays available for equality
+// comparisons and debugging drift.
 type AdminUser struct {
 	UserID      string `json:"user_id"`
 	Email       string `json:"email"`
@@ -350,6 +356,7 @@ type AdminUser struct {
 	DeletedAt   *int64 `json:"deleted_at,omitempty"`
 	IsAdmin     bool   `json:"is_admin"`
 	Tier        string `json:"tier"`
+	TierName    string `json:"tier_name"`
 	CameraCount int64  `json:"camera_count"`
 }
 

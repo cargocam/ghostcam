@@ -986,7 +986,7 @@
 								</div>
 								<div class="text-xs text-muted-foreground mt-0.5 flex items-center gap-3 flex-wrap">
 									<span class="font-mono text-[11px]">{user.user_id}</span>
-									<span>tier: <span class="font-mono">{user.tier}</span></span>
+									<span>tier: <span>{user.tier_name}</span></span>
 									<span>{user.camera_count} camera{user.camera_count === 1 ? '' : 's'}</span>
 									<span>created {formatDate(user.created_at)}</span>
 								</div>
@@ -1156,7 +1156,7 @@
 			}}
 		>
 			<label class="block">
-				<span class="text-xs text-muted-foreground block mb-1">Product name</span>
+				<span class="text-xs text-muted-foreground block mb-1">Tier name</span>
 				<input
 					type="text"
 					value={createForm.name}

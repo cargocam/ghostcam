@@ -346,6 +346,11 @@ export interface AdminRepriceBillingTierResponse {
  * AdminUser is a platform-wide view of a user for the admin Users
  * section. Joined with admin status, subscription tier, and camera
  * count so rendering the list never requires a per-row fan-out.
+ * `Tier` is the raw tier identifier stored on the subscription row
+ * (either "free" or a Stripe price ID). `TierName` is the resolved
+ * display name from the billing cache — "Free", "Ghostcam Pro", etc.
+ * The UI should render TierName; Tier stays available for equality
+ * comparisons and debugging drift.
  */
 export interface AdminUser {
   user_id: string;
@@ -357,6 +362,7 @@ export interface AdminUser {
   deleted_at?: number /* int64 */;
   is_admin: boolean;
   tier: string;
+  tier_name: string;
   camera_count: number /* int64 */;
 }
 /**

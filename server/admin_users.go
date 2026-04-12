@@ -10,6 +10,7 @@ import (
 
 	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/cargocam/ghostcam/server/auth"
+	"github.com/cargocam/ghostcam/server/billing"
 	"github.com/cargocam/ghostcam/server/db"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -23,7 +24,9 @@ import (
 //
 // Returns every user in the database (including soft-deleted ones) joined
 // with admin status, subscription tier, and camera count. One query fans
-// into the full list — no per-row secondary fetches.
+// into the full list — no per-row secondary fetches. The tier display
+// name is resolved at this level (not in the DB layer) because the
+// billing cache lives on *App, not on *db.DB.
 func (a *App) AdminListUsers(w http.ResponseWriter, r *http.Request) {
 	users, err := a.DB.ListAllUsers(r.Context())
 	if err != nil {
@@ -34,12 +37,24 @@ func (a *App) AdminListUsers(w http.ResponseWriter, r *http.Request) {
 
 	out := make([]apitypes.AdminUser, 0, len(users))
 	for _, u := range users {
-		out = append(out, toAPIUser(u))
+		out = append(out, a.toAPIUser(u))
 	}
 	writeJSON(w, http.StatusOK, apitypes.AdminListUsersResponse{Users: out})
 }
 
-func toAPIUser(u db.AdminUserRecord) apitypes.AdminUser {
+// toAPIUser converts a db.AdminUserRecord to the wire-shape AdminUser,
+// resolving the raw tier ID to a human-readable display name via the
+// billing cache. Unknown tier IDs (archived prices, stale DB rows) fall
+// through to the raw ID so admins can still spot drift.
+func (a *App) toAPIUser(u db.AdminUserRecord) apitypes.AdminUser {
+	tierName := "Free"
+	if u.Tier != "" && u.Tier != billing.FreeTierID {
+		if t, ok := a.Tiers.Get(u.Tier); ok {
+			tierName = t.Name
+		} else {
+			tierName = u.Tier // unknown price ID — show the raw ID so the admin can debug
+		}
+	}
 	return apitypes.AdminUser{
 		UserID:      u.UserID,
 		Email:       u.Email,
@@ -50,6 +65,7 @@ func toAPIUser(u db.AdminUserRecord) apitypes.AdminUser {
 		DeletedAt:   u.DeletedAt,
 		IsAdmin:     u.IsAdmin,
 		Tier:        u.Tier,
+		TierName:    tierName,
 		CameraCount: u.CameraCount,
 	}
 }
@@ -124,7 +140,7 @@ func (a *App) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	var created *apitypes.AdminUser
 	for _, u := range users {
 		if u.UserID == userID {
-			apiUser := toAPIUser(u)
+			apiUser := a.toAPIUser(u)
 			created = &apiUser
 			break
 		}
