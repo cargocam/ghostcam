@@ -68,6 +68,36 @@ func (db *DB) SetPassword(ctx context.Context, userID, passwordHash string) erro
 	return nil
 }
 
+// MarkVerified sets verified_at on a user that hasn't been verified yet.
+func (db *DB) MarkVerified(ctx context.Context, userID string) error {
+	now := nowUnix()
+	_, err := db.pool.Exec(ctx,
+		`UPDATE users SET verified_at = $1 WHERE user_id = $2 AND verified_at IS NULL`,
+		now, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("mark verified: %w", err)
+	}
+	return nil
+}
+
+// SetEmail updates the user's email address. Returns an error if the new
+// email is already taken by another user.
+func (db *DB) SetEmail(ctx context.Context, userID, newEmail string) error {
+	now := nowUnix()
+	tag, err := db.pool.Exec(ctx,
+		`UPDATE users SET email = $1, verified_at = $2 WHERE user_id = $3`,
+		newEmail, now, userID,
+	)
+	if err != nil {
+		return fmt.Errorf("set email: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("set email: user not found")
+	}
+	return nil
+}
+
 // --- Admin user management ---
 
 // AdminUserRecord is a platform-wide view of a user, joined with their

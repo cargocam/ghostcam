@@ -38,6 +38,44 @@ type ChangePasswordRequest struct {
 	NewPassword     string `json:"new_password"`
 }
 
+// ForgotPasswordRequest is the body of POST /api/v1/auth/forgot-password.
+type ForgotPasswordRequest struct {
+	Email string `json:"email"`
+}
+
+// ResetPasswordRequest is the body of POST /api/v1/auth/reset-password.
+type ResetPasswordRequest struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+
+// VerifyEmailRequest is the body of POST /api/v1/auth/verify-email.
+type VerifyEmailRequest struct {
+	Token string `json:"token"`
+}
+
+// ChangeEmailRequest is the body of PATCH /api/v1/auth/email.
+type ChangeEmailRequest struct {
+	NewEmail        string `json:"new_email"`
+	CurrentPassword string `json:"current_password"`
+}
+
+// ConfirmEmailChangeRequest is the body of POST /api/v1/auth/email/confirm.
+type ConfirmEmailChangeRequest struct {
+	Token string `json:"token"`
+}
+
+// RequestLoginOTPRequest is the body of POST /api/v1/auth/otp/request.
+type RequestLoginOTPRequest struct {
+	Email string `json:"email"`
+}
+
+// VerifyLoginOTPRequest is the body of POST /api/v1/auth/otp/verify.
+type VerifyLoginOTPRequest struct {
+	Email string `json:"email"`
+	Code  string `json:"code"`
+}
+
 // ====================================================================
 // Cameras
 // ====================================================================

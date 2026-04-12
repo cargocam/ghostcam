@@ -4,6 +4,9 @@
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 	import LoginPage from '$lib/components/LoginPage.svelte';
+	import VerifyEmailPage from '$lib/components/VerifyEmailPage.svelte';
+	import ResetPasswordPage from '$lib/components/ResetPasswordPage.svelte';
+	import EmailChangeConfirmPage from '$lib/components/EmailChangeConfirmPage.svelte';
 	import Sidebar from '$lib/components/layout/Sidebar.svelte';
 	import Header from '$lib/components/layout/Header.svelte';
 	import MobileNav from '$lib/components/layout/MobileNav.svelte';
@@ -19,6 +22,17 @@
 	let mobileNavOpen = $state(false);
 	let settingsOpen = $state(false);
 	let alertsOpen = $state(false);
+
+	// Public routes accessible without authentication (email links)
+	const publicRoutes = ['/verify-email', '/reset-password', '/email-change-confirm'] as const;
+	type PublicRoute = typeof publicRoutes[number];
+	let currentPublicRoute = $state<PublicRoute | null>(null);
+
+	$effect(() => {
+		const path = window.location.pathname;
+		const match = publicRoutes.find((r) => path === r);
+		currentPublicRoute = match ?? null;
+	});
 
 	$effect(() => {
 		settingsStore.applyTheme();
@@ -46,7 +60,13 @@
 	});
 </script>
 
-{#if !transportStore.initialized}
+{#if currentPublicRoute === '/verify-email'}
+	<VerifyEmailPage />
+{:else if currentPublicRoute === '/reset-password'}
+	<ResetPasswordPage />
+{:else if currentPublicRoute === '/email-change-confirm'}
+	<EmailChangeConfirmPage />
+{:else if !transportStore.initialized}
 	<div class="flex h-screen-stable items-center justify-center bg-background">
 		<div class="flex flex-col items-center gap-4">
 			<img src="/icon.svg" alt="" class="h-16 w-16 animate-pulse" />

@@ -35,6 +35,10 @@ type ServerConfig struct {
 	StripePortalConfigID string
 	// Segment retention in days (default 30)
 	SegmentRetentionDays int
+	// Resend (optional — email disabled if ResendAPIKey is empty, logs only).
+	ResendAPIKey    string
+	ResendFromEmail string // e.g. "Ghostcam <noreply@ghostcam.app>"
+	ResendReplyTo   string // optional
 }
 
 // secureCookies returns true when the PublicURL is served over HTTPS.
@@ -92,6 +96,11 @@ func LoadConfig() (*ServerConfig, error) {
 
 	// Segment retention
 	cfg.SegmentRetentionDays = int(envOrDefaultUint64("GHOSTCAM_SEGMENT_RETENTION_DAYS", 30))
+
+	// Resend (env only — sensitive)
+	cfg.ResendAPIKey = os.Getenv("RESEND_API_KEY")
+	cfg.ResendFromEmail = os.Getenv("RESEND_FROM_EMAIL")
+	cfg.ResendReplyTo = os.Getenv("RESEND_REPLY_TO")
 
 	return cfg, nil
 }

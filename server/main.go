@@ -16,6 +16,7 @@ import (
 
 	"github.com/cargocam/ghostcam/server/billing"
 	"github.com/cargocam/ghostcam/server/db"
+	"github.com/cargocam/ghostcam/server/mailer"
 	"github.com/cargocam/ghostcam/server/redis"
 	"github.com/cargocam/ghostcam/server/s3"
 	"github.com/go-chi/chi/v5"
@@ -33,6 +34,7 @@ type App struct {
 	S3         *s3.Client      // nil if S3 not configured
 	HMACSecret []byte
 	Tiers      *billing.Cache
+	Mailer     *mailer.Client
 }
 
 // stripeConfigured reports whether a Stripe secret key is set. Paid tier
@@ -131,6 +133,13 @@ func run() error {
 		}
 	}
 
+	mailerClient := mailer.New(mailer.Config{
+		APIKey:    cfg.ResendAPIKey,
+		From:      cfg.ResendFromEmail,
+		ReplyTo:   cfg.ResendReplyTo,
+		PublicURL: cfg.PublicURL,
+	})
+
 	app := &App{
 		Config:     cfg,
 		DB:         database,
@@ -138,6 +147,7 @@ func run() error {
 		S3:         s3Client,
 		HMACSecret: hmacSecret,
 		Tiers:      tierCache,
+		Mailer:     mailerClient,
 	}
 
 	srv := &http.Server{
@@ -188,6 +198,8 @@ func (a *App) router() http.Handler {
 	provisionRL := NewRateLimiter(10)
 	clientLogRL := NewRateLimiter(60)
 	tierRefreshRL := NewRateLimiter(5)
+	forgotRL := NewRateLimiter(5)
+	otpRL := NewRateLimiter(5)
 
 	// Public
 	r.Get("/healthz", a.Healthz)
@@ -197,6 +209,12 @@ func (a *App) router() http.Handler {
 	r.With(provisionRL.Middleware).Post("/api/v1/cameras/provision", a.Provision)
 	r.Get("/api/v1/billing/tiers", a.ListTiers)
 	r.Get("/api/v1/firmware/latest", a.FirmwareLatest)
+	r.With(forgotRL.Middleware).Post("/api/v1/auth/forgot-password", a.ForgotPassword)
+	r.Post("/api/v1/auth/reset-password", a.ResetPassword)
+	r.Post("/api/v1/auth/verify-email", a.VerifyEmail)
+	r.Post("/api/v1/auth/email/confirm", a.ConfirmEmailChange)
+	r.With(otpRL.Middleware).Post("/api/v1/auth/otp/request", a.RequestLoginOTP)
+	r.With(loginRL.Middleware).Post("/api/v1/auth/otp/verify", a.VerifyLoginOTP)
 	r.Post("/api/v1/webhooks/stripe", a.StripeWebhook)
 	r.Post("/api/v1/webhooks/github", a.GithubWebhook)
 
@@ -213,6 +231,8 @@ func (a *App) router() http.Handler {
 
 		r.Post("/api/v1/auth/logout", a.Logout)
 		r.Patch("/api/v1/auth/password", a.ChangePassword)
+		r.Patch("/api/v1/auth/email", a.RequestEmailChange)
+		r.Post("/api/v1/auth/verify-email/resend", a.ResendVerifyEmail)
 
 		r.Get("/api/v1/cameras", a.ListCameras)
 		r.Post("/api/v1/cameras", a.Enroll)

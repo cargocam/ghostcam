@@ -1,0 +1,9 @@
+Ghostcam — Confirm your new email
+
+Hi {{.DisplayName}},
+
+You requested to change your Ghostcam email to {{.NewEmail}}. Click the link below to confirm. This link expires in 24 hours.
+
+{{.Link}}
+
+If you didn't request this change, you can safely ignore this email.

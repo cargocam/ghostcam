@@ -8,10 +8,13 @@ import (
 	"net/http"
 	"strings"
 
+	"time"
+
 	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/cargocam/ghostcam/server/auth"
 	"github.com/cargocam/ghostcam/server/billing"
 	"github.com/cargocam/ghostcam/server/db"
+	"github.com/cargocam/ghostcam/server/mailer"
 	"github.com/go-chi/chi/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/stripe/stripe-go/v82"
@@ -155,6 +158,22 @@ func (a *App) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		User:              *created,
 		GeneratedPassword: password,
 	})
+
+	// Send verification email to the new user so they can confirm
+	// their address. Fire-and-forget — the admin response is already sent.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		rawToken, err := a.DB.CreateEmailToken(ctx, a.HMACSecret, userID, "verify_email", nil, 24*time.Hour)
+		if err != nil {
+			slog.Error("admin create user: create verify token failed", "error", err)
+			return
+		}
+		a.Mailer.SendVerifyEmail(ctx, email, mailer.VerifyEmailData{
+			DisplayName: displayName,
+			Link:        rawToken,
+		})
+	}()
 }
 
 // --- AdminUpdateUser ---

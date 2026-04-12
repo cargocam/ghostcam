@@ -1,0 +1,9 @@
+Ghostcam — Verify your email
+
+Hi {{.DisplayName}},
+
+Click the link below to verify your email address. This link expires in 24 hours.
+
+{{.Link}}
+
+If you didn't create a Ghostcam account, you can ignore this email.

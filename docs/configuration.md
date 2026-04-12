@@ -49,6 +49,9 @@ Config is loaded once at startup — there is no runtime reload endpoint. To app
 | `STRIPE_SECRET_KEY` | _(none)_ | Stripe API key |
 | `STRIPE_WEBHOOK_SECRET` | _(none)_ | Stripe webhook signing secret |
 | `STRIPE_PORTAL_CONFIG_ID` | _(none)_ | Portal config with plan switching |
+| `RESEND_API_KEY` | _(none)_ | Resend API key for transactional email |
+| `RESEND_FROM_EMAIL` | _(none)_ | Sender address, e.g. `Ghostcam <noreply@ghostcam.app>` |
+| `RESEND_REPLY_TO` | _(none)_ | Optional reply-to address |
 
 ### Camera
 
@@ -128,6 +131,40 @@ reactive:
 This is deliberate: the server has no long-running goroutines (see the
 retention/cleanup table below for the same pattern), and billing is not
 load-bearing enough for one.
+
+## Transactional Email (Resend)
+
+The server sends transactional emails via [Resend](https://resend.com) for
+auth flows: email verification, password reset, email change confirmation,
+password-changed notifications, and login OTP codes.
+
+Email is **optional**. When `RESEND_API_KEY` is empty, the mailer logs what
+it would have sent (including full links and OTP codes) to stdout so
+development and self-hosted deployments work without any Resend
+configuration. Set the three env vars below to enable real sends:
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `RESEND_API_KEY` | yes | Resend API key |
+| `RESEND_FROM_EMAIL` | yes | Sender address, e.g. `Ghostcam <noreply@ghostcam.app>`. The domain must be verified in Resend. |
+| `RESEND_REPLY_TO` | no | Optional reply-to address |
+
+Templates live in `server/mailer/templates/` as paired `.html` / `.txt`
+files embedded via `//go:embed`. Both HTML and plain-text parts are sent
+with every email for maximum deliverability.
+
+### Email-backed auth flows
+
+| Flow | Endpoint | Token TTL | Notes |
+|------|----------|-----------|-------|
+| Email verification | `POST /api/v1/auth/verify-email` | 24 hours | Link sent on admin-created user signup |
+| Password reset | `POST /api/v1/auth/forgot-password` → link → `POST /api/v1/auth/reset-password` | 1 hour | Always returns 200 (prevents enumeration) |
+| Email change | `PATCH /api/v1/auth/email` → confirmation link → `POST /api/v1/auth/email/confirm` | 24 hours | Requires current password; confirmation sent to new address |
+| Login OTP | `POST /api/v1/auth/otp/request` → code → `POST /api/v1/auth/otp/verify` | 10 minutes | 6-digit code, max 5 attempts before invalidation |
+
+All tokens and OTP codes are stored as HMAC-SHA256 hashes in the
+`email_tokens` table (same pattern as `api_tokens`). Raw values only exist
+in the email body.
 
 ## Retention & Cleanup
 

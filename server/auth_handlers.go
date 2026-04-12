@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/cargocam/ghostcam/server/auth"
+	"github.com/cargocam/ghostcam/server/mailer"
 )
 
 const jwtTTL = 30 * 24 * time.Hour // 30 days
@@ -84,7 +86,7 @@ func (a *App) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	slog.Info("audit", "event_type", "auth_success", "user_id", user.UserID)
+	slog.Info("audit", "event_type", "auth_success", "user_id", user.UserID, "auth_method", "password")
 
 	a.setAuthCookie(w, r, user.UserID, user.Email)
 	writeJSON(w, http.StatusOK, apitypes.LoginResponse{UserID: user.UserID})
@@ -148,6 +150,15 @@ func (a *App) ChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	a.setAuthCookie(w, r, userID, getUserEmail(r))
+	email := getUserEmail(r)
+	a.setAuthCookie(w, r, userID, email)
 	w.WriteHeader(http.StatusOK)
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		a.Mailer.SendPasswordChanged(ctx, email, mailer.PasswordChangedData{
+			DisplayName: email,
+		})
+	}()
 }

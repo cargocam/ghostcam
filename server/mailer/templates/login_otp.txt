@@ -1,0 +1,7 @@
+Ghostcam — Your login code
+
+Your login code is: {{.Code}}
+
+This code expires in 10 minutes.
+
+If you didn't request this code, someone may have entered your email address by mistake. You can safely ignore this email.

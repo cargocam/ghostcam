@@ -13,7 +13,7 @@
 	} from '$lib/stores/billing.svelte.js';
 	import { devStore } from '$lib/stores/dev.svelte.js';
 	import { authStore } from '$lib/stores/auth.svelte.js';
-	import { changePassword } from '$lib/auth.js';
+	import { changePassword, requestEmailChange } from '$lib/auth.js';
 	import { Sun, Moon, Monitor, CreditCard, ExternalLink, Trash2, Bug, RefreshCw, Shield } from 'lucide-svelte';
 
 	let {
@@ -37,8 +37,39 @@
 	// picker instead of inlining the cards in the panel.
 	let upgradeOpen = $state(false);
 
-	// Change email dialog state (stubbed — not yet implemented on the backend)
+	// Change email dialog state
 	let changeEmailOpen = $state(false);
+	let changeEmailNewEmail = $state('');
+	let changeEmailPassword = $state('');
+	let changeEmailError = $state('');
+	let changeEmailSubmitting = $state(false);
+	let changeEmailSuccess = $state(false);
+
+	function resetChangeEmailForm() {
+		changeEmailNewEmail = '';
+		changeEmailPassword = '';
+		changeEmailError = '';
+		changeEmailSubmitting = false;
+		changeEmailSuccess = false;
+	}
+
+	$effect(() => {
+		if (!changeEmailOpen) resetChangeEmailForm();
+	});
+
+	async function handleChangeEmail(e: SubmitEvent) {
+		e.preventDefault();
+		changeEmailError = '';
+		changeEmailSubmitting = true;
+		const result = await requestEmailChange(changeEmailNewEmail, changeEmailPassword);
+		changeEmailSubmitting = false;
+		if (!result.ok) {
+			changeEmailError = result.error ?? 'Failed to change email';
+			return;
+		}
+		changeEmailSuccess = true;
+	}
+
 	// Delete account dialog state (stubbed — not yet implemented on the backend)
 	let deleteAccountOpen = $state(false);
 
@@ -444,17 +475,66 @@
 		<DialogHeader>
 			<DialogTitle>Update email</DialogTitle>
 			<DialogDescription>
-				Email changes aren't available yet. Contact support to update the email on your account.
+				{changeEmailSuccess
+					? 'Check your new inbox for a confirmation link.'
+					: 'Enter your new email and current password. We\'ll send a confirmation link to the new address.'}
 			</DialogDescription>
 		</DialogHeader>
-		{#if authStore.email}
-			<p class="text-xs text-muted-foreground mt-2">
-				Current email: <span class="text-foreground">{authStore.email}</span>
-			</p>
+		{#if changeEmailSuccess}
+			<p class="text-sm text-primary mt-2">Confirmation email sent to <strong>{changeEmailNewEmail}</strong>.</p>
+			<div class="flex justify-end mt-4">
+				<Button type="button" onclick={() => (changeEmailOpen = false)}>Done</Button>
+			</div>
+		{:else}
+			<form onsubmit={handleChangeEmail} class="space-y-4 mt-2">
+				{#if authStore.email}
+					<p class="text-xs text-muted-foreground">
+						Current email: <span class="text-foreground">{authStore.email}</span>
+					</p>
+				{/if}
+				<div>
+					<label for="ce-email" class="text-xs text-muted-foreground mb-1 block">New email</label>
+					<input
+						id="ce-email"
+						type="email"
+						autocomplete="email"
+						bind:value={changeEmailNewEmail}
+						required
+						class="w-full rounded-md border bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					/>
+				</div>
+				<div>
+					<label for="ce-password" class="text-xs text-muted-foreground mb-1 block">Current password</label>
+					<input
+						id="ce-password"
+						type="password"
+						autocomplete="current-password"
+						bind:value={changeEmailPassword}
+						required
+						class="w-full rounded-md border bg-transparent px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+					/>
+				</div>
+				{#if changeEmailError}
+					<p class="text-sm text-destructive">{changeEmailError}</p>
+				{/if}
+				<div class="flex justify-end gap-2">
+					<Button
+						type="button"
+						variant="outline"
+						onclick={() => (changeEmailOpen = false)}
+						disabled={changeEmailSubmitting}
+					>
+						Cancel
+					</Button>
+					<Button
+						type="submit"
+						disabled={changeEmailSubmitting || !changeEmailNewEmail || !changeEmailPassword}
+					>
+						{changeEmailSubmitting ? 'Sending...' : 'Send confirmation'}
+					</Button>
+				</div>
+			</form>
 		{/if}
-		<div class="flex justify-end mt-4">
-			<Button type="button" onclick={() => (changeEmailOpen = false)}>Close</Button>
-		</div>
 	</DialogContent>
 </Dialog>
 

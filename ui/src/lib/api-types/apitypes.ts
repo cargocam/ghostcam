@@ -43,6 +43,51 @@ export interface ChangePasswordRequest {
   new_password: string;
 }
 /**
+ * ForgotPasswordRequest is the body of POST /api/v1/auth/forgot-password.
+ */
+export interface ForgotPasswordRequest {
+  email: string;
+}
+/**
+ * ResetPasswordRequest is the body of POST /api/v1/auth/reset-password.
+ */
+export interface ResetPasswordRequest {
+  token: string;
+  new_password: string;
+}
+/**
+ * VerifyEmailRequest is the body of POST /api/v1/auth/verify-email.
+ */
+export interface VerifyEmailRequest {
+  token: string;
+}
+/**
+ * ChangeEmailRequest is the body of PATCH /api/v1/auth/email.
+ */
+export interface ChangeEmailRequest {
+  new_email: string;
+  current_password: string;
+}
+/**
+ * ConfirmEmailChangeRequest is the body of POST /api/v1/auth/email/confirm.
+ */
+export interface ConfirmEmailChangeRequest {
+  token: string;
+}
+/**
+ * RequestLoginOTPRequest is the body of POST /api/v1/auth/otp/request.
+ */
+export interface RequestLoginOTPRequest {
+  email: string;
+}
+/**
+ * VerifyLoginOTPRequest is the body of POST /api/v1/auth/otp/verify.
+ */
+export interface VerifyLoginOTPRequest {
+  email: string;
+  code: string;
+}
+/**
  * CameraResponse is the per-camera payload returned by GET /api/v1/cameras
  * (as a list) and GET /api/v1/cameras/{id} (as a single object).
  */

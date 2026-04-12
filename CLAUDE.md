@@ -21,6 +21,7 @@ ghostcam/
 │   │                Source of truth for ui/src/lib/api-types/ — types only,
 │   │                tygo reads this package plus common/.
 │   ├── auth/        Argon2id passwords, JWT, HMAC token hashing
+│   ├── mailer/      Resend transactional email (verify, reset, OTP, change-email)
 │   ├── billing/     Tier definitions and storage limit enforcement
 │   ├── db/          PostgreSQL (pgx), migrations, record types (concrete *DB, no interface)
 │   ├── redis/       Telemetry streams (XADD/XREAD), pub/sub for SSE, event storage

@@ -1,0 +1,7 @@
+Ghostcam — Email address changed
+
+Hi {{.DisplayName}},
+
+Your Ghostcam email address was changed to {{.NewEmail}}.
+
+If you didn't make this change, your account may be compromised. Contact support immediately.

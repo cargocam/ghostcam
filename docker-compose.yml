@@ -86,6 +86,10 @@ services:
       - STRIPE_PRICE_ID_STARTER=${STRIPE_PRICE_ID_STARTER:-}
       - STRIPE_PRICE_ID_PRO=${STRIPE_PRICE_ID_PRO:-}
       - STRIPE_PRICE_ID_ENTERPRISE=${STRIPE_PRICE_ID_ENTERPRISE:-}
+      # Resend (optional — email logged to stdout when unset)
+      - RESEND_API_KEY=${RESEND_API_KEY:-}
+      - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL:-}
+      - RESEND_REPLY_TO=${RESEND_REPLY_TO:-}
       - STRIPE_PORTAL_CONFIG_ID=${STRIPE_PORTAL_CONFIG_ID:-}
     volumes:
       - server-data:/var/ghostcam

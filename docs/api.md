@@ -9,6 +9,14 @@ POST   /api/v1/auth/register               DISABLED (returns 403 registration_di
 POST   /api/v1/auth/login                  { email, password } → JWT cookie (rate limited: 10/min per IP)
 POST   /api/v1/auth/logout                 Clears JWT cookie
 PATCH  /api/v1/auth/password               { current_password, new_password }
+POST   /api/v1/auth/forgot-password        { email } → always 200 (rate limited: 5/min per IP)
+POST   /api/v1/auth/reset-password         { token, new_password }
+POST   /api/v1/auth/verify-email           { token }
+POST   /api/v1/auth/verify-email/resend    (authenticated, unverified users only)
+PATCH  /api/v1/auth/email                  { new_email, current_password } (authenticated)
+POST   /api/v1/auth/email/confirm          { token }
+POST   /api/v1/auth/otp/request            { email } → always 200 (rate limited: 5/min per IP)
+POST   /api/v1/auth/otp/verify             { email, code } → JWT cookie (rate limited: 10/min per IP)
 ```
 
 ## Cameras
