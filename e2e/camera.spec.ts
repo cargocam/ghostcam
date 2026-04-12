@@ -33,7 +33,7 @@ test.describe('camera telemetry over SSE', () => {
     await page.goto('/');
     await page.getByPlaceholder('Email').fill(ADMIN_EMAIL);
     await page.getByPlaceholder('Password').fill(ADMIN_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
     await expect(page.getByPlaceholder('Password')).toBeHidden({ timeout: 10_000 });
 
     // Wait for at least one camera card to appear. We don't pin the

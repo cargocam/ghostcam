@@ -29,7 +29,7 @@ test.describe('auth against the real stack', () => {
 
     await page.getByPlaceholder('Email').fill(ADMIN_EMAIL);
     await page.getByPlaceholder('Password').fill(ADMIN_PASSWORD);
-    await page.getByRole('button', { name: 'Sign in' }).click();
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
 
     // After a successful login the login form disappears and the main
     // view renders. We don't assert exact camera count here — that's
@@ -42,7 +42,7 @@ test.describe('auth against the real stack', () => {
     await page.goto('/');
     await page.getByPlaceholder('Email').fill(ADMIN_EMAIL);
     await page.getByPlaceholder('Password').fill('definitely-not-the-password');
-    await page.getByRole('button', { name: 'Sign in' }).click();
+    await page.getByRole('button', { name: 'Sign in', exact: true }).click();
 
     // The server's real "invalid password" path produces 401 with no
     // body; the UI's auth store shows "Invalid email or password".
