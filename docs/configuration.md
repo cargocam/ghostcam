@@ -47,7 +47,7 @@ Config is loaded once at startup — there is no runtime reload endpoint. To app
 | `GHOSTCAM_S3_PRESIGN_TTL_SECS` | `3600` | Presigned URL TTL in seconds |
 | `GHOSTCAM_SEGMENT_RETENTION_DAYS` | `30` | Segment retention in days. Used as the cutoff for opportunistic prune in the presign handler and as the read cutoff for manifest / coverage queries. |
 | `STRIPE_SECRET_KEY` | **required** | Stripe API key — server won't start without it |
-| `STRIPE_WEBHOOK_SECRET` | **required** | Stripe webhook signing secret |
+| `STRIPE_WEBHOOK_SECRET` | _(none)_ | Stripe webhook signing secret (signature verification skipped when unset — safe for dev) |
 | `STRIPE_PORTAL_CONFIG_ID` | _(none)_ | Portal config with plan switching |
 | `RESEND_API_KEY` | _(none)_ | Resend API key for transactional email |
 | `RESEND_FROM_EMAIL` | _(none)_ | Sender address, e.g. `Ghostcam <noreply@ghostcam.app>` |

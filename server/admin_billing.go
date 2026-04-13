@@ -49,7 +49,6 @@ func (a *App) AdminListBillingTiers(w http.ResponseWriter, r *http.Request) {
 // (null = unlimited). Both fields are required to avoid partial updates
 // leaving the product half-configured.
 func (a *App) AdminUpdateBillingTier(w http.ResponseWriter, r *http.Request) {
-
 	priceID := chi.URLParam(r, "priceID")
 	if priceID == "" {
 		writeError(w, http.StatusBadRequest, "missing price id")
@@ -145,7 +144,6 @@ func (a *App) AdminUpdateBillingTier(w http.ResponseWriter, r *http.Request) {
 // different name) or archive the orphan. Worth noting in the log so an
 // operator knows what to clean up.
 func (a *App) AdminCreateBillingTier(w http.ResponseWriter, r *http.Request) {
-
 	var body apitypes.AdminCreateBillingTierRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
@@ -247,7 +245,6 @@ func (a *App) AdminCreateBillingTier(w http.ResponseWriter, r *http.Request) {
 // confirm=true proceeds. This prevents a CFO from silently orphaning
 // a paying customer with a single click.
 func (a *App) AdminArchiveBillingTier(w http.ResponseWriter, r *http.Request) {
-
 	priceID := chi.URLParam(r, "priceID")
 	if priceID == "" {
 		writeError(w, http.StatusBadRequest, "missing price id")

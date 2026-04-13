@@ -187,8 +187,6 @@ func (a *App) GetUsage(w http.ResponseWriter, r *http.Request) {
 
 // StripeWebhook handles POST /api/v1/webhooks/stripe.
 func (a *App) StripeWebhook(w http.ResponseWriter, r *http.Request) {
-
-
 	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
 	if err != nil {
 		http.Error(w, "", http.StatusBadRequest)
