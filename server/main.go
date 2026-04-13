@@ -246,6 +246,7 @@ func (a *App) router() http.Handler {
 		r.Get("/api/v1/cameras/{deviceID}", a.GetCamera)
 		r.Patch("/api/v1/cameras/{deviceID}", a.UpdateCamera)
 		r.Delete("/api/v1/cameras/{deviceID}", a.DeleteCamera)
+		r.Delete("/api/v1/cameras/{deviceID}/footage", a.DeleteFootage)
 
 		r.Get("/api/v1/tokens", a.ListTokens)
 		r.Post("/api/v1/tokens", a.CreateToken)

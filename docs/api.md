@@ -28,7 +28,14 @@ POST   /api/v1/cameras/enroll/qr           Returns JSON {payload, token, expires
 GET    /api/v1/cameras/enroll/qr           Same as POST with defaults (24h TTL, no WiFi)
 GET    /api/v1/cameras/:id                 Camera details
 PATCH  /api/v1/cameras/:id                 Update name/notes/resolution/recording_mode
-DELETE /api/v1/cameras/:id                 Delete camera
+DELETE /api/v1/cameras/:id                 Delete camera (synchronously purges S3 segments first,
+                                           then removes the cameras row — the DB cascade takes care
+                                           of segments, api keys, enrollment tokens).
+DELETE /api/v1/cameras/:id/footage         Delete footage. Query params (optional):
+                                           ?from_ms=&to_ms= ; omitting both deletes every segment
+                                           for the camera. Returns { deleted_count, bytes_freed,
+                                           has_more }. Bounded to ~2000 segments per call so the UI
+                                           must re-invoke while has_more is true.
 
 POST   /api/v1/cameras/:id/telemetry       Camera telemetry POST (camera auth) → returns pending commands
 POST   /api/v1/cameras/:id/presign         Request presigned S3 URLs + confirm uploads (camera auth)

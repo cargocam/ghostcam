@@ -8,8 +8,11 @@
 	} from '$lib/components/ui/dialog/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { updateCameraSettings, deleteCamera } from '$lib/signaling.js';
+	import { transportStore } from '$lib/stores/transport.svelte.js';
+	import { purgeFootage, formatBytes, type PurgeProgress } from '$lib/footage.js';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
+	import { billingStore } from '$lib/stores/billing.svelte.js';
 
 	let {
 		open = $bindable(false),
@@ -30,6 +33,9 @@
 	let success = $state(false);
 	let confirmingDelete = $state(false);
 	let deleting = $state(false);
+	let confirmingPurge = $state(false);
+	let purging = $state(false);
+	let purgeProgress = $state<PurgeProgress | null>(null);
 
 	// Sync local state when dialog opens
 	$effect(() => {
@@ -40,6 +46,8 @@
 			error = '';
 			success = false;
 			confirmingDelete = false;
+			confirmingPurge = false;
+			purgeProgress = null;
 		}
 	});
 
@@ -85,11 +93,35 @@
 		try {
 			await deleteCamera(deviceId);
 			cameraStore.removeCamera(deviceId);
+			// Refresh storage usage so the billing bar reflects the reap
+			// of this camera's segments.
+			billingStore.load().catch(() => {});
 			open = false;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to delete camera';
 		} finally {
 			deleting = false;
+		}
+	}
+
+	async function handlePurge() {
+		purging = true;
+		error = '';
+		purgeProgress = { deletedCount: 0, bytesFreed: 0 };
+		try {
+			const result = await purgeFootage(deviceId, undefined, (p) => {
+				purgeProgress = p;
+			});
+			purgeProgress = result;
+			// Refresh so the storage bar + timeline scrubber reflect the
+			// purge without requiring a page reload.
+			billingStore.load().catch(() => {});
+			transportStore.refreshCoverage(deviceId).catch(() => {});
+			confirmingPurge = false;
+		} catch (e) {
+			error = e instanceof Error ? e.message : 'Failed to delete footage';
+		} finally {
+			purging = false;
 		}
 	}
 </script>
@@ -168,18 +200,61 @@
 				{saving ? 'Saving...' : 'Save Settings'}
 			</Button>
 
-			<div class="border-t pt-4">
+			<div class="border-t pt-4 space-y-3">
+				{#if confirmingPurge}
+					<div>
+						<p class="text-sm text-destructive mb-2">
+							Permanently delete every recording for this camera? This cannot be undone.
+						</p>
+						{#if purging || (purgeProgress && purgeProgress.deletedCount > 0)}
+							<p class="text-xs text-muted-foreground mb-2">
+								{purging ? 'Deleting…' : 'Done.'}
+								{purgeProgress?.deletedCount ?? 0} segments ·
+								{formatBytes(purgeProgress?.bytesFreed ?? 0)} freed
+							</p>
+						{/if}
+						<div class="flex gap-2">
+							<Button
+								variant="outline"
+								class="flex-1"
+								disabled={purging}
+								onclick={() => { confirmingPurge = false; purgeProgress = null; }}
+							>
+								Cancel
+							</Button>
+							<Button
+								variant="destructive"
+								class="flex-1"
+								disabled={purging}
+								onclick={handlePurge}
+							>
+								{purging ? 'Deleting…' : 'Delete Footage'}
+							</Button>
+						</div>
+					</div>
+				{:else}
+					<Button
+						variant="ghost"
+						class="w-full text-destructive hover:text-destructive hover:bg-destructive/10"
+						onclick={() => { confirmingPurge = true; purgeProgress = null; }}
+					>
+						Delete All Footage
+					</Button>
+				{/if}
+
 				{#if confirmingDelete}
-					<p class="text-sm text-destructive mb-2">
-						Delete this camera? Recordings will remain in storage.
-					</p>
-					<div class="flex gap-2">
-						<Button variant="outline" class="flex-1" onclick={() => { confirmingDelete = false; }}>
-							Cancel
-						</Button>
-						<Button variant="destructive" class="flex-1" disabled={deleting} onclick={handleDelete}>
-							{deleting ? 'Deleting...' : 'Confirm Delete'}
-						</Button>
+					<div>
+						<p class="text-sm text-destructive mb-2">
+							Delete this camera and all its recordings? Large archives may take a moment.
+						</p>
+						<div class="flex gap-2">
+							<Button variant="outline" class="flex-1" disabled={deleting} onclick={() => { confirmingDelete = false; }}>
+								Cancel
+							</Button>
+							<Button variant="destructive" class="flex-1" disabled={deleting} onclick={handleDelete}>
+								{deleting ? 'Deleting…' : 'Confirm Delete'}
+							</Button>
+						</div>
 					</div>
 				{:else}
 					<Button variant="ghost" class="w-full text-destructive hover:text-destructive hover:bg-destructive/10" onclick={() => { confirmingDelete = true; }}>

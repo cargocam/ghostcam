@@ -120,6 +120,18 @@ export interface UpdateCameraRequest {
   recording_mode?: string;
 }
 /**
+ * DeleteFootageResponse is the body of DELETE
+ * /api/v1/cameras/{deviceID}/footage. The endpoint processes deletions
+ * in batches bounded by server-side limits; HasMore is true when the
+ * batch was full, signalling the UI to call again to continue the
+ * purge.
+ */
+export interface DeleteFootageResponse {
+  deleted_count: number /* int */;
+  bytes_freed: number /* uint64 */;
+  has_more: boolean;
+}
+/**
  * TelemetryEntry is a single camera telemetry reading stored in the Redis
  * telemetry stream and returned on GET /api/v1/telemetry/{id}/latest,
  * GET /api/v1/telemetry/{id} and inside CameraResponse.

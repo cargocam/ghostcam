@@ -26,14 +26,26 @@
 	let camera = $derived(cameraStore.cameras.find((c) => c.device_id === deviceId));
 	let isMuted = $derived(settingsStore.isCameraMuted(deviceId));
 
-	// Check if the seek target falls within this camera's coverage
-	let hasCoverageAtSeek = $derived.by(() => {
-		const target = scrubberStore.seekTarget;
-		if (target === null) return true; // live mode — always show
+	// Find the coverage span (if any) that contains the current playhead.
+	// During VOD playback, playheadTime advances in real time so this
+	// re-evaluates continuously — when the playhead enters a gap the src
+	// goes empty, and when it exits the gap a fresh manifest is loaded.
+	// Returns a stable identity string so downstream derivations only
+	// recompute on actual span transitions (not every animation frame).
+	let coverageSpanKey = $derived.by(() => {
+		if (scrubberStore.seekTarget === null) return 'live';
+		const t = scrubberStore.playheadTime;
 		const coverage = scrubberStore.cameraCoverage.get(deviceId);
-		if (!coverage || coverage.length === 0) return false;
-		// Check if seek time falls within any coverage span (already merged with 30s gap threshold)
-		return coverage.some((s) => target >= s.start && target <= s.end);
+		if (!coverage || coverage.length === 0) return 'none';
+		const span = coverage.find((s) => t >= s.start && t <= s.end);
+		return span ? `${span.start}:${span.end}` : 'none';
+	});
+
+	let coverageSpanAtPlayhead = $derived.by(() => {
+		if (coverageSpanKey === 'live') return 'live' as const;
+		if (coverageSpanKey === 'none') return null;
+		const [start, end] = coverageSpanKey.split(':').map(Number);
+		return { start, end };
 	});
 
 	// Clip manifest window — 10-min VOD centered on clip midpoint.
@@ -87,20 +99,24 @@
 	});
 
 	// Live: sliding window manifest, hls.js polls for new segments.
-	// VOD: 30-min window from seek point for continuous archive playback.
+	// VOD: manifest bounded to the current coverage span so hls.js stops
+	//      at the gap boundary instead of skipping ahead. When the playhead
+	//      re-enters coverage a fresh manifest is loaded automatically.
 	// Clip mode: wide VOD manifest, loop boundaries handle precise range.
-	// Empty string when no coverage at seek time — HlsPlayer won't load.
+	// Empty string when no coverage at playhead — shows "No footage".
 	let hlsSrc = $derived.by(() => {
 		const id = encodeURIComponent(deviceId);
 		if (clipSnapshot) {
 			return `/hls/${id}/vod.m3u8?from=${clipSnapshot.from}&to=${clipSnapshot.to}`;
 		}
-		const target = scrubberStore.seekTarget;
-		if (target === null) return `/hls/${id}/live.m3u8`;
-		if (Date.now() / 1000 - target < 30) return `/hls/${id}/live.m3u8`;
-		if (!hasCoverageAtSeek) return '';
-		const from = Math.floor(target * 1000);
-		const to = from + 30 * 60 * 1000;
+		const span = coverageSpanAtPlayhead;
+		if (span === 'live') return `/hls/${id}/live.m3u8`;
+		if (span === null) return '';
+		// Start from the seek point (or span start if we entered mid-gap),
+		// end at the span boundary so hls.js stops before the next gap.
+		const seekMs = Math.floor((scrubberStore.seekTarget ?? span.start) * 1000);
+		const from = Math.max(seekMs, Math.floor(span.start * 1000));
+		const to = Math.floor(span.end * 1000);
 		return `/hls/${id}/vod.m3u8?from=${from}&to=${to}`;
 	});
 

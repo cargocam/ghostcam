@@ -140,11 +140,10 @@ func (a *App) AdminReassignCamera(w http.ResponseWriter, r *http.Request) {
 // AdminDeleteCamera handles DELETE /api/v1/admin/cameras/{deviceID}.
 //
 // Unscoped delete — unlike the per-user DELETE /api/v1/cameras/{deviceID},
-// this endpoint does not care about ownership. Removes the camera row
-// (which cascades to camera_api_keys, enrollment_tokens, segments) but
-// leaves the S3 objects for the normal opportunistic prune to collect
-// on the retention window boundary. If an admin needs immediate S3
-// cleanup, they can run it by hand.
+// this endpoint does not care about ownership. Reaps the camera's S3
+// segment objects synchronously before removing the `cameras` row so
+// admin-initiated deletion doesn't leave orphaned storage behind; the
+// DB cascade then drops segments, camera_api_keys, enrollment_tokens.
 func (a *App) AdminDeleteCamera(w http.ResponseWriter, r *http.Request) {
 	deviceID := chi.URLParam(r, "deviceID")
 	if deviceID == "" {
@@ -162,6 +161,8 @@ func (a *App) AdminDeleteCamera(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "camera_not_found")
 		return
 	}
+
+	a.purgeAllFootageForDelete(r.Context(), deviceID, derefUserID(cam))
 
 	if err := a.DB.DeleteCamera(r.Context(), deviceID); err != nil {
 		slog.Error("admin: delete camera failed", "error", err)

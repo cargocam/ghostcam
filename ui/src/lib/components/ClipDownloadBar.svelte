@@ -2,9 +2,12 @@
 	import { clipStore } from '$lib/stores/clip.svelte.js';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { prepareClip, exportTelemetry } from '$lib/signaling.js';
+	import { transportStore } from '$lib/stores/transport.svelte.js';
+	import { purgeFootage, formatBytes } from '$lib/footage.js';
 	import { concatSegments, type ConcatProgress } from '$lib/ffmpeg.js';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import { Download, X, FileText, Film } from 'lucide-svelte';
+	import { billingStore } from '$lib/stores/billing.svelte.js';
+	import { Download, X, FileText, Film, Trash2 } from 'lucide-svelte';
 
 	function triggerDownload(blob: Blob, filename: string) {
 		const url = URL.createObjectURL(blob);
@@ -133,6 +136,40 @@
 	});
 
 	let isWorking = $derived(clipStore.phase === 'downloading' || clipStore.phase === 'processing');
+
+	// Delete-range state. We deliberately scope delete to a single
+	// selected camera — fanning destructive deletes across "All cameras"
+	// is too easy to do by accident.
+	let confirmingDelete = $state(false);
+	let deleting = $state(false);
+	let deleteLabel = $state('');
+
+	async function deleteRange() {
+		if (!cameraStore.selectedId) return;
+		const deviceId = cameraStore.selectedId;
+		const fromMs = Math.floor(clipStore.startTime * 1000);
+		const toMs = Math.floor(clipStore.endTime * 1000);
+		if (toMs <= fromMs) return;
+		deleting = true;
+		deleteLabel = 'Deleting…';
+		try {
+			const result = await purgeFootage(deviceId, { fromMs, toMs }, (p) => {
+				deleteLabel = `Deleting… ${p.deletedCount} · ${formatBytes(p.bytesFreed)}`;
+			});
+			deleteLabel = `Deleted ${result.deletedCount} segments · ${formatBytes(result.bytesFreed)}`;
+			// Refresh usage + coverage so the storage bar and scrubber
+			// reflect the purge without a full reload.
+			billingStore.load().catch(() => {});
+			transportStore.refreshCoverage(deviceId).catch(() => {});
+			confirmingDelete = false;
+			clipStore.cancel();
+		} catch (e) {
+			clipStore.error = e instanceof Error ? e.message : 'Delete failed';
+			clipStore.phase = 'error';
+		} finally {
+			deleting = false;
+		}
+	}
 </script>
 
 {#if clipStore.enabled}
@@ -156,6 +193,18 @@
 			</div>
 		{:else if clipStore.phase === 'error'}
 			<span class="text-xs text-destructive flex-1">{clipStore.error}</span>
+		{:else if deleting}
+			<span class="text-xs text-destructive flex-1">{deleteLabel}</span>
+		{:else if confirmingDelete}
+			<div class="flex items-center gap-1.5 flex-1">
+				<span class="text-xs text-destructive">Delete this {clipStore.durationLabel} range?</span>
+				<Button variant="outline" size="sm" class="h-7 text-xs" onclick={() => { confirmingDelete = false; }}>
+					Cancel
+				</Button>
+				<Button variant="destructive" size="sm" class="h-7 text-xs" onclick={deleteRange}>
+					Confirm
+				</Button>
+			</div>
 		{:else}
 			<div class="flex items-center gap-1.5 flex-1">
 				<Button variant="outline" size="sm" class="h-7 text-xs gap-1" onclick={downloadVideo} disabled={clipStore.durationSecs <= 0}>
@@ -169,6 +218,17 @@
 				<Button variant="outline" size="sm" class="h-7 text-xs gap-1" onclick={() => downloadTelemetry('json')} disabled={clipStore.durationSecs <= 0}>
 					<Download class="h-3 w-3" />
 					JSON
+				</Button>
+				<Button
+					variant="outline"
+					size="sm"
+					class="h-7 text-xs gap-1 text-destructive hover:text-destructive hover:bg-destructive/10"
+					onclick={() => { confirmingDelete = true; }}
+					disabled={clipStore.durationSecs <= 0 || !cameraStore.selectedId}
+					title={cameraStore.selectedId ? 'Delete footage in this range' : 'Select a single camera to delete footage'}
+				>
+					<Trash2 class="h-3 w-3" />
+					Delete
 				</Button>
 			</div>
 		{/if}

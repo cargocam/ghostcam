@@ -67,7 +67,13 @@ func (a *App) GetLiveManifest(w http.ResponseWriter, r *http.Request) {
 	b.WriteString("#EXT-X-INDEPENDENT-SEGMENTS\n")
 	b.WriteString(fmt.Sprintf("#EXT-X-MEDIA-SEQUENCE:%d\n", mediaSeq))
 
-	for _, seg := range segments {
+	for i, seg := range segments {
+		if i > 0 {
+			gap := int64(seg.StartTS) - int64(segments[i-1].EndTS)
+			if gap > segmentDurationSecs*2*1000 {
+				b.WriteString("#EXT-X-DISCONTINUITY\n")
+			}
+		}
 		durationSecs := float64(seg.EndTS-seg.StartTS) / 1000.0
 		b.WriteString(fmt.Sprintf("#EXT-X-PROGRAM-DATE-TIME:%s\n", epochMsToISO8601(seg.StartTS)))
 		b.WriteString(fmt.Sprintf("#EXTINF:%.3f,\n", durationSecs))
@@ -125,7 +131,13 @@ func (a *App) GetVodManifest(w http.ResponseWriter, r *http.Request) {
 	b.WriteString("#EXT-X-MEDIA-SEQUENCE:0\n")
 	b.WriteString("#EXT-X-PLAYLIST-TYPE:VOD\n")
 
-	for _, seg := range segments {
+	for i, seg := range segments {
+		if i > 0 {
+			gap := int64(seg.StartTS) - int64(segments[i-1].EndTS)
+			if gap > segmentDurationSecs*2*1000 {
+				b.WriteString("#EXT-X-DISCONTINUITY\n")
+			}
+		}
 		durationSecs := float64(seg.EndTS-seg.StartTS) / 1000.0
 		b.WriteString(fmt.Sprintf("#EXT-X-PROGRAM-DATE-TIME:%s\n", epochMsToISO8601(seg.StartTS)))
 		b.WriteString(fmt.Sprintf("#EXTINF:%.3f,\n", durationSecs))
