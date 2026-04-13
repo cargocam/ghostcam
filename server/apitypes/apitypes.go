@@ -117,9 +117,10 @@ type UpdateCameraRequest struct {
 // batch was full, signalling the UI to call again to continue the
 // purge.
 type DeleteFootageResponse struct {
-	DeletedCount int    `json:"deleted_count"`
-	BytesFreed   uint64 `json:"bytes_freed"`
-	HasMore      bool   `json:"has_more"`
+	DeletedCount   int    `json:"deleted_count"`
+	BytesFreed     uint64 `json:"bytes_freed"`
+	HasMore        bool   `json:"has_more"`
+	RemainingCount int    `json:"remaining_count"`
 }
 
 // ====================================================================

@@ -107,7 +107,7 @@
 	async function handlePurge() {
 		purging = true;
 		error = '';
-		purgeProgress = { deletedCount: 0, bytesFreed: 0 };
+		purgeProgress = { deletedCount: 0, bytesFreed: 0, totalCount: 0 };
 		try {
 			const result = await purgeFootage(deviceId, undefined, (p) => {
 				purgeProgress = p;
@@ -207,11 +207,32 @@
 							Permanently delete every recording for this camera? This cannot be undone.
 						</p>
 						{#if purging || (purgeProgress && purgeProgress.deletedCount > 0)}
-							<p class="text-xs text-muted-foreground mb-2">
-								{purging ? 'Deleting…' : 'Done.'}
-								{purgeProgress?.deletedCount ?? 0} segments ·
-								{formatBytes(purgeProgress?.bytesFreed ?? 0)} freed
-							</p>
+							{@const total = purgeProgress?.totalCount ?? 0}
+							{@const deleted = purgeProgress?.deletedCount ?? 0}
+							{@const pct = total > 0 ? deleted / total : 0}
+							{#if purging && total > 0}
+								<div class="mb-2">
+									<div class="flex justify-between text-xs text-muted-foreground mb-1">
+										<span>Deleting… {deleted.toLocaleString()} / {total.toLocaleString()} segments</span>
+										<span>{Math.round(pct * 100)}%</span>
+									</div>
+									<div class="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+										<div
+											class="h-full rounded-full bg-destructive transition-all duration-300"
+											style="width: {pct * 100}%"
+										></div>
+									</div>
+									<p class="text-xs text-muted-foreground mt-1">
+										{formatBytes(purgeProgress?.bytesFreed ?? 0)} freed
+									</p>
+								</div>
+							{:else}
+								<p class="text-xs text-muted-foreground mb-2">
+									{purging ? 'Deleting…' : 'Done.'}
+									{deleted.toLocaleString()} segments ·
+									{formatBytes(purgeProgress?.bytesFreed ?? 0)} freed
+								</p>
+							{/if}
 						{/if}
 						<div class="flex gap-2">
 							<Button

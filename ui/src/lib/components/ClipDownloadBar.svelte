@@ -143,6 +143,7 @@
 	let confirmingDelete = $state(false);
 	let deleting = $state(false);
 	let deleteLabel = $state('');
+	let deleteProgress = $state(0);
 
 	async function deleteRange() {
 		if (!cameraStore.selectedId) return;
@@ -152,9 +153,13 @@
 		if (toMs <= fromMs) return;
 		deleting = true;
 		deleteLabel = 'Deleting…';
+		deleteProgress = 0;
 		try {
 			const result = await purgeFootage(deviceId, { fromMs, toMs }, (p) => {
-				deleteLabel = `Deleting… ${p.deletedCount} · ${formatBytes(p.bytesFreed)}`;
+				deleteProgress = p.totalCount > 0 ? p.deletedCount / p.totalCount : 0;
+				deleteLabel = p.totalCount > 0
+					? `Deleting… ${p.deletedCount.toLocaleString()} / ${p.totalCount.toLocaleString()} · ${formatBytes(p.bytesFreed)}`
+					: `Deleting… ${p.deletedCount.toLocaleString()} · ${formatBytes(p.bytesFreed)}`;
 			});
 			deleteLabel = `Deleted ${result.deletedCount} segments · ${formatBytes(result.bytesFreed)}`;
 			// Refresh usage + coverage so the storage bar and scrubber
@@ -194,7 +199,15 @@
 		{:else if clipStore.phase === 'error'}
 			<span class="text-xs text-destructive flex-1">{clipStore.error}</span>
 		{:else if deleting}
-			<span class="text-xs text-destructive flex-1">{deleteLabel}</span>
+			<div class="flex items-center gap-2 flex-1">
+				<div class="h-1.5 flex-1 rounded-full bg-muted overflow-hidden">
+					<div
+						class="h-full rounded-full bg-destructive transition-all duration-300"
+						style="width: {deleteProgress * 100}%"
+					></div>
+				</div>
+				<span class="text-xs text-destructive whitespace-nowrap">{deleteLabel}</span>
+			</div>
 		{:else if confirmingDelete}
 			<div class="flex items-center gap-1.5 flex-1">
 				<span class="text-xs text-destructive">Delete this {clipStore.durationLabel} range?</span>

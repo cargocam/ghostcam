@@ -3,6 +3,8 @@ import { deleteFootage } from '$lib/signaling.js';
 export interface PurgeProgress {
 	deletedCount: number;
 	bytesFreed: number;
+	/** Total = deletedCount + remainingCount. 0 means unknown (indeterminate). */
+	totalCount: number;
 }
 
 /**
@@ -31,14 +33,15 @@ export async function purgeFootage(
 		const res = await deleteFootage(deviceId, range);
 		deletedCount += res.deleted_count;
 		bytesFreed += res.bytes_freed;
-		onProgress?.({ deletedCount, bytesFreed });
-		if (!res.has_more) return { deletedCount, bytesFreed };
+		const totalCount = deletedCount + res.remaining_count;
+		onProgress?.({ deletedCount, bytesFreed, totalCount });
+		if (!res.has_more) return { deletedCount, bytesFreed, totalCount: deletedCount };
 		// A well-behaved server returns deleted_count > 0 when has_more
 		// is true. Defensive break: if it claims more remains but
 		// nothing was deleted this batch, we'd loop forever.
-		if (res.deleted_count === 0) return { deletedCount, bytesFreed };
+		if (res.deleted_count === 0) return { deletedCount, bytesFreed, totalCount };
 	}
-	return { deletedCount, bytesFreed };
+	return { deletedCount, bytesFreed, totalCount: deletedCount };
 }
 
 /** Human-readable bytes label: "1.23 GB", "456 MB", "12 KB". */

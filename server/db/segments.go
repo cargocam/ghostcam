@@ -211,6 +211,28 @@ func (db *DB) DeleteSegmentsRange(ctx context.Context, deviceID string, fromMs, 
 	return deleted, rows.Err()
 }
 
+// CountSegmentsRange returns the number of segments for deviceID whose
+// start_ts falls in [fromMs, toMs]. When toMs is 0 the upper bound is
+// ignored. Uses the (device_id, start_ts) index so it's fast even for
+// large tables.
+func (db *DB) CountSegmentsRange(ctx context.Context, deviceID string, fromMs, toMs uint64) (int, error) {
+	var count int
+	var err error
+	if toMs == 0 {
+		err = db.pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM segments WHERE device_id = $1 AND start_ts >= $2`,
+			deviceID, int64(fromMs)).Scan(&count)
+	} else {
+		err = db.pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM segments WHERE device_id = $1 AND start_ts >= $2 AND start_ts <= $3`,
+			deviceID, int64(fromMs), int64(toMs)).Scan(&count)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("count segments range: %w", err)
+	}
+	return count, nil
+}
+
 func (db *DB) LatestSegment(ctx context.Context, deviceID string) (*SegmentRecord, error) {
 	row := db.pool.QueryRow(ctx,
 		`SELECT segment_id, device_id, s3_key, start_ts, end_ts, size_bytes, resolution, created_at, has_motion

@@ -4,11 +4,20 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/cargocam/ghostcam/server/apitypes"
 	"github.com/go-chi/chi/v5"
 )
+
+// s3DeleteConcurrency caps the number of concurrent S3 delete calls
+// within a single batch. Without parallelism, 100 sequential S3
+// deletes at ~30ms each take 3s per batch; at 20 batches that's 60s,
+// which hits the WriteTimeout. With 20-way parallelism each batch
+// takes ~150ms.
+const s3DeleteConcurrency = 20
 
 // footageDeleteBatchSize caps how many segment rows a single DB
 // DELETE ... RETURNING statement processes. Matches pruneBatchSize in
@@ -17,10 +26,10 @@ import (
 const footageDeleteBatchSize = 100
 
 // maxBatchesPerFootageRequest caps how many batches one HTTP call to
-// DELETE /api/v1/cameras/{id}/footage processes. 20 * 100 = 2000
-// segments per call (~4 GB at ~2 MB each). Larger purges return
+// DELETE /api/v1/cameras/{id}/footage processes. 10 * 100 = 1000
+// segments per call (~2 GB at ~2 MB each). Larger purges return
 // has_more=true and the UI re-calls until drained.
-const maxBatchesPerFootageRequest = 20
+const maxBatchesPerFootageRequest = 10
 
 // maxBatchesPerCameraDelete caps the synchronous S3 purge embedded in
 // DeleteCamera / AdminDeleteCamera. Kept higher than the per-request
@@ -77,6 +86,13 @@ func (a *App) DeleteFootage(w http.ResponseWriter, r *http.Request) {
 		a.Redis.DecrBy(r.Context(), "storage_bytes:"+userID, int64(bytesFreed))
 	}
 
+	// Count remaining segments so the UI can render a progress bar.
+	remainingCount, countErr := a.DB.CountSegmentsRange(r.Context(), deviceID, fromMs, toMs)
+	if countErr != nil {
+		slog.Warn("delete footage: count remaining failed", "device_id", deviceID, "error", countErr)
+		// Non-fatal: the UI falls back to indeterminate progress.
+	}
+
 	slog.Info("audit", "event_type", "footage_deleted",
 		"device_id", deviceID, "initiated_by", getUserID(r),
 		"from_ms", fromMs, "to_ms", toMs,
@@ -84,9 +100,10 @@ func (a *App) DeleteFootage(w http.ResponseWriter, r *http.Request) {
 		"has_more", hasMore)
 
 	writeJSON(w, http.StatusOK, apitypes.DeleteFootageResponse{
-		DeletedCount: deletedCount,
-		BytesFreed:   bytesFreed,
-		HasMore:      hasMore,
+		DeletedCount:   deletedCount,
+		BytesFreed:     bytesFreed,
+		HasMore:        hasMore,
+		RemainingCount: remainingCount,
 	})
 }
 
@@ -125,13 +142,26 @@ func (a *App) purgeDeviceFootage(
 		if lastBatchLen == 0 {
 			return deletedCount, bytesFreed, false, nil
 		}
+		// Delete S3 objects in parallel to avoid sequential latency
+		// piling up across batches and hitting the WriteTimeout.
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, s3DeleteConcurrency)
+		var batchBytes atomic.Uint64
 		for _, seg := range rows {
-			if delErr := a.S3.Delete(ctx, seg.S3Key); delErr != nil {
-				slog.Warn("delete footage: S3 delete failed",
-					"s3_key", seg.S3Key, "error", delErr)
-			}
-			bytesFreed += seg.SizeBytes
+			batchBytes.Add(seg.SizeBytes)
+			wg.Add(1)
+			go func(key string) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+				if delErr := a.S3.Delete(ctx, key); delErr != nil {
+					slog.Warn("delete footage: S3 delete failed",
+						"s3_key", key, "error", delErr)
+				}
+			}(seg.S3Key)
 		}
+		wg.Wait()
+		bytesFreed += batchBytes.Load()
 		deletedCount += lastBatchLen
 	}
 	return deletedCount, bytesFreed, decideHasMore(lastBatchLen, footageDeleteBatchSize), nil

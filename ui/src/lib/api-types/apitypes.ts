@@ -130,6 +130,7 @@ export interface DeleteFootageResponse {
   deleted_count: number /* int */;
   bytes_freed: number /* uint64 */;
   has_more: boolean;
+  remaining_count: number /* int */;
 }
 /**
  * TelemetryEntry is a single camera telemetry reading stored in the Redis
