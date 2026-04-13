@@ -241,8 +241,10 @@ func runTestFileLoop(ctx context.Context, cfg *CameraConfig, testFile, pattern s
 }
 
 func runRealPipeline(ctx context.Context, cfg *CameraConfig, pattern string, startNum int, liveWriter LiveWriter) error {
-	slog.Info("starting real capture pipeline (rpicam-vid | tee | ffmpeg)",
-		"segment_start", startNum, "records_segments", recordsSegments(cfg))
+	hasAudio := !cfg.NoAudio
+	record := recordsSegments(cfg)
+	slog.Info("starting real capture pipeline",
+		"segment_start", startNum, "records_segments", record, "has_audio", hasAudio)
 
 	// --- rpicam-vid: produces raw H.264 Annex B on stdout ---
 	rpicamCmd := exec.CommandContext(ctx, "rpicam-vid",
@@ -262,21 +264,38 @@ func runRealPipeline(ctx context.Context, cfg *CameraConfig, pattern string, sta
 		return fmt.Errorf("rpicam stdout pipe: %w", err)
 	}
 
-	hasAudio := !cfg.NoAudio
-	record := recordsSegments(cfg)
-
 	// Streaming-only with no audio: ffmpeg has nothing to do. Pipe
 	// rpicam-vid straight into the live writer and return.
 	if !record && !hasAudio {
 		return runLiveOnlyRealPipeline(ctx, rpicamCmd, rpicamStdout, liveWriter)
 	}
 
-	// --- ffmpeg: reads H.264 from stdin, muxes MPEG-TS segments + Opus audio ---
+	// feedVideoToFFmpeg controls whether H.264 is piped into ffmpeg. We only
+	// do so when segments are being recorded. In streaming-only mode with
+	// audio we still need ffmpeg for the ALSA→Opus path, but piping H.264
+	// into an unmapped input would back-pressure the rpicam-vid tee and
+	// stall the live relay — so rpicam-vid's stdout goes straight to
+	// liveWriter and ffmpeg only sees the ALSA input.
+	feedVideoToFFmpeg := record
+
+	// Stream index of the ALSA input inside ffmpeg. When H.264 is also
+	// piped in, ALSA is input 1; otherwise it's the only input (0).
+	alsaStreamIdx := 0
+	if feedVideoToFFmpeg {
+		alsaStreamIdx = 1
+	}
+
+	// --- ffmpeg: muxes MPEG-TS segments (when recording) + Opus audio ---
 	ffmpegArgs := []string{
 		"-nostdin", "-loglevel", "warning",
 		"-probesize", "5M", "-analyzeduration", "5M",
-		"-f", "h264", "-framerate", fmt.Sprintf("%d", cfg.VideoFPS),
-		"-i", "pipe:0",
+	}
+
+	if feedVideoToFFmpeg {
+		ffmpegArgs = append(ffmpegArgs,
+			"-f", "h264", "-framerate", fmt.Sprintf("%d", cfg.VideoFPS),
+			"-i", "pipe:0",
+		)
 	}
 
 	var audioPipeR, audioPipeW *os.File
@@ -320,7 +339,7 @@ func runRealPipeline(ctx context.Context, cfg *CameraConfig, pattern string, sta
 		defer audioPipeR.Close()
 
 		ffmpegArgs = append(ffmpegArgs,
-			"-map", "1:a",
+			"-map", fmt.Sprintf("%d:a", alsaStreamIdx),
 			"-c:a", "libopus", "-b:a", "32k",
 			"-application", "lowdelay",
 			"-frame_duration", "20",
@@ -336,12 +355,15 @@ func runRealPipeline(ctx context.Context, cfg *CameraConfig, pattern string, sta
 		ffmpegCmd.ExtraFiles = []*os.File{audioPipeW}
 	}
 
-	ffmpegStdin, err := ffmpegCmd.StdinPipe()
-	if err != nil {
-		if audioPipeW != nil {
-			audioPipeW.Close()
+	var ffmpegStdin io.WriteCloser
+	if feedVideoToFFmpeg {
+		ffmpegStdin, err = ffmpegCmd.StdinPipe()
+		if err != nil {
+			if audioPipeW != nil {
+				audioPipeW.Close()
+			}
+			return fmt.Errorf("ffmpeg stdin pipe: %w", err)
 		}
-		return fmt.Errorf("ffmpeg stdin pipe: %w", err)
 	}
 
 	// Cancel handlers: SIGTERM the process group, then SIGKILL after 5s.
@@ -379,11 +401,19 @@ func runRealPipeline(ctx context.Context, cfg *CameraConfig, pattern string, sta
 	}
 	slog.Info("ffmpeg started", "pid", ffmpegCmd.Process.Pid)
 
-	// Tee rpicam-vid's stdout to both ffmpeg's stdin and the live writer.
+	// Tee rpicam-vid's stdout to ffmpeg's stdin (when recording) and to
+	// the live writer. In streaming-only mode ffmpegStdin is nil so the
+	// live writer is the only sink for the H.264 stream.
 	teeDone := make(chan error, 1)
 	go func() {
-		_, err := io.Copy(io.MultiWriter(ffmpegStdin, liveWriter), rpicamStdout)
-		ffmpegStdin.Close()
+		var target io.Writer = liveWriter
+		if ffmpegStdin != nil {
+			target = io.MultiWriter(ffmpegStdin, liveWriter)
+		}
+		_, err := io.Copy(target, rpicamStdout)
+		if ffmpegStdin != nil {
+			ffmpegStdin.Close()
+		}
 		teeDone <- err
 	}()
 
