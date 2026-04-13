@@ -159,6 +159,7 @@ func (a *App) PiImagesList(w http.ResponseWriter, r *http.Request) {
 func (a *App) GithubWebhook(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20)) // 10 MiB — webhook bodies are small JSON
 	if err != nil {
+		slog.Error("github webhook: failed to read body", "error", err)
 		http.Error(w, "", http.StatusBadRequest)
 		return
 	}
@@ -192,6 +193,8 @@ func (a *App) GithubWebhook(w http.ResponseWriter, r *http.Request) {
 
 	var payload githubReleasePayload
 	if err := json.Unmarshal(body, &payload); err != nil {
+		slog.Error("github webhook: failed to parse release payload",
+			"error", err, "body_len", len(body), "body_prefix", string(body[:min(200, len(body))]))
 		http.Error(w, "", http.StatusBadRequest)
 		return
 	}
