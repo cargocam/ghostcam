@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -15,6 +17,7 @@ func RunTelemetryPoll(ctx context.Context, client *Client, dataDir string) {
 	)
 	interval := baseInterval
 	consecutiveFailures := 0
+	healthMarked := false
 
 	for {
 		select {
@@ -40,6 +43,15 @@ func RunTelemetryPoll(ctx context.Context, client *Client, dataDir string) {
 				consecutiveFailures = 0
 				interval = baseInterval
 			}
+
+			// Write boot_ok marker after first successful telemetry.
+			// ExecStartPre checks this to decide whether to roll back
+			// a staged firmware update on the next restart.
+			if !healthMarked {
+				_ = os.WriteFile(filepath.Join(dataDir, "boot_ok"), nil, 0644)
+				healthMarked = true
+			}
+
 			for _, cmd := range commands {
 				HandleCommand(ctx, cmd, dataDir)
 			}

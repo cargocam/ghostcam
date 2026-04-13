@@ -3,11 +3,10 @@ package common
 
 // ProvisionRequest is sent by the camera during provisioning. The camera
 // sends its ed25519 public key for registration (like adding to SSH
-// authorized_keys). The device_id is derived from the public key.
+// authorized_keys). The server derives device_id from the public key.
 type ProvisionRequest struct {
 	Token        string `json:"token"`
 	DeviceSerial string `json:"device_serial"`
-	DeviceID     string `json:"device_id"`  // SHA-256(public_key)[:16] hex
 	PublicKey    string `json:"public_key"` // hex-encoded ed25519 public key (64 chars)
 	FwVersion    string `json:"fw_version,omitempty"`
 }

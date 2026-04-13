@@ -10,8 +10,26 @@ Group=yurei
 SupplementaryGroups=video dialout audio
 EnvironmentFile=-/etc/ghostcam/env
 Environment=MALLOC_ARENA_MAX=2
-# Install staged firmware update before starting (+ prefix runs as root)
-ExecStartPre=+/bin/sh -c 'test -f /var/ghostcam/staged-update && mv /var/ghostcam/staged-update /usr/local/bin/ghostcam-camera && chmod +x /usr/local/bin/ghostcam-camera || true'
+# Firmware update with rollback. If a staged update exists:
+#   1. If boot_ok marker is missing (previous boot crashed), restore backup and discard the staged update.
+#   2. Otherwise, back up current binary, install staged update.
+# The camera binary writes boot_ok after first successful telemetry POST.
+ExecStartPre=+/bin/sh -c '\
+  STAGED=/var/ghostcam/staged-update; \
+  BIN=/usr/local/bin/ghostcam-camera; \
+  PREV=${BIN}.prev; \
+  BOOT_OK=/var/ghostcam/boot_ok; \
+  if [ -f "$STAGED" ]; then \
+    if [ ! -f "$BOOT_OK" ] && [ -f "$PREV" ]; then \
+      echo "Previous boot failed, rolling back firmware"; \
+      cp "$PREV" "$BIN" && chmod +x "$BIN"; \
+      rm -f "$STAGED"; \
+    else \
+      cp "$BIN" "$PREV" && mv "$STAGED" "$BIN" && chmod +x "$BIN"; \
+    fi; \
+  fi; \
+  rm -f "$BOOT_OK"; \
+  true'
 ExecStart=/usr/local/bin/ghostcam-camera
 Restart=always
 RestartSec=5

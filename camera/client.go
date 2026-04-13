@@ -125,7 +125,6 @@ func Provision(ctx context.Context, serverURL, token, deviceSerial string, ident
 	body := common.ProvisionRequest{
 		Token:        token,
 		DeviceSerial: deviceSerial,
-		DeviceID:     identity.DeviceID,
 		PublicKey:    identity.PublicKeyHex(),
 		FwVersion:    Version,
 	}

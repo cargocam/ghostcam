@@ -76,7 +76,6 @@ test.describe('ed25519 camera provisioning and auth', () => {
       body: JSON.stringify({
         token,
         device_serial: `e2e-serial-${Date.now()}`,
-        device_id: identity.deviceId,
         public_key: identity.publicKeyHex,
         fw_version: 'e2e-test',
       }),
@@ -119,7 +118,6 @@ test.describe('ed25519 camera provisioning and auth', () => {
       body: JSON.stringify({
         token,
         device_serial: `e2e-badsig-${Date.now()}`,
-        device_id: identity.deviceId,
         public_key: identity.publicKeyHex,
       }),
     });
@@ -156,7 +154,6 @@ test.describe('ed25519 camera provisioning and auth', () => {
       body: JSON.stringify({
         token,
         device_serial: `e2e-expired-${Date.now()}`,
-        device_id: identity.deviceId,
         public_key: identity.publicKeyHex,
       }),
     });

@@ -108,19 +108,13 @@ func (db *DB) GetCameraBySerial(ctx context.Context, deviceSerial string) (*Came
 	return &c, nil
 }
 
-// --- Camera public keys (ed25519 signature auth) ---
-
-// UpsertCameraPublicKey stores or replaces the ed25519 public key for a
-// camera. Used during v2 provisioning and legacy→v2 key registration.
-func (db *DB) UpsertCameraPublicKey(ctx context.Context, deviceID, publicKeyHex string) error {
-	now := nowUnix()
+// SetCameraPublicKey stores the ed25519 public key on the camera row.
+func (db *DB) SetCameraPublicKey(ctx context.Context, deviceID, publicKeyHex string) error {
 	_, err := db.pool.Exec(ctx,
-		`INSERT INTO camera_public_keys (device_id, public_key, created_at, updated_at)
-		 VALUES ($1, $2, $3, $3)
-		 ON CONFLICT (device_id) DO UPDATE SET public_key = $2, updated_at = $3`,
-		deviceID, publicKeyHex, now)
+		`UPDATE cameras SET public_key = $1 WHERE device_id = $2`,
+		publicKeyHex, deviceID)
 	if err != nil {
-		return fmt.Errorf("upsert camera public key: %w", err)
+		return fmt.Errorf("set camera public key: %w", err)
 	}
 	return nil
 }
@@ -128,9 +122,9 @@ func (db *DB) UpsertCameraPublicKey(ctx context.Context, deviceID, publicKeyHex 
 // GetCameraPublicKey returns the hex-encoded ed25519 public key for a
 // device. Returns empty string (not error) if no key is registered.
 func (db *DB) GetCameraPublicKey(ctx context.Context, deviceID string) (string, error) {
-	var pubKey string
+	var pubKey *string
 	err := db.pool.QueryRow(ctx,
-		`SELECT public_key FROM camera_public_keys WHERE device_id = $1`,
+		`SELECT public_key FROM cameras WHERE device_id = $1`,
 		deviceID).Scan(&pubKey)
 	if err == pgx.ErrNoRows {
 		return "", nil
@@ -138,7 +132,10 @@ func (db *DB) GetCameraPublicKey(ctx context.Context, deviceID string) (string, 
 	if err != nil {
 		return "", fmt.Errorf("get camera public key: %w", err)
 	}
-	return pubKey, nil
+	if pubKey == nil {
+		return "", nil
+	}
+	return *pubKey, nil
 }
 
 // --- Admin camera management ---
