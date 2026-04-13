@@ -109,6 +109,17 @@ type UpdateCameraRequest struct {
 	RecordingMode *string `json:"recording_mode,omitempty"`
 }
 
+// DeleteFootageResponse is the body of DELETE
+// /api/v1/cameras/{deviceID}/footage. The endpoint processes deletions
+// in batches bounded by server-side limits; HasMore is true when the
+// batch was full, signalling the UI to call again to continue the
+// purge.
+type DeleteFootageResponse struct {
+	DeletedCount int    `json:"deleted_count"`
+	BytesFreed   uint64 `json:"bytes_freed"`
+	HasMore      bool   `json:"has_more"`
+}
+
 // ====================================================================
 // Telemetry
 // ====================================================================

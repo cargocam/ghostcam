@@ -195,11 +195,25 @@ func (a *App) UpdateCamera(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeleteCamera handles DELETE /api/v1/cameras/{deviceID}.
+//
+// Reaps the camera's S3 segment objects synchronously before removing
+// the `cameras` row. The DB cascade on segments would have deleted the
+// rows either way, but without the explicit S3 purge the underlying
+// objects were silently orphaned — the presign-path opportunistic
+// prune requires the camera to still be uploading, which it will never
+// do again after this call.
 func (a *App) DeleteCamera(w http.ResponseWriter, r *http.Request) {
 	deviceID := chi.URLParam(r, "deviceID")
-	if _, ok := a.ownedCamera(w, r, deviceID); !ok {
+	camera, ok := a.ownedCamera(w, r, deviceID)
+	if !ok {
 		return
 	}
+
+	userID := ""
+	if camera.UserID != nil {
+		userID = *camera.UserID
+	}
+	a.purgeAllFootageForDelete(r.Context(), deviceID, userID)
 
 	if err := a.DB.DeleteCamera(r.Context(), deviceID); err != nil {
 		slog.Error("delete camera failed", "error", err)

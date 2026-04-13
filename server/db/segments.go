@@ -145,6 +145,61 @@ func (db *DB) PruneSegments(ctx context.Context, deviceID string, olderThanMs ui
 	return deleted, rows.Err()
 }
 
+// DeleteSegmentsRange deletes up to `limit` segments for deviceID whose
+// start_ts falls in [fromMs, toMs]. When toMs is 0 the upper bound is
+// ignored, so (fromMs=0, toMs=0) deletes every segment for the device.
+// Returns the full deleted rows so the caller can reap the matching S3
+// objects and decrement the storage counter. Bounded by LIMIT so
+// handlers can loop and report progress to the UI.
+func (db *DB) DeleteSegmentsRange(ctx context.Context, deviceID string, fromMs, toMs uint64, limit int) ([]SegmentRecord, error) {
+	var (
+		rows pgx.Rows
+		err  error
+	)
+	if toMs == 0 {
+		rows, err = db.pool.Query(ctx,
+			`DELETE FROM segments
+			 WHERE segment_id IN (
+			   SELECT segment_id FROM segments
+			   WHERE device_id = $1 AND start_ts >= $2
+			   ORDER BY start_ts
+			   LIMIT $3
+			 )
+			 RETURNING segment_id, device_id, s3_key, start_ts, end_ts, size_bytes, resolution, created_at, has_motion`,
+			deviceID, int64(fromMs), limit)
+	} else {
+		rows, err = db.pool.Query(ctx,
+			`DELETE FROM segments
+			 WHERE segment_id IN (
+			   SELECT segment_id FROM segments
+			   WHERE device_id = $1 AND start_ts >= $2 AND start_ts <= $3
+			   ORDER BY start_ts
+			   LIMIT $4
+			 )
+			 RETURNING segment_id, device_id, s3_key, start_ts, end_ts, size_bytes, resolution, created_at, has_motion`,
+			deviceID, int64(fromMs), int64(toMs), limit)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("delete segments range: %w", err)
+	}
+	defer rows.Close()
+
+	var deleted []SegmentRecord
+	for rows.Next() {
+		var s SegmentRecord
+		var startTS, endTS, sizeBytes, createdAt int64
+		if err := rows.Scan(&s.SegmentID, &s.DeviceID, &s.S3Key, &startTS, &endTS, &sizeBytes, &s.Resolution, &createdAt, &s.HasMotion); err != nil {
+			return nil, fmt.Errorf("scanning deleted segment: %w", err)
+		}
+		s.StartTS = uint64(startTS)
+		s.EndTS = uint64(endTS)
+		s.SizeBytes = uint64(sizeBytes)
+		s.CreatedAt = uint64(createdAt)
+		deleted = append(deleted, s)
+	}
+	return deleted, rows.Err()
+}
+
 func (db *DB) LatestSegment(ctx context.Context, deviceID string) (*SegmentRecord, error) {
 	row := db.pool.QueryRow(ctx,
 		`SELECT segment_id, device_id, s3_key, start_ts, end_ts, size_bytes, resolution, created_at, has_motion

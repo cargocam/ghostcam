@@ -13,6 +13,7 @@ import type {
 	CameraResponse,
 	CheckoutResponse,
 	CoverageResponse,
+	DeleteFootageResponse,
 	EventEntry,
 	ListEventsResponse,
 	ListTiersResponse,
@@ -378,6 +379,27 @@ export async function deleteCamera(deviceId: string): Promise<void> {
 		credentials: 'include',
 	});
 	if (!res.ok) throw new Error(`deleteCamera failed: ${res.status}`);
+}
+
+/**
+ * Delete a single batch of footage for a camera. Omitting both
+ * `fromMs` and `toMs` tells the server to delete every segment. The
+ * server processes deletions in bounded batches (see the `has_more`
+ * flag) — callers should use {@link purgeFootage} in `$lib/footage`,
+ * which loops until drained.
+ */
+export async function deleteFootage(
+	deviceId: string,
+	opts?: { fromMs?: number; toMs?: number },
+): Promise<DeleteFootageResponse> {
+	const params = new URLSearchParams();
+	if (opts?.fromMs && opts.fromMs > 0) params.set('from_ms', String(Math.floor(opts.fromMs)));
+	if (opts?.toMs && opts.toMs > 0) params.set('to_ms', String(Math.floor(opts.toMs)));
+	const qs = params.toString();
+	const url = `${API_BASE}/cameras/${encodeURIComponent(deviceId)}/footage${qs ? `?${qs}` : ''}`;
+	const res = await fetch(url, { method: 'DELETE', credentials: 'include' });
+	if (!res.ok) throw new Error(`deleteFootage failed: ${res.status}`);
+	return res.json();
 }
 
 // --- Enrollment QR ---

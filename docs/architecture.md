@@ -96,6 +96,16 @@ server/            (package main — binary builds from this directory)
   cameras.go        ListCameras / Enroll / GetCamera / UpdateCamera / DeleteCamera.
                     Enroll enforces tier camera limit (402 on exceed), UpdateCamera
                     enqueues commands for resolution/recording_mode changes.
+                    DeleteCamera invokes purgeAllFootageForDelete (footage.go)
+                    synchronously before dropping the cameras row, so the S3
+                    segment objects are reaped instead of orphaned.
+  footage.go        DeleteFootage (DELETE /api/v1/cameras/:id/footage with
+                    optional from_ms/to_ms), purgeDeviceFootage loop helper
+                    (bounded batches of DeleteSegmentsRange + S3.Delete, signals
+                    has_more so the UI can page through large purges), and
+                    purgeAllFootageForDelete used by both user and admin camera
+                    delete paths. Shares DB / S3 plumbing with presign.go's
+                    retention prune.
   presign.go        effectiveTier() (fail-closed — unknown tier strings fall
                     back to free, never escalate to a paid tier), resolveTier()
                     (panics on unknown — fed only by already-validated IDs), and
