@@ -16,9 +16,11 @@ import (
 
 	"github.com/cargocam/ghostcam/server/billing"
 	"github.com/cargocam/ghostcam/server/db"
+	"github.com/cargocam/ghostcam/server/linear"
 	"github.com/cargocam/ghostcam/server/mailer"
 	"github.com/cargocam/ghostcam/server/redis"
 	"github.com/cargocam/ghostcam/server/s3"
+	"github.com/cargocam/ghostcam/server/triage"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	goredis "github.com/redis/go-redis/v9"
@@ -37,6 +39,8 @@ type App struct {
 	Mailer     *mailer.Client
 	Live       *LiveManager // WebRTC live streaming sessions
 	WHEP       *WHEPManager // WebRTC viewer sessions
+	Triage     triage.Classifier // support-email triage (no-op when unconfigured)
+	Linear     *linear.Client    // Linear issue creation (no-op when unconfigured)
 }
 
 
@@ -131,6 +135,12 @@ func run() error {
 		PublicURL: cfg.PublicURL,
 	})
 
+	triageClassifier := triage.New(cfg.AnthropicAPIKey)
+	linearClient := linear.New(linear.Config{
+		APIKey: cfg.LinearAPIKey,
+		TeamID: cfg.LinearTeamID,
+	})
+
 	app := &App{
 		Config:     cfg,
 		DB:         database,
@@ -141,6 +151,8 @@ func run() error {
 		Mailer:     mailerClient,
 		Live:       NewLiveManager(),
 		WHEP:       NewWHEPManager(),
+		Triage:     triageClassifier,
+		Linear:     linearClient,
 	}
 
 	srv := &http.Server{
@@ -211,6 +223,7 @@ func (a *App) router() http.Handler {
 	r.With(loginRL.Middleware).Post("/api/v1/auth/otp/verify", a.VerifyLoginOTP)
 	r.Post("/api/v1/webhooks/stripe", a.StripeWebhook)
 	r.Post("/api/v1/webhooks/github", a.GithubWebhook)
+	r.Post("/api/v1/webhooks/resend", a.ResendInboundWebhook)
 
 	// Camera auth
 	r.Group(func(r chi.Router) {
