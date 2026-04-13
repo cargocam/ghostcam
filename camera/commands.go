@@ -11,7 +11,7 @@ import (
 // HandleCommand processes a server-issued command received via the telemetry
 // poll response. Commands like reboot, unregister, and config changes cause
 // the process to exit — systemd restarts it with new state.
-func HandleCommand(ctx context.Context, cmd common.CameraCommand, dataDir string) {
+func HandleCommand(ctx context.Context, cmd common.CameraCommand, dataDir string, client *Client) {
 	switch cmd.Type {
 	case "reboot":
 		slog.Info("reboot command received")
@@ -44,6 +44,11 @@ func HandleCommand(ctx context.Context, cmd common.CameraCommand, dataDir string
 				slog.Warn("WiFi config failed", "err", err)
 			}
 		}()
+	case "update_firmware":
+		slog.Info("firmware update command received")
+		if CheckFirmwareUpdate(ctx, client, dataDir) {
+			os.Exit(0)
+		}
 	case "remove_network":
 		slog.Info("remove network command", "ssid", cmd.SSID)
 	default:

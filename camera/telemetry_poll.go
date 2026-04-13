@@ -53,7 +53,7 @@ func RunTelemetryPoll(ctx context.Context, client *Client, dataDir string) {
 			}
 
 			for _, cmd := range commands {
-				HandleCommand(ctx, cmd, dataDir)
+				HandleCommand(ctx, cmd, dataDir, client)
 			}
 		}
 	}

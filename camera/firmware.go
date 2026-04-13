@@ -81,26 +81,6 @@ func CheckFirmwareUpdate(ctx context.Context, client *Client, dataDir string) bo
 	return true
 }
 
-// RunFirmwareWatch checks for firmware updates every hour while the
-// camera is running. If an update is found, it stages the binary and
-// exits the process so systemd restarts with the new version.
-func RunFirmwareWatch(ctx context.Context, client *Client, dataDir string) {
-	if Version == "dev" {
-		return // no-op in dev builds
-	}
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(1 * time.Hour):
-			if CheckFirmwareUpdate(ctx, client, dataDir) {
-				slog.Info("firmware update staged by periodic check, exiting for install")
-				os.Exit(0)
-			}
-		}
-	}
-}
-
 func (c *Client) getFirmwareLatest(ctx context.Context) (*firmwareResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()

@@ -46,6 +46,16 @@ func (a *App) PostTelemetry(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Nudge the camera to update if its firmware is stale. The camera
+	// handles "update_firmware" by calling CheckFirmwareUpdate, which
+	// downloads, SHA-verifies, stages, and exits for systemd restart.
+	if body.FwVersion != "" && a.Redis != nil {
+		latest, _ := a.Redis.Get(r.Context(), "firmware:latest:version").Result()
+		if latest != "" && latest != body.FwVersion {
+			apiCommands = append(apiCommands, common.CameraCommand{Type: "update_firmware"})
+		}
+	}
+
 	writeJSON(w, http.StatusOK, common.TelemetryPollResponse{Commands: apiCommands})
 }
 

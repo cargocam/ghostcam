@@ -193,15 +193,6 @@ func main() {
 		RunTelemetryPoll(ctx, client, cfg.DataDir)
 	}()
 
-	// Periodic firmware update check — picks up new releases without
-	// waiting for a reboot. Checks every hour; if an update is found,
-	// stages it and exits so systemd restarts with the new binary.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		RunFirmwareWatch(ctx, client, cfg.DataDir)
-	}()
-
 	<-ctx.Done()
 	slog.Info("shutting down, waiting for goroutines to drain (15s max)")
 
