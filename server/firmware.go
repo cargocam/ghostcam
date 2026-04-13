@@ -284,13 +284,12 @@ func filterPiImageAssets(tag string, assets []githubReleaseAsset) []githubReleas
 	return out
 }
 
-const cameraAssetName = "ghostcam-camera-aarch64"
-
-// findCameraAsset returns the aarch64 camera binary asset, or nil if
-// not found in the release.
+// findCameraAsset returns the aarch64 .deb camera package asset, or
+// nil if not found in the release. Prefers the .deb over the raw binary
+// so dpkg can manage dependencies (ffmpeg, ca-certificates).
 func findCameraAsset(assets []githubReleaseAsset) *githubReleaseAsset {
 	for i := range assets {
-		if assets[i].Name == cameraAssetName {
+		if strings.HasPrefix(assets[i].Name, "ghostcam-camera_") && strings.HasSuffix(assets[i].Name, "_arm64.deb") {
 			return &assets[i]
 		}
 	}

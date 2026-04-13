@@ -25,7 +25,7 @@ type firmwareResponse struct {
 }
 
 // CheckFirmwareUpdate checks the server for a newer firmware version.
-// If found, downloads the binary to {dataDir}/staged-update, and returns true.
+// If found, downloads the binary to {dataDir}/staged-update.deb, and returns true.
 // The caller should exit so systemd restarts. ExecStartPre backs up the
 // current binary and installs the staged update; if the new binary fails
 // to write boot_ok (crash-loop), the next restart rolls back to .prev.
@@ -55,7 +55,7 @@ func CheckFirmwareUpdate(ctx context.Context, client *Client, dataDir string) bo
 
 	slog.Info("new firmware available", "current", Version, "new", resp.Release.Version)
 
-	stagedPath := filepath.Join(dataDir, "staged-update")
+	stagedPath := filepath.Join(dataDir, "staged-update.deb")
 	if err := downloadToFile(ctx, resp.Release.DownloadURL, stagedPath); err != nil {
 		slog.Error("firmware download failed", "error", err)
 		return false
@@ -142,7 +142,7 @@ func downloadToFile(ctx context.Context, url, destPath string) error {
 	}
 
 	tmpPath := destPath + ".tmp"
-	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0755)
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return fmt.Errorf("creating temp file: %w", err)
 	}
