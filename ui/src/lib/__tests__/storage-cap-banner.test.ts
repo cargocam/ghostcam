@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import { STORAGE_WARN_PERCENT } from '$lib/stores/billing.svelte.js';
 
 // Inline the banner visibility logic from StorageCapBanner.svelte so we can
-// test the thresholds without spinning up a DOM runtime. If the component's
-// WARN_PERCENT / visible derivation changes, update it here too.
-const WARN_PERCENT = 85;
+// test the thresholds without spinning up a DOM runtime. The warning
+// threshold itself is imported from the store so any change there is
+// immediately reflected here — no manual "keep in sync" comment needed.
+const WARN_PERCENT = STORAGE_WARN_PERCENT;
 
 interface Usage {
 	storage_bytes: number;

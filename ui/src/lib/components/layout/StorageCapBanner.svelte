@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { billingStore } from '$lib/stores/billing.svelte.js';
+	import { billingStore, STORAGE_WARN_PERCENT } from '$lib/stores/billing.svelte.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { AlertTriangle, HardDrive, X } from 'lucide-svelte';
 
@@ -18,13 +18,12 @@
 	}
 	let { onUpgrade }: Props = $props();
 
-	// A soft warning appears at >=85% so users see it coming before uploads
-	// actually stop. The hard banner appears when the cap is reached.
-	const WARN_PERCENT = 85;
-
+	// A soft warning appears before uploads actually stop. The hard banner
+	// appears when the cap is reached. Threshold is shared with the store
+	// (and the banner's tests) so changes have a single source of truth.
 	let isCapped = $derived(billingStore.isStorageCapped);
 	let percent = $derived(billingStore.storagePercent);
-	let inWarning = $derived(!isCapped && percent >= WARN_PERCENT);
+	let inWarning = $derived(!isCapped && percent >= STORAGE_WARN_PERCENT);
 
 	// Track which state the user has dismissed so the banner doesn't reappear
 	// on every navigation within the same session. A fresh capped state (e.g.
@@ -42,8 +41,8 @@
 
 {#if visible}
 	<div
-		role="status"
-		aria-live="polite"
+		role={isCapped ? 'alert' : 'status'}
+		aria-live={isCapped ? 'assertive' : 'polite'}
 		class="flex items-center gap-2 sm:gap-3 px-3 sm:px-4 py-2 border-b text-sm {isCapped
 			? 'bg-destructive/10 border-destructive/30 text-destructive-foreground'
 			: 'bg-amber-500/10 border-amber-500/30 text-foreground'}"

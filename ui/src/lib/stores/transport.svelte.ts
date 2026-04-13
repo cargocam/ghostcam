@@ -139,8 +139,10 @@ class TransportStore {
 				alertsStore.addAlert('storage_capped', data.device_id ?? '', 'Storage', 'Storage limit reached. Uploads paused.', data.event_id);
 				// Refresh the billing usage so the persistent banner and
 				// settings panel reflect the capped state without waiting
-				// for the next manual settings-open.
-				billingStore.load().catch(() => { /* non-fatal */ });
+				// for the next manual settings-open. Only the usage numbers
+				// change on a storage event — subscription/tiers are
+				// unchanged, so we skip the full three-request round-trip.
+				billingStore.refreshUsage();
 			} catch { /* ignore */ }
 		});
 
