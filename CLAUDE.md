@@ -94,6 +94,7 @@ without regenerating is hard-rejected — the drift check uses
 - Coverage merge logic (gap threshold, motion promotion, overlap handling)
 - Alert deduplication (upsert vs append by type+cameraId)
 - Time formatting (`formatTimeAgo`)
+- Storage-cap banner thresholds (warning at 85%, capped at 100%, dismissal behavior)
 
 **UI browser tests** (`bun run test:browser`): Playwright specs in `ui/browser-tests/`
 that run in real Chromium against the Vite dev server. **Every** backend call

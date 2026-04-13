@@ -198,6 +198,10 @@ components/
   ClipDownloadBar.svelte   Download controls for clip mode: Video (MP4), CSV, JSON export buttons
                            Progress bar during download/processing, multi-camera support
   LiveView.svelte      Main view with empty-state onboarding watermark
+  layout/StorageCapBanner.svelte  Persistent banner above the main view that surfaces tier storage state:
+                                  amber warning at >=85%, red capped banner at 100%. Capped copy
+                                  clarifies recording is paused but WebRTC live view still works.
+                                  Upgrade button opens the settings dialog.
   camera/CameraCard.svelte  Camera card with HLS player, uses live.m3u8 / vod.m3u8
   camera/CameraList.svelte  Sidebar camera list with gear icon for settings dialog
   camera/CameraMarker.svelte  Dot always visible, info/pip panels float to top-right with overlap spreading

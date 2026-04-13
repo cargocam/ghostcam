@@ -11,6 +11,13 @@ import {
 // FreeTierID mirrors billing.FreeTierID on the server.
 const FREE_TIER_ID = 'free';
 
+/**
+ * Percent of the storage cap at which the UI should surface a soft warning
+ * (amber banner). Shared between the banner component and its tests so the
+ * threshold has a single source of truth.
+ */
+export const STORAGE_WARN_PERCENT = 85;
+
 class BillingStore {
 	subscription = $state<SubscriptionResponse | null>(null);
 	usage = $state<UsageResponse | null>(null);
@@ -52,6 +59,12 @@ class BillingStore {
 	);
 
 	async load(forceRefresh = false) {
+		// Guard against concurrent invocations. On startup the transport
+		// store calls `load()` once and then connects SSE; an incoming
+		// `storage_capped` event can land before the first load resolves,
+		// which would otherwise fire a second parallel round-trip whose
+		// response simply overwrites the first.
+		if (this.loading) return;
 		this.loading = true;
 		this.loadError = null;
 		this.error = null;
@@ -87,6 +100,21 @@ class BillingStore {
 			this.tiersLoaded = false;
 		} finally {
 			this.loading = false;
+		}
+	}
+
+	/**
+	 * Refresh only the usage numbers (not subscription or tier catalogue).
+	 * Used by the SSE path when a `storage_capped` event arrives — we only
+	 * need the updated storage_bytes/limit to drive the banner, not a full
+	 * three-request round-trip that would also flicker `this.loading` in
+	 * any open settings panel.
+	 */
+	async refreshUsage() {
+		try {
+			this.usage = await getUsage();
+		} catch {
+			/* non-fatal: banner will catch up on the next full load */
 		}
 	}
 
