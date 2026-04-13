@@ -132,22 +132,46 @@ jobs:
           name: ghostcam-${{ matrix.device }}-image
           path: ghostcam-${{ matrix.device }}-*.img.xz
 
+  # Publish the release as soon as camera binaries + .deb are ready.
+  # Pi images are large (~30 min each) and only needed for flashing new
+  # hardware, so they're attached later by the attach-pi-images job.
   release:
-    needs: [build-camera, build-camera-deb, build-docker, build-pi-image]
-    if: always() && needs.build-camera.result == 'success' && needs.build-camera-deb.result == 'success'
+    needs: [build-camera, build-camera-deb, build-docker]
+    if: needs.build-camera.result == 'success' && needs.build-camera-deb.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
       - name: Generate checksums
-        run: sha256sum ghostcam-camera* ghostcam-*.img.xz > checksums.txt 2>/dev/null || sha256sum ghostcam-camera* > checksums.txt
+        run: sha256sum ghostcam-camera* > checksums.txt
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             ghostcam-camera-aarch64
             ghostcam-camera-x86_64
             ghostcam-camera_*.deb
-            ghostcam-*.img.xz
             checksums.txt
           generate_release_notes: true
+
+  # Attach Pi images to the release after they finish building.
+  # Runs independently so the release + firmware webhook aren't blocked.
+  attach-pi-images:
+    needs: [build-pi-image, release]
+    if: always() && needs.release.result == 'success' && needs.build-pi-image.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ghostcam-*-image
+          merge-multiple: true
+      - name: Attach Pi images to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for img in ghostcam-*.img.xz; do
+            [ -f "$img" ] && gh release upload "${{ github.ref_name }}" "$img" --repo "${{ github.repository }}" --clobber
+          done
+          # Update checksums with Pi images included
+          sha256sum ghostcam-*.img.xz >> checksums.txt 2>/dev/null || true
+          gh release upload "${{ github.ref_name }}" checksums.txt --repo "${{ github.repository }}" --clobber
