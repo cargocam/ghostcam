@@ -11,6 +11,7 @@
 	import Header from '$lib/components/layout/Header.svelte';
 	import MobileNav from '$lib/components/layout/MobileNav.svelte';
 	import SettingsDialog from '$lib/components/layout/SettingsDialog.svelte';
+	import StorageCapBanner from '$lib/components/layout/StorageCapBanner.svelte';
 	import AlertsSheet from '$lib/components/alerts/AlertsSheet.svelte';
 	import TimelineScrubber from '$lib/components/TimelineScrubber.svelte';
 	import LiveView from '$lib/views/LiveView.svelte';
@@ -97,6 +98,8 @@
 				onSettingsClick={() => (settingsOpen = true)}
 				onAlertsClick={() => (alertsOpen = !alertsOpen)}
 			/>
+
+			<StorageCapBanner onUpgrade={() => (settingsOpen = true)} />
 
 			<main class="flex-1 overflow-hidden relative">
 				<div class="absolute inset-0" class:hidden={settingsStore.currentView !== 'live'}>

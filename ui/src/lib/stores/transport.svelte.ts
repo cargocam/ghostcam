@@ -5,6 +5,7 @@ import { cameraStore } from '$lib/stores/cameras.svelte.js';
 import { groupStore } from '$lib/stores/groups.svelte.js';
 import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 import { alertsStore } from '$lib/stores/alerts.svelte.js';
+import { billingStore } from '$lib/stores/billing.svelte.js';
 import { settingsStore } from '$lib/stores/settings.svelte.js';
 
 class TransportStore {
@@ -37,6 +38,11 @@ class TransportStore {
 
 			// Load persisted events/notifications
 			await alertsStore.initialize();
+
+			// Load billing subscription + usage so the storage-cap banner is
+			// accurate from app startup, not only after settings is opened.
+			// Failures are non-fatal (billing may be disabled on self-hosted).
+			billingStore.load().catch(() => { /* non-fatal */ });
 
 			// Connect SSE — delivers initial telemetry on connect, then realtime.
 			// Client derives online status from server_ts freshness.
@@ -131,6 +137,10 @@ class TransportStore {
 			try {
 				const data = JSON.parse(e.data) as { event_id?: string; device_id?: string; storage_bytes?: number; limit_gb?: number };
 				alertsStore.addAlert('storage_capped', data.device_id ?? '', 'Storage', 'Storage limit reached. Uploads paused.', data.event_id);
+				// Refresh the billing usage so the persistent banner and
+				// settings panel reflect the capped state without waiting
+				// for the next manual settings-open.
+				billingStore.load().catch(() => { /* non-fatal */ });
 			} catch { /* ignore */ }
 		});
 

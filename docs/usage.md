@@ -275,8 +275,22 @@ Click the **gear icon** in the header to open global settings. The **Billing** s
 ### What Happens at the Limit
 
 - **Camera limit reached** — enrolling a new camera returns HTTP 402. Delete an existing camera or upgrade.
-- **Storage limit reached** — uploads pause (`storage_capped` event fires). Existing recordings remain available for playback and download. Free up space (wait for retention to delete old segments) or upgrade. Segments older than `GHOSTCAM_SEGMENT_RETENTION_DAYS` (30 by default) are deleted hourly.
+- **Storage limit reached** — HLS segment uploads pause (`storage_capped` event fires). **Live viewing is unaffected**: WebRTC live streaming runs independently of storage (no segments are persisted on that path), so cameras stay watchable in real time even while recording is paused. Existing recordings remain available for playback and download. Free up space (wait for retention to delete old segments) or upgrade. Segments older than `GHOSTCAM_SEGMENT_RETENTION_DAYS` (30 by default) are deleted hourly.
 - **Downgrade past camera limit** — only the oldest N cameras (by enrollment date) may upload. The rest stay visible and playable but stop recording new footage.
+
+### Storage-Cap Banner
+
+A persistent banner appears at the top of the main view when storage usage
+crosses key thresholds, so users aren't surprised by silent upload pauses:
+
+- **At 85%+ (warning)** — an amber banner appears with an **Upgrade** button.
+  The banner is dismissible for the session.
+- **At 100% (capped)** — a red banner replaces the warning with copy
+  clarifying that recording is paused but live viewing still works. The
+  capped banner is not dismissible; it disappears automatically once
+  storage drops below the limit or the user upgrades.
+
+The same Upgrade button opens the normal settings → Billing flow.
 
 ## 9. Groups
 
