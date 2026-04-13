@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '$lib/components/ui/sheet/index.js';
 	import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '$lib/components/ui/dialog/index.js';
 	import { Separator } from '$lib/components/ui/separator/index.js';
@@ -22,10 +23,12 @@
 		open?: boolean;
 	} = $props();
 
-	// Refresh billing data each time settings opens
+	// Refresh billing data each time settings opens.
+	// untrack prevents the effect from re-triggering when load()
+	// mutates reactive store fields (loading, subscription, etc.).
 	$effect(() => {
 		if (open) {
-			billingStore.load();
+			untrack(() => billingStore.load());
 		}
 	});
 
