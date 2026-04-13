@@ -223,23 +223,37 @@ func (a *App) GithubWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Find the camera binary asset for firmware auto-update.
+	cameraAsset := findCameraAsset(payload.Release.Assets)
+
 	// Launch ingestion in the background. We intentionally detach from
 	// r.Context(): the HTTP handler is about to return and the ctx
 	// would be cancelled. Use a generous timeout so a single stuck
 	// download can't wedge the goroutine forever.
 	piIngestionInFlight.Add(1)
-	go func(assets []githubReleaseAsset, version string) {
+	go func(piAssets []githubReleaseAsset, camAsset *githubReleaseAsset, version string) {
 		defer piIngestionInFlight.Add(-1)
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer cancel()
-		if err := a.ingestPiImages(ctx, version, assets); err != nil {
+
+		// Ingest camera firmware binary (small, ~15 MB — do first).
+		if camAsset != nil {
+			if err := a.ingestCameraFirmware(ctx, version, *camAsset); err != nil {
+				slog.Error("github webhook: camera firmware ingestion failed",
+					"version", version, "error", err)
+			}
+		}
+
+		// Ingest Pi images (large, ~300 MB each).
+		if err := a.ingestPiImages(ctx, version, piAssets); err != nil {
 			slog.Error("github webhook: pi image ingestion failed",
 				"version", version, "error", err)
 			return
 		}
-		slog.Info("github webhook: pi image ingestion complete",
-			"version", version, "count", len(assets))
-	}(matching, payload.Release.TagName)
+		slog.Info("github webhook: ingestion complete",
+			"version", version, "pi_images", len(piAssets),
+			"camera_firmware", camAsset != nil)
+	}(matching, cameraAsset, payload.Release.TagName)
 
 	writeJSON(w, http.StatusAccepted, githubWebhookAccepted{
 		Status:  "accepted",
@@ -268,6 +282,58 @@ func filterPiImageAssets(tag string, assets []githubReleaseAsset) []githubReleas
 		out = append(out, asset)
 	}
 	return out
+}
+
+const cameraAssetName = "ghostcam-camera-aarch64"
+
+// findCameraAsset returns the aarch64 camera binary asset, or nil if
+// not found in the release.
+func findCameraAsset(assets []githubReleaseAsset) *githubReleaseAsset {
+	for i := range assets {
+		if assets[i].Name == cameraAssetName {
+			return &assets[i]
+		}
+	}
+	return nil
+}
+
+// ingestCameraFirmware streams the camera binary from GitHub into S3
+// and sets firmware:latest:version + firmware:latest:sha256 in Redis,
+// enabling the telemetry-driven auto-update flow.
+func (a *App) ingestCameraFirmware(ctx context.Context, version string, asset githubReleaseAsset) error {
+	downloadURL := asset.BrowserDownloadURL
+	if a.Config.GithubToken != "" && asset.URL != "" {
+		downloadURL = asset.URL
+	}
+
+	if !isTrustedAssetURL(downloadURL) {
+		return fmt.Errorf("untrusted camera asset URL: %s", downloadURL)
+	}
+
+	client := &http.Client{Timeout: 5 * time.Minute}
+	key := s3.FirmwareKey(version)
+	size, sha256hex, err := a.streamAssetToS3(ctx, client, downloadURL, key)
+	if err != nil {
+		return fmt.Errorf("stream camera binary to S3: %w", err)
+	}
+
+	pipe := a.Redis.Pipeline()
+	pipe.Set(ctx, "firmware:latest:version", version, 0)
+	pipe.Set(ctx, "firmware:latest:sha256", sha256hex, 0)
+	meta, _ := json.Marshal(apitypes.FirmwareMeta{
+		Version:   version,
+		S3Key:     key,
+		SizeBytes: int(size),
+		SHA256:    sha256hex,
+	})
+	pipe.Set(ctx, "firmware:latest:meta", meta, 0)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return fmt.Errorf("redis set firmware:latest: %w", err)
+	}
+
+	slog.Info("firmware: camera binary ingested",
+		"version", version, "size_bytes", size, "sha256", sha256hex)
+	return nil
 }
 
 // ingestPiImages streams each matching asset directly from GitHub into
