@@ -39,7 +39,8 @@ export const MOCK_CAMERAS: CameraResponse[] = [
     enrolled_at: 1_700_000_000_000,
     provisioned: false,
     resolution: '720p',
-    recording_mode: 'constant',
+    // Streaming-only: exercises the new default in the store/settings dialog.
+    recording_mode: 'never',
   },
 ];
 

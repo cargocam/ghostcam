@@ -26,7 +26,7 @@ type CameraConfig struct {
 	VideoFPS              uint32
 	VideoBitrate          uint32
 	VideoKeyframeInterval uint32
-	RecordingMode         string // "constant" or "motion"
+	RecordingMode         string // "constant", "motion", or "never" (streaming-only)
 	LocalStorageCapBytes  uint64 // max local segment storage before eviction
 }
 
@@ -141,7 +141,13 @@ func LoadConfig() (*CameraConfig, error) {
 		}
 	}
 
-	recordingMode := "constant"
+	// Default is "never" (streaming-only) — a freshly-flashed camera doesn't
+	// start uploading segments until the user explicitly opts into recording.
+	// This matches the DB column default so a brand-new enrollment behaves the
+	// same whether or not the server has yet issued a set_recording_mode
+	// command. Existing installs already have a value persisted on disk, so
+	// this default only applies to fresh data dirs.
+	recordingMode := "never"
 	if stored := readStoredFile(resolvedDataDir, "recording_mode"); stored != "" {
 		recordingMode = stored
 		slog.Info("applying stored recording mode override", "mode", stored)

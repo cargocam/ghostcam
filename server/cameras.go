@@ -156,9 +156,9 @@ func (a *App) UpdateCamera(w http.ResponseWriter, r *http.Request) {
 
 	if body.RecordingMode != nil {
 		switch *body.RecordingMode {
-		case "constant", "motion":
+		case "constant", "motion", "never":
 		default:
-			writeError(w, http.StatusBadRequest, "recording_mode must be constant or motion")
+			writeError(w, http.StatusBadRequest, "recording_mode must be constant, motion, or never")
 			return
 		}
 	}

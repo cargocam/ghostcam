@@ -202,9 +202,16 @@
 			/>
 		{:else}
 			<div class="w-full h-full grid place-items-center bg-black/80">
-				<div class="flex flex-col items-center gap-2 text-muted-foreground">
+				<div class="flex flex-col items-center gap-2 text-muted-foreground px-4 text-center">
 					<VideoOff class="h-8 w-8 opacity-40" />
-					<span class="text-xs">No footage</span>
+					{#if camera?.recording_mode === 'never'}
+						<span class="text-xs max-w-[22ch]">
+							Streaming-only mode — no recordings to scrub. Enable recording
+							in camera settings to use the timeline.
+						</span>
+					{:else}
+						<span class="text-xs">No footage</span>
+					{/if}
 				</div>
 			</div>
 		{/if}

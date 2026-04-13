@@ -18,7 +18,10 @@ camera/            (package main — binary builds from this directory)
                    graceful shutdown (WaitGroup drain, 15s timeout). Pure orchestration — all logic in the
                    other camera/ files.
   config.go        CameraConfig + cameraConfigFile, layered TOML/env/CLI resolution
-                   RecordingMode ("constant"/"motion") — runtime override via {dataDir}/recording_mode
+                   RecordingMode ("constant"/"motion"/"never") — runtime override via {dataDir}/recording_mode.
+                   "never" (streaming-only) is the default for fresh data dirs and new DB rows: ffmpeg
+                   skips the MPEG-TS segment sink and main.go skips the segment watcher + upload loop,
+                   so nothing is written to disk or uploaded. The live WebSocket relay is unaffected.
                    LocalStorageCapBytes — configurable via GHOSTCAM_LOCAL_STORAGE_CAP_MB (default 4096 MB)
                    Resolution runtime override via {dataDir}/resolution
                    Video profiles: zero2w/480p, pi4/720p, pi5/1080p
@@ -181,6 +184,9 @@ server/            (package main — binary builds from this directory)
 | `013_user_soft_delete.sql` | Soft delete for users |
 | `014_email_tokens.sql` | One-time email secrets (verify, reset, change-email, login OTP) |
 | `015_support_tickets.sql` | Support email triage audit trail keyed on Svix message id |
+| `016_camera_public_keys.sql` | `camera_public_keys` table (later inlined — see 017) |
+| `017_inline_public_key.sql` | Inlines camera public key on `cameras` and drops stale API-key tables |
+| `018_recording_mode_never_default.sql` | Flips `cameras.recording_mode` default from `'constant'` to `'never'` (streaming-only) so new enrollments opt-in to recording |
 
 ## Viewer Structure
 

@@ -13,6 +13,7 @@
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { billingStore } from '$lib/stores/billing.svelte.js';
+	import { AlertTriangle, HelpCircle, Check, X } from 'lucide-svelte';
 
 	let {
 		open = $bindable(false),
@@ -27,7 +28,7 @@
 	let camera = $derived(cameraStore.getCamera(deviceId));
 	let displayName = $state('');
 	let resolution = $state('720p');
-	let recordingMode = $state('constant');
+	let recordingMode = $state('never');
 	let saving = $state(false);
 	let error = $state('');
 	let success = $state(false);
@@ -36,13 +37,14 @@
 	let confirmingPurge = $state(false);
 	let purging = $state(false);
 	let purgeProgress = $state<PurgeProgress | null>(null);
+	let modeHelpOpen = $state(false);
 
 	// Sync local state when dialog opens
 	$effect(() => {
 		if (open && camera) {
 			displayName = camera.device_name || '';
 			resolution = camera.resolution || '720p';
-			recordingMode = camera.recording_mode || 'constant';
+			recordingMode = camera.recording_mode || 'never';
 			error = '';
 			success = false;
 			confirmingDelete = false;
@@ -161,20 +163,54 @@
 			</div>
 
 			<div>
-				<label for="recording-mode" class="text-sm font-medium">Recording Mode</label>
+				<div class="flex items-center gap-1.5">
+					<label for="recording-mode" class="text-sm font-medium">Recording Mode</label>
+					<button
+						type="button"
+						class="text-muted-foreground hover:text-foreground"
+						aria-label="Compare recording modes"
+						onclick={() => (modeHelpOpen = true)}
+					>
+						<HelpCircle class="h-3.5 w-3.5" />
+					</button>
+				</div>
 				<select
 					id="recording-mode"
 					bind:value={recordingMode}
 					class="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
 				>
-					<option value="constant">Continuous</option>
-					<option value="motion">On Motion</option>
+					<option value="never" title="Live viewing only — no footage is saved. Timeline and clips are disabled for this camera.">
+						Streaming Only (no recording)
+					</option>
+					<option value="motion" title="Uploads only segments where motion is detected. Heuristic — quiet scenes may miss subtle movement.">
+						On Motion
+					</option>
+					<option value="constant" title="Records and uploads every segment continuously. Highest storage and bandwidth cost.">
+						Continuous
+					</option>
 				</select>
-				<p class="mt-1 text-xs text-muted-foreground">
-					{recordingMode === 'motion'
-						? 'Only uploads segments with detected motion. Saves storage.'
-						: 'Records and uploads all footage continuously.'}
-				</p>
+				{#if recordingMode === 'never'}
+					<div class="mt-2 flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400">
+						<AlertTriangle class="h-3.5 w-3.5 shrink-0 mt-0.5" />
+						<span>
+							Live viewing only. No footage is recorded, so the timeline scrubber
+							and clip export will be empty for this camera.
+						</span>
+					</div>
+				{:else if recordingMode === 'motion'}
+					<p class="mt-2 text-xs text-muted-foreground">
+						Uploads only segments where motion is detected. Motion detection is
+						heuristic — quiet scenes may miss subtle movement.
+					</p>
+				{:else if recordingMode === 'constant'}
+					<div class="mt-2 flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400">
+						<AlertTriangle class="h-3.5 w-3.5 shrink-0 mt-0.5" />
+						<span>
+							Records and uploads every segment continuously. Highest storage
+							and bandwidth cost — roughly 2–4 GB per camera per day at 720p.
+						</span>
+					</div>
+				{/if}
 			</div>
 
 			<div class="flex items-center gap-2">
@@ -284,5 +320,74 @@
 				{/if}
 			</div>
 		</div>
+	</DialogContent>
+</Dialog>
+
+<!-- Recording mode comparison -->
+<Dialog bind:open={modeHelpOpen}>
+	<DialogContent>
+		<DialogHeader>
+			<DialogTitle>Recording modes</DialogTitle>
+			<DialogDescription>
+				How each mode handles live viewing, recording, and storage.
+			</DialogDescription>
+		</DialogHeader>
+
+		<div class="mt-4 overflow-x-auto">
+			<table class="w-full text-xs">
+				<thead>
+					<tr class="border-b text-left text-muted-foreground">
+						<th class="py-2 pr-2 font-medium"></th>
+						<th class="py-2 px-2 font-medium">Streaming Only</th>
+						<th class="py-2 px-2 font-medium">On Motion</th>
+						<th class="py-2 pl-2 font-medium">Continuous</th>
+					</tr>
+				</thead>
+				<tbody class="[&>tr]:border-b [&>tr:last-child]:border-0">
+					<tr>
+						<td class="py-2 pr-2 font-medium">Live viewing</td>
+						<td class="py-2 px-2"><Check class="h-3.5 w-3.5 text-primary" /></td>
+						<td class="py-2 px-2"><Check class="h-3.5 w-3.5 text-primary" /></td>
+						<td class="py-2 pl-2"><Check class="h-3.5 w-3.5 text-primary" /></td>
+					</tr>
+					<tr>
+						<td class="py-2 pr-2 font-medium">Timeline playback</td>
+						<td class="py-2 px-2"><X class="h-3.5 w-3.5 text-muted-foreground" /></td>
+						<td class="py-2 px-2">motion only</td>
+						<td class="py-2 pl-2"><Check class="h-3.5 w-3.5 text-primary" /></td>
+					</tr>
+					<tr>
+						<td class="py-2 pr-2 font-medium">Clip export</td>
+						<td class="py-2 px-2"><X class="h-3.5 w-3.5 text-muted-foreground" /></td>
+						<td class="py-2 px-2">motion only</td>
+						<td class="py-2 pl-2"><Check class="h-3.5 w-3.5 text-primary" /></td>
+					</tr>
+					<tr>
+						<td class="py-2 pr-2 font-medium">Storage usage</td>
+						<td class="py-2 px-2">none</td>
+						<td class="py-2 px-2">low</td>
+						<td class="py-2 pl-2">high</td>
+					</tr>
+					<tr>
+						<td class="py-2 pr-2 font-medium">Upload bandwidth</td>
+						<td class="py-2 px-2">viewing only</td>
+						<td class="py-2 px-2">bursty</td>
+						<td class="py-2 pl-2">sustained</td>
+					</tr>
+				</tbody>
+			</table>
+		</div>
+
+		<p class="mt-4 text-xs text-muted-foreground">
+			New cameras default to <span class="font-medium">Streaming Only</span>
+			so you pay no storage before opting in. Switch to
+			<span class="font-medium">On Motion</span> or
+			<span class="font-medium">Continuous</span> to enable recording,
+			timeline playback, and clip export.
+		</p>
+
+		<Button variant="outline" class="mt-4 w-full" onclick={() => (modeHelpOpen = false)}>
+			Close
+		</Button>
 	</DialogContent>
 </Dialog>

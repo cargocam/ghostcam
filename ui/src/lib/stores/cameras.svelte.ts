@@ -52,7 +52,7 @@ class CameraStore {
 				telemetry: initialTelemetry,
 				lastServerTs: null,
 				resolution: c.resolution ?? '720p',
-				recording_mode: c.recording_mode ?? 'constant',
+				recording_mode: c.recording_mode ?? 'never',
 			};
 		});
 	}

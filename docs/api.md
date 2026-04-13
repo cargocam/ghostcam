@@ -223,6 +223,8 @@ All communication is plain HTTPS. Cameras authenticate via ed25519 signature (`S
 
 JSON objects with a `"type"` field: `set_resolution { resolution }`, `set_recording_mode { mode }`, `reboot`, `unregister`, `network_config { ssid, psk }`, `remove_network { ssid }`
 
+`set_recording_mode` accepts `constant`, `motion`, or `never` (streaming-only, the default for newly enrolled cameras). In `never` mode the camera's capture pipeline omits the MPEG-TS segment sink and the segment watcher / upload loop don't run, so nothing is uploaded to S3; the WebSocket live-relay path still works, enabling WebRTC viewing without recording.
+
 `set_resolution` and `set_recording_mode` are persisted to disk by the camera (`{dataDir}/resolution`, `{dataDir}/recording_mode`) and trigger a process exit (systemd restarts with new config). `unregister` clears credentials and exits (systemd restarts, camera re-provisions).
 
 ### Segment Upload (camera → S3 → server confirmation)
