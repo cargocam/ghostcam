@@ -27,9 +27,8 @@ func (a *App) GetSubscription(w http.ResponseWriter, r *http.Request) {
 	tier := a.effectiveTier(r.Context(), sub)
 
 	writeJSON(w, http.StatusOK, apitypes.SubscriptionResponse{
-		BillingEnabled: a.stripeConfigured(),
-		Tier:           tier.ID,
-		TierName:       tier.Name,
+		Tier:     tier.ID,
+		TierName: tier.Name,
 	})
 }
 
@@ -59,10 +58,6 @@ func (a *App) ListTiers(w http.ResponseWriter, _ *http.Request) {
 // webhook or the hourly background tick. Rate-limited independently so a
 // stuck client looping on retry cannot hammer the Stripe API.
 func (a *App) RefreshTiers(w http.ResponseWriter, r *http.Request) {
-	if !a.stripeConfigured() {
-		writeError(w, http.StatusNotImplemented, "billing_not_configured")
-		return
-	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 	if err := a.Tiers.Refresh(ctx, a.Config.StripeSecretKey); err != nil {
@@ -82,11 +77,6 @@ func (a *App) RefreshTiers(w http.ResponseWriter, r *http.Request) {
 // compromised client can't spin up a checkout session for an arbitrary
 // product.
 func (a *App) CreateCheckout(w http.ResponseWriter, r *http.Request) {
-	if !a.stripeConfigured() {
-		writeError(w, http.StatusNotImplemented, "billing_not_configured")
-		return
-	}
-
 	userID := getUserID(r)
 
 	var body apitypes.CheckoutRequest
@@ -133,11 +123,6 @@ func (a *App) CreateCheckout(w http.ResponseWriter, r *http.Request) {
 
 // CreatePortal handles POST /api/v1/billing/portal.
 func (a *App) CreatePortal(w http.ResponseWriter, r *http.Request) {
-	if !a.stripeConfigured() {
-		writeError(w, http.StatusNotImplemented, "billing_not_configured")
-		return
-	}
-
 	userID := getUserID(r)
 
 	var body apitypes.PortalRequest
@@ -202,10 +187,7 @@ func (a *App) GetUsage(w http.ResponseWriter, r *http.Request) {
 
 // StripeWebhook handles POST /api/v1/webhooks/stripe.
 func (a *App) StripeWebhook(w http.ResponseWriter, r *http.Request) {
-	if !a.stripeConfigured() {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
+
 
 	body, err := io.ReadAll(io.LimitReader(r.Body, 65536))
 	if err != nil {
@@ -523,7 +505,7 @@ func (a *App) notifyCameraLimitExceeded(ctx context.Context, userID, tierID stri
 // DB write error) return nil so the caller falls through to the
 // fail-closed free tier. Every failure path logs the details.
 func (a *App) migrateLegacyTier(ctx context.Context, sub *db.SubscriptionRecord) *db.SubscriptionRecord {
-	if !a.stripeConfigured() || sub == nil || sub.StripeSubscriptionID == nil {
+	if sub == nil || sub.StripeSubscriptionID == nil {
 		return nil
 	}
 	subID := *sub.StripeSubscriptionID

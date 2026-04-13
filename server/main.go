@@ -39,11 +39,6 @@ type App struct {
 	WHEP       *WHEPManager // WebRTC viewer sessions
 }
 
-// stripeConfigured reports whether a Stripe secret key is set. Paid tier
-// enforcement is skipped entirely when this is false (dev/local).
-func (a *App) stripeConfigured() bool {
-	return a.Config.StripeSecretKey != ""
-}
 
 func main() {
 	if err := run(); err != nil {
@@ -59,6 +54,9 @@ func run() error {
 	cfg, err := LoadConfig()
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
+	}
+	if cfg.StripeSecretKey == "" {
+		return fmt.Errorf("STRIPE_SECRET_KEY is required")
 	}
 
 	if err := os.MkdirAll(cfg.DataDir, 0o755); err != nil {
@@ -119,20 +117,11 @@ func run() error {
 	}
 
 	tierCache := billing.NewCache()
-	if cfg.StripeSecretKey != "" {
-		// Refresh synchronously so handlers have tiers available for the
-		// first request. Failure is logged but not fatal — the server
-		// still starts and the cache repopulates on the next webhook
-		// delivery (product/price.* events → RefreshTiers on StripeWebhook)
-		// or when a user hits the settings Retry button, which calls the
-		// authenticated POST /api/v1/billing/tiers/refresh endpoint.
-		//
-		// We deliberately do not run a background refresh ticker: the
-		// server has no other long-running goroutines and billing is
-		// not load-bearing enough to justify the exception.
-		if err := tierCache.Refresh(ctx, cfg.StripeSecretKey); err != nil {
-			slog.Warn("billing: initial tier cache refresh failed", "error", err)
-		}
+	// Refresh synchronously so handlers have tiers available for the
+	// first request. Failure is logged but not fatal — the cache
+	// repopulates on the next webhook or via the Retry button.
+	if err := tierCache.Refresh(ctx, cfg.StripeSecretKey); err != nil {
+		slog.Warn("billing: initial tier cache refresh failed", "error", err)
 	}
 
 	mailerClient := mailer.New(mailer.Config{

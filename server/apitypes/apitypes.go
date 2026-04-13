@@ -221,9 +221,8 @@ type ListTiersResponse struct {
 // TierName is the human-readable display name from the Stripe product, or
 // "Free" for the unpaid tier.
 type SubscriptionResponse struct {
-	BillingEnabled bool   `json:"billing_enabled"`
-	Tier           string `json:"tier"`
-	TierName       string `json:"tier_name"`
+	Tier     string `json:"tier"`
+	TierName string `json:"tier_name"`
 }
 
 // UsageResponse is the body of GET /api/v1/billing/usage.

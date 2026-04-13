@@ -38,7 +38,7 @@ ghostcam/
 ├── scripts/         Developer tools: pi.sh (camera manager CLI)
 ├── docs/            Detailed reference: API, architecture, configuration, debugging
 ├── Dockerfile       Multi-stage: server, camera (synthetic sensors), camera-prod (real sensors)
-└── docker-compose.yml  Server + UI + MinIO + Stripe webhook listener + 3 test cameras (--profile test)
+└── docker-compose.yml  Server + UI + MinIO + Stripe webhook listener + 3 test cameras (--profile test; stripe-webhooks runs by default)
 ```
 
 ## Build & Run

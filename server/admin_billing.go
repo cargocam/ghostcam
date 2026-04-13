@@ -26,11 +26,6 @@ import (
 // point of the admin view: making the currently-invisible "unconfigured"
 // products visible so the admin can tag them.
 func (a *App) AdminListBillingTiers(w http.ResponseWriter, r *http.Request) {
-	if !a.stripeConfigured() {
-		writeError(w, http.StatusNotImplemented, "billing_not_configured")
-		return
-	}
-
 	stripe.Key = a.Config.StripeSecretKey
 
 	out, err := a.buildAdminTierList()
@@ -54,10 +49,6 @@ func (a *App) AdminListBillingTiers(w http.ResponseWriter, r *http.Request) {
 // (null = unlimited). Both fields are required to avoid partial updates
 // leaving the product half-configured.
 func (a *App) AdminUpdateBillingTier(w http.ResponseWriter, r *http.Request) {
-	if !a.stripeConfigured() {
-		writeError(w, http.StatusNotImplemented, "billing_not_configured")
-		return
-	}
 
 	priceID := chi.URLParam(r, "priceID")
 	if priceID == "" {
@@ -154,10 +145,6 @@ func (a *App) AdminUpdateBillingTier(w http.ResponseWriter, r *http.Request) {
 // different name) or archive the orphan. Worth noting in the log so an
 // operator knows what to clean up.
 func (a *App) AdminCreateBillingTier(w http.ResponseWriter, r *http.Request) {
-	if !a.stripeConfigured() {
-		writeError(w, http.StatusNotImplemented, "billing_not_configured")
-		return
-	}
 
 	var body apitypes.AdminCreateBillingTierRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -260,10 +247,6 @@ func (a *App) AdminCreateBillingTier(w http.ResponseWriter, r *http.Request) {
 // confirm=true proceeds. This prevents a CFO from silently orphaning
 // a paying customer with a single click.
 func (a *App) AdminArchiveBillingTier(w http.ResponseWriter, r *http.Request) {
-	if !a.stripeConfigured() {
-		writeError(w, http.StatusNotImplemented, "billing_not_configured")
-		return
-	}
 
 	priceID := chi.URLParam(r, "priceID")
 	if priceID == "" {
@@ -392,10 +375,6 @@ func productHasOtherActivePrices(productID, excludePriceID string) (bool, error)
 // this number so fetching the full admin list stays cheap (one Stripe
 // call instead of one per row).
 func (a *App) AdminBillingTierSubscribers(w http.ResponseWriter, r *http.Request) {
-	if !a.stripeConfigured() {
-		writeError(w, http.StatusNotImplemented, "billing_not_configured")
-		return
-	}
 	priceID := chi.URLParam(r, "priceID")
 	if priceID == "" {
 		writeError(w, http.StatusBadRequest, "missing price id")
@@ -452,10 +431,6 @@ func (a *App) AdminBillingTierSubscribers(w http.ResponseWriter, r *http.Request
 // until the admin archives it by hand or retries. Stripe has no
 // transactions, so this is the honest tradeoff.
 func (a *App) AdminRepriceBillingTier(w http.ResponseWriter, r *http.Request) {
-	if !a.stripeConfigured() {
-		writeError(w, http.StatusNotImplemented, "billing_not_configured")
-		return
-	}
 	oldPriceID := chi.URLParam(r, "priceID")
 	if oldPriceID == "" {
 		writeError(w, http.StatusBadRequest, "missing price id")

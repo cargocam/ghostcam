@@ -41,7 +41,6 @@ class BillingStore {
 	actionInFlight = $state(false);
 	error = $state<string | null>(null);
 
-	billingEnabled = $derived(this.subscription?.billing_enabled ?? false);
 	currentTier = $derived(this.subscription?.tier ?? FREE_TIER_ID);
 	currentTierName = $derived(this.subscription?.tier_name ?? 'Free');
 

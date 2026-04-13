@@ -117,7 +117,7 @@ DELETE /api/v1/tokens/:id                  Revoke token
 ## Billing
 
 ```
-GET    /api/v1/billing/subscription         Returns { billing_enabled, tier }
+GET    /api/v1/billing/subscription         Returns { tier }
 GET    /api/v1/billing/tiers               Available tiers with limits (public)
 POST   /api/v1/billing/checkout            { tier, success_url, cancel_url } → { url } (Stripe Checkout Session)
 POST   /api/v1/billing/portal              { return_url } → { url } (Stripe Billing Portal)

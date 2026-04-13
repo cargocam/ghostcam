@@ -76,9 +76,8 @@ services:
       - AWS_SECRET_ACCESS_KEY=minioadmin
       # Public IP for WebRTC ICE-lite candidate (same IP used for MinIO presigned URLs)
       - GHOSTCAM_PUBLIC_IP=${GHOSTCAM_PUBLIC_IP:?Set GHOSTCAM_PUBLIC_IP to your LAN IP}
-      # Stripe (optional) — set STRIPE_SECRET_KEY in .env to enable billing.
-      # When unset, billing is disabled and all cameras get free-tier limits.
-      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      # Stripe — required for billing/tier enforcement.
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:?Set STRIPE_SECRET_KEY in .env}
       - STRIPE_PORTAL_CONFIG_ID=${STRIPE_PORTAL_CONFIG_ID:-}
       # Resend (optional — email logged to stdout when unset)
       - RESEND_API_KEY=${RESEND_API_KEY:-}
@@ -162,7 +161,6 @@ services:
   # mounts as a directory inside the container and crashes ffmpeg.
 
   stripe-webhooks:
-    profiles: [stripe]
     image: stripe/stripe-cli:latest
     restart: unless-stopped
     depends_on: [server]
@@ -171,7 +169,7 @@ services:
       - --forward-to
       - http://server:3000/api/v1/webhooks/stripe
       - --api-key
-      - ${STRIPE_SECRET_KEY:-not_configured}
+      - ${STRIPE_SECRET_KEY:?Set STRIPE_SECRET_KEY in .env}
     environment:
       - STRIPE_CLI_TELEMETRY_OPTOUT=1
 

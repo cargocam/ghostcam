@@ -25,11 +25,10 @@ type ServerConfig struct {
 	S3PresignTTLSecs uint64
 	// Public URL for QR codes (e.g. "https://cam.example.com")
 	PublicURL string
-	// Stripe (optional — billing disabled if StripeSecretKey is empty).
-	// Tier/product IDs are NOT configured here; the server fetches active
-	// prices from Stripe on startup and treats each product with the
-	// `ghostcam_camera_limit` / `ghostcam_storage_gb` metadata keys as a
-	// tier. See server/billing/tiers.go.
+	// Stripe — required. Tier/product IDs are NOT configured here; the
+	// server fetches active prices from Stripe on startup and treats each
+	// product with the `ghostcam_camera_limit` / `ghostcam_storage_gb`
+	// metadata keys as a tier. See server/billing/tiers.go.
 	StripeSecretKey      string
 	StripeWebhookSecret  string
 	StripePortalConfigID string
