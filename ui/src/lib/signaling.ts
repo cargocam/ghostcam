@@ -393,8 +393,10 @@ export async function deleteFootage(
 	opts?: { fromMs?: number; toMs?: number },
 ): Promise<DeleteFootageResponse> {
 	const params = new URLSearchParams();
-	if (opts?.fromMs && opts.fromMs > 0) params.set('from_ms', String(Math.floor(opts.fromMs)));
-	if (opts?.toMs && opts.toMs > 0) params.set('to_ms', String(Math.floor(opts.toMs)));
+	const fromMs = opts?.fromMs ?? 0;
+	const toMs = opts?.toMs ?? 0;
+	if (fromMs > 0) params.set('from_ms', String(Math.floor(fromMs)));
+	if (toMs > 0) params.set('to_ms', String(Math.floor(toMs)));
 	const qs = params.toString();
 	const url = `${API_BASE}/cameras/${encodeURIComponent(deviceId)}/footage${qs ? `?${qs}` : ''}`;
 	const res = await fetch(url, { method: 'DELETE', credentials: 'include' });

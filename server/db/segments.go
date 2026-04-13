@@ -151,6 +151,14 @@ func (db *DB) PruneSegments(ctx context.Context, deviceID string, olderThanMs ui
 // Returns the full deleted rows so the caller can reap the matching S3
 // objects and decrement the storage counter. Bounded by LIMIT so
 // handlers can loop and report progress to the UI.
+//
+// Matching is on start_ts only (mirrors ListSegments / ListSegmentCoverage),
+// not on the segment's full [start_ts, end_ts] extent. A segment whose
+// start_ts lies inside the range is deleted wholesale even if its
+// end_ts runs past toMs; a segment that began before fromMs but
+// overlaps into the range is not deleted. In the UI this means the
+// first/last segments of a visually selected clip may be only
+// partially covered — acceptable because segments are short (~6s).
 func (db *DB) DeleteSegmentsRange(ctx context.Context, deviceID string, fromMs, toMs uint64, limit int) ([]SegmentRecord, error) {
 	var (
 		rows pgx.Rows

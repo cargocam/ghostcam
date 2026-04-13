@@ -7,7 +7,7 @@
 		DialogDescription,
 	} from '$lib/components/ui/dialog/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import { updateCameraSettings, deleteCamera } from '$lib/signaling.js';
+	import { updateCameraSettings, deleteCamera, fetchCoverage } from '$lib/signaling.js';
 	import { purgeFootage, formatBytes, type PurgeProgress } from '$lib/footage.js';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
@@ -112,9 +112,10 @@
 				purgeProgress = p;
 			});
 			purgeProgress = result;
-			// Refresh so the storage bar reflects the purge and any open
-			// timeline refetches coverage on its next interaction.
+			// Refresh so the storage bar + timeline scrubber reflect the
+			// purge without requiring a page reload.
 			billingStore.load().catch(() => {});
+			fetchCoverage(deviceId).catch(() => {});
 			confirmingPurge = false;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to delete footage';
@@ -243,14 +244,14 @@
 				{#if confirmingDelete}
 					<div>
 						<p class="text-sm text-destructive mb-2">
-							Delete this camera? Its recordings will be removed from storage.
+							Delete this camera and all its recordings? Large archives may take a moment.
 						</p>
 						<div class="flex gap-2">
-							<Button variant="outline" class="flex-1" onclick={() => { confirmingDelete = false; }}>
+							<Button variant="outline" class="flex-1" disabled={deleting} onclick={() => { confirmingDelete = false; }}>
 								Cancel
 							</Button>
 							<Button variant="destructive" class="flex-1" disabled={deleting} onclick={handleDelete}>
-								{deleting ? 'Deleting...' : 'Confirm Delete'}
+								{deleting ? 'Deleting…' : 'Confirm Delete'}
 							</Button>
 						</div>
 					</div>
