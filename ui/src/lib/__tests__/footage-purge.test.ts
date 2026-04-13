@@ -23,21 +23,22 @@ describe('purgeFootage', () => {
 			deleted_count: 42,
 			bytes_freed: 1024,
 			has_more: false,
+			remaining_count: 0,
 		});
 		const progress: number[] = [];
 		const result = await purgeFootage('cam-1', undefined, (p) => progress.push(p.deletedCount));
-		expect(result).toEqual({ deletedCount: 42, bytesFreed: 1024 });
+		expect(result).toEqual({ deletedCount: 42, bytesFreed: 1024, totalCount: 42 });
 		expect(deleteFootage).toHaveBeenCalledTimes(1);
 		expect(progress).toEqual([42]);
 	});
 
 	it('loops until has_more is false, accumulating totals', async () => {
 		(deleteFootage as ReturnType<typeof vi.fn>)
-			.mockResolvedValueOnce({ deleted_count: 100, bytes_freed: 1000, has_more: true })
-			.mockResolvedValueOnce({ deleted_count: 100, bytes_freed: 1500, has_more: true })
-			.mockResolvedValueOnce({ deleted_count: 30, bytes_freed: 300, has_more: false });
+			.mockResolvedValueOnce({ deleted_count: 100, bytes_freed: 1000, has_more: true, remaining_count: 130 })
+			.mockResolvedValueOnce({ deleted_count: 100, bytes_freed: 1500, has_more: true, remaining_count: 30 })
+			.mockResolvedValueOnce({ deleted_count: 30, bytes_freed: 300, has_more: false, remaining_count: 0 });
 		const result = await purgeFootage('cam-1', { fromMs: 1, toMs: 2 });
-		expect(result).toEqual({ deletedCount: 230, bytesFreed: 2800 });
+		expect(result).toEqual({ deletedCount: 230, bytesFreed: 2800, totalCount: 230 });
 		expect(deleteFootage).toHaveBeenCalledTimes(3);
 	});
 
@@ -48,9 +49,10 @@ describe('purgeFootage', () => {
 			deleted_count: 0,
 			bytes_freed: 0,
 			has_more: true,
+			remaining_count: 5,
 		});
 		const result = await purgeFootage('cam-1', undefined);
-		expect(result).toEqual({ deletedCount: 0, bytesFreed: 0 });
+		expect(result).toEqual({ deletedCount: 0, bytesFreed: 0, totalCount: 5 });
 		expect(deleteFootage).toHaveBeenCalledTimes(1);
 	});
 
@@ -59,6 +61,7 @@ describe('purgeFootage', () => {
 			deleted_count: 0,
 			bytes_freed: 0,
 			has_more: false,
+			remaining_count: 0,
 		});
 		await purgeFootage('cam-1', { fromMs: 1000, toMs: 2000 });
 		expect(deleteFootage).toHaveBeenCalledWith('cam-1', { fromMs: 1000, toMs: 2000 });
