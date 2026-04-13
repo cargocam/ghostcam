@@ -25,10 +25,10 @@ type firmwareResponse struct {
 }
 
 // CheckFirmwareUpdate checks the server for a newer firmware version.
-// If found, downloads the binary to {dataDir}/staged-update.deb, and returns true.
-// The caller should exit so systemd restarts. ExecStartPre backs up the
-// current binary and installs the staged update; if the new binary fails
-// to write boot_ok (crash-loop), the next restart rolls back to .prev.
+// If found, downloads the .deb to {dataDir}/staged-update.deb and returns
+// true. The caller should exit so systemd restarts. ExecStartPre backs up
+// the current binary and runs dpkg -i; if the new binary fails to write
+// boot_ok (crash-loop), the next restart rolls back to .prev.
 func CheckFirmwareUpdate(ctx context.Context, client *Client, dataDir string) bool {
 	if Version == "dev" {
 		slog.Debug("firmware check skipped (dev build)")
