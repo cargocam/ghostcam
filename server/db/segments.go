@@ -180,6 +180,9 @@ func (db *DB) DeleteSegmentsRange(ctx context.Context, deviceID string, fromMs, 
 			`DELETE FROM segments
 			 WHERE segment_id IN (
 			   SELECT segment_id FROM segments
+			   -- Range matched on start_ts, not extent: a segment starting just
+			   -- before fromMs is kept even if it extends into the range, and one
+			   -- starting inside the range is deleted even if end_ts exceeds toMs.
 			   WHERE device_id = $1 AND start_ts >= $2 AND start_ts <= $3
 			   ORDER BY start_ts
 			   LIMIT $4
