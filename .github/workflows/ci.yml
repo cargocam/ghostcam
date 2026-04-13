@@ -53,9 +53,13 @@ jobs:
       # Hard-fail drift check: regenerate TypeScript types from the Go
       # source of truth (common/ + server/apitypes/) and fail if the
       # checked-in ui/src/lib/api-types/ files no longer match. Run
-      # `make generate-types` locally and commit the diff to fix.
+      # `go generate ./...` locally and commit the diff to fix.
       - name: Check api-types are in sync with Go source
-        run: make check-types
+        run: |
+          go generate ./...
+          git add --intent-to-add ui/src/lib/api-types/ 2>/dev/null || true
+          git diff --exit-code -- ui/src/lib/api-types/ \
+            || (echo "ui/src/lib/api-types/ is stale. Run 'go generate ./...' and commit." && exit 1)
 
   ui:
     needs: changes

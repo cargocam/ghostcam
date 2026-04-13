@@ -1,0 +1,9 @@
+Ghostcam — You've been invited
+
+Hi {{.DisplayName}},
+
+An account has been created for you on Ghostcam. Set your password to get started. This link expires in 24 hours.
+
+{{.Link}}
+
+If you weren't expecting this, you can safely ignore this email.

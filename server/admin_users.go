@@ -75,12 +75,16 @@ func (a *App) toAPIUser(u db.AdminUserRecord) apitypes.AdminUser {
 
 // --- AdminCreateUser ---
 
+// inviteTTL is the expiry for invite set-password tokens.
+const inviteTTL = 24 * time.Hour
+
 // AdminCreateUser handles POST /api/v1/admin/users.
 //
-// Inserts a new user on the free tier with a server-generated password,
-// then returns the user row plus the one-time plaintext password so the
-// admin can hand it off. Public self-registration is still disabled —
-// this is the only post-bootstrap user creation path.
+// Inserts a new user on the free tier with an unusable placeholder
+// password, then sends an invite email with a set-password link.
+// The user cannot log in until they follow the link and choose a
+// password. Public self-registration is still disabled — this is
+// the only post-bootstrap user creation path.
 func (a *App) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	var body apitypes.AdminCreateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -102,15 +106,9 @@ func (a *App) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	password := auth.GenerateRandomPassword()
-	hash, err := auth.HashPassword(password)
-	if err != nil {
-		slog.Error("admin: hash password failed", "error", err)
-		http.Error(w, "", http.StatusInternalServerError)
-		return
-	}
-
-	userID, err := a.DB.CreateUser(r.Context(), email, displayName, hash)
+	// Placeholder hash that Argon2id never produces — login is impossible
+	// until the user sets a real password via the invite link.
+	userID, err := a.DB.CreateUser(r.Context(), email, displayName, "!")
 	if err != nil {
 		if isUniqueViolation(err) {
 			writeError(w, http.StatusConflict, "email_exists")
@@ -121,19 +119,14 @@ func (a *App) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create the free-tier subscription row so downstream handlers
-	// have a record to read. Failure is non-fatal — effectiveTier
-	// falls back to free if the row is missing.
 	if err := a.DB.CreateSubscription(r.Context(), userID, "free", "active"); err != nil {
 		slog.Warn("admin: create subscription for new user failed",
 			"user_id", userID, "error", err)
 	}
 
-	slog.Info("audit", "event_type", "admin_user_create",
+	slog.Info("audit", "event_type", "admin_user_invite",
 		"actor", getUserEmail(r), "target_user_id", userID, "target_email", email)
 
-	// Re-fetch the row so the returned shape is identical to ListAllUsers.
-	// The N+1 cost here is fine — this is admin-initiated, low-traffic.
 	users, err := a.DB.ListAllUsers(r.Context())
 	if err != nil {
 		slog.Error("admin: post-create list failed", "error", err)
@@ -149,30 +142,30 @@ func (a *App) AdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if created == nil {
-		// Shouldn't happen — the row was just inserted.
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 
 	writeJSON(w, http.StatusOK, apitypes.AdminCreateUserResponse{
-		User:              *created,
-		GeneratedPassword: password,
+		User: *created,
 	})
 
-	// Send verification email to the new user so they can confirm
-	// their address. Fire-and-forget — the admin response is already sent.
+	// Send invite email with a set-password link. Uses the password_reset
+	// token purpose so the existing ResetPassword handler consumes it.
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		rawToken, err := a.DB.CreateEmailToken(ctx, a.HMACSecret, userID, "verify_email", nil, 24*time.Hour)
+		rawToken, err := a.DB.CreateEmailToken(ctx, a.HMACSecret, userID, "password_reset", nil, inviteTTL)
 		if err != nil {
-			slog.Error("admin create user: create verify token failed", "error", err)
+			slog.Error("admin invite: create token failed", "error", err)
 			return
 		}
-		a.Mailer.SendVerifyEmail(ctx, email, mailer.VerifyEmailData{
+		if err := a.Mailer.SendInvite(ctx, email, mailer.InviteData{
 			DisplayName: displayName,
 			Link:        rawToken,
-		})
+		}); err != nil {
+			slog.Error("admin invite: send email failed", "error", err)
+		}
 	}()
 }
 

@@ -2,8 +2,10 @@
 // the viewer-server HTTP/SSE surface. It exists so tygo can generate a
 // matching TypeScript file for the UI — editing a struct here is
 // automatically reflected in ui/src/lib/api-types/ on the next
-// `make generate-types` run, and CI refuses PRs whose generated file is
+// `go generate ./...` run, and CI refuses PRs whose generated file is
 // stale.
+//
+//go:generate bash -c "cd $(git rev-parse --show-toplevel) && go tool tygo generate"
 //
 // Rules for this package:
 //
@@ -422,13 +424,10 @@ type AdminCreateUserRequest struct {
 }
 
 // AdminCreateUserResponse is the success body of POST /api/v1/admin/users.
-// GeneratedPassword is the one-time plaintext the admin is expected to
-// hand off to the user — the server does not store it. New users are
-// always created on the free tier; paid upgrades happen through the
-// normal Stripe checkout flow after the user first logs in.
+// The server sends an invite email to the new user with a set-password
+// link — the admin does not need to share credentials manually.
 type AdminCreateUserResponse struct {
-	User              AdminUser `json:"user"`
-	GeneratedPassword string    `json:"generated_password"`
+	User AdminUser `json:"user"`
 }
 
 // AdminUpdateUserRequest is the body of PATCH /api/v1/admin/users/{id}.
