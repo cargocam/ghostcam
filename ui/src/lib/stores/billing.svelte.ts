@@ -83,18 +83,7 @@ class BillingStore {
 			this.usage = usage;
 			this.tiers = tiersResp.tiers ?? [];
 
-			// Billing is enabled but Stripe returned no paid tiers — almost
-			// always a server-side Stripe misconfiguration (missing product
-			// metadata). Treat it as a load failure so the user sees a
-			// retry affordance instead of a permanent "no plans available"
-			// dead-end.
-			if (sub.billing_enabled && this.paidTiers.length === 0) {
-				this.loadError =
-					'No plans configured. Tag each Stripe product with ghostcam_camera_limit and ghostcam_storage_gb metadata, then retry.';
-				this.tiersLoaded = false;
-			} else {
-				this.tiersLoaded = true;
-			}
+			this.tiersLoaded = true;
 		} catch (e) {
 			this.loadError = e instanceof Error ? e.message : 'Failed to load billing';
 			this.tiersLoaded = false;
