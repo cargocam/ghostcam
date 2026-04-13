@@ -393,11 +393,14 @@
 	let createUserSaving = $state<boolean>(false);
 	let createUserError = $state<string | null>(null);
 
-	// One-time password reveal (shared between create-user and reset-password flows)
+	// Invite confirmation — shown briefly after creating a user
+	let inviteSentEmail = $state<string | null>(null);
+
+	// One-time password reveal (for reset-password flow)
 	let passwordReveal = $state<{
 		email: string;
 		password: string;
-		context: 'create' | 'reset';
+		context: 'reset';
 	} | null>(null);
 
 	function openCreateUser() {
@@ -420,11 +423,7 @@
 				display_name: createUserForm.displayName.trim(),
 			});
 			createUserOpen = false;
-			passwordReveal = {
-				email: resp.user.email,
-				password: resp.generated_password,
-				context: 'create',
-			};
+			inviteSentEmail = resp.user.email;
 			await loadUsers();
 		} catch (e) {
 			const msg = e instanceof Error ? e.message : 'Create failed';
@@ -1359,6 +1358,31 @@
 </Dialog>
 
 <!-- One-time password reveal dialog (shared between create + reset) -->
+{#if inviteSentEmail}
+	<Dialog
+		bind:open={
+			() => true,
+			(v) => { if (!v) inviteSentEmail = null; }
+		}
+	>
+		<DialogContent>
+			<DialogHeader>
+				<DialogTitle class="flex items-center gap-2">
+					Invite sent
+				</DialogTitle>
+				<DialogDescription>
+					An email with a set-password link has been sent to <span class="font-medium">{inviteSentEmail}</span>. The link expires in 24 hours.
+				</DialogDescription>
+			</DialogHeader>
+			<div class="flex justify-end pt-2">
+				<Button type="button" onclick={() => (inviteSentEmail = null)}>
+					Done
+				</Button>
+			</div>
+		</DialogContent>
+	</Dialog>
+{/if}
+
 {#if passwordReveal}
 	<Dialog
 		bind:open={
@@ -1370,7 +1394,7 @@
 			<DialogHeader>
 				<DialogTitle class="flex items-center gap-2">
 					<KeyRound class="h-4 w-4" />
-					{passwordReveal.context === 'create' ? 'User created' : 'Password reset'}
+					Password reset
 				</DialogTitle>
 				<DialogDescription>
 					This is the only time this password will be shown. Copy it now

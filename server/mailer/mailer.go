@@ -183,6 +183,22 @@ func (c *Client) SendEmailChangedNotice(ctx context.Context, to string, data Ema
 	return c.send(ctx, to, "Your email address was changed", html, text)
 }
 
+// InviteData is the template data for the invite email.
+type InviteData struct {
+	DisplayName string
+	Link        string
+}
+
+// SendInvite sends an invitation email with a set-password link.
+func (c *Client) SendInvite(ctx context.Context, to string, data InviteData) error {
+	data.Link = c.publicURL + "/reset-password?token=" + data.Link
+	html, text, err := c.renderTemplate("invite", data)
+	if err != nil {
+		return err
+	}
+	return c.send(ctx, to, "You've been invited to Ghostcam", html, text)
+}
+
 // LoginOTPData is the template data for login OTP codes.
 type LoginOTPData struct {
 	Code string

@@ -103,6 +103,10 @@ func (a *App) ResetPassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// If the user hasn't verified their email yet (e.g. invite flow),
+	// clicking the reset link proves ownership — mark them verified.
+	_ = a.DB.MarkVerified(r.Context(), rec.UserID)
+
 	slog.Info("audit", "event_type", "password_reset", "user_id", rec.UserID)
 
 	user, _ := a.DB.GetUserByID(r.Context(), rec.UserID)

@@ -27,8 +27,7 @@ ghostcam/
 │   ├── db/          PostgreSQL (pgx), migrations, record types (concrete *DB, no interface)
 │   ├── redis/       Telemetry streams (XADD/XREAD), pub/sub for SSE, event storage
 │   └── s3/          S3/Tigris presigned URL generation, Upload, Delete
-├── tygo.yaml        Codegen config: common/ + server/apitypes/ → ui/src/lib/api-types/
-├── Makefile         `make generate-types` / `make check-types` (CI drift check)
+├── tygo.yaml        Codegen config: common/ + server/apitypes/ → ui/src/lib/api-types/ (driven by `go generate ./...`)
 ├── ui/              Svelte 5 SPA: HLS playback (hls.js), timeline scrubber, GPS map
 │   └── src/lib/api-types/  Generated TypeScript types — DO NOT EDIT (see tygo.yaml)
 ├── e2e/             Real end-to-end Playwright specs that drive the live
@@ -60,7 +59,7 @@ cd ui && bun run test:browser  # playwright browser tests (frontend smoke; backe
 
 # Regenerate TypeScript API types from Go source of truth.
 # Run after changing any struct in common/ or server/apitypes/.
-make generate-types
+go generate ./...
 ```
 
 ### API Type Generation
@@ -76,10 +75,10 @@ the TypeScript consumers is a compile error, not a runtime mystery.
 To change a wire shape:
 
 1. Edit the Go struct in `server/apitypes/` or `common/`.
-2. Run `make generate-types`.
+2. Run `go generate ./...`.
 3. Commit both the Go change and the regenerated `ui/src/lib/api-types/` files.
 
-CI runs `make check-types` (via the `go` job). A PR that modifies a struct
+CI runs `go generate ./... (drift check)` (via the `go` job). A PR that modifies a struct
 without regenerating is hard-rejected — the drift check uses
 `git diff --exit-code` against the regenerated output.
 
@@ -113,7 +112,7 @@ HLS manifest generation from real segment rows. See `e2e/README.md` for
 what is and isn't covered and how to run locally. Takes ~1–2 minutes per
 run; gated behind `go` + `ui` + `docker` jobs in CI.
 
-**CI** (`.github/workflows/ci.yml`): Runs `go vet`, `go test`, `make check-types`,
+**CI** (`.github/workflows/ci.yml`): Runs `go vet`, `go test`, `go generate ./... (drift check)`,
 `bun run check`, `bun run test`, `bun run build`, Docker build, and the
 `e2e` job (compose up, Playwright, compose down) on every push/PR. The
 `ui/browser-tests/` suite is not run in CI — it's a local smoke test only.
