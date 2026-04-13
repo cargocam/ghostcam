@@ -75,6 +75,7 @@ Config is loaded once at startup — there is no runtime reload endpoint. To app
 | `GHOSTCAM_VIDEO_BITRATE` | _(from profile)_ | Bitrate in bps |
 | `GHOSTCAM_VIDEO_KEYFRAME_INTERVAL` | _(from profile)_ | Keyframe interval in frames |
 | `GHOSTCAM_PROVISION_TOKEN` | _(none)_ | Provision token for headless provisioning |
+| `GHOSTCAM_RECORDING_MODE` | `never` | Default recording mode when `{dataDir}/recording_mode` is absent: `constant`, `motion`, or `never`. Overridden by the server's `set_recording_mode` command once issued. Used by the test stack to opt new cameras into continuous recording without a round-trip. |
 
 ## Billing Tiers
 
