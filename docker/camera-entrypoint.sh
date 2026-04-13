@@ -6,7 +6,7 @@ set -e
 DATA_DIR="${GHOSTCAM_DATA_DIR:-/var/ghostcam}"
 mkdir -p "$DATA_DIR/segments"
 
-if [ ! -f "$DATA_DIR/api_key" ]; then
+if [ ! -f "$DATA_DIR/server_url" ]; then
     echo "Auto-provisioning camera..."
     SERVER="${GHOSTCAM_SERVER_URL:-http://server:3000}"
 
@@ -37,9 +37,10 @@ if [ ! -f "$DATA_DIR/api_key" ]; then
         exit 1
     fi
 
-    # Write token + server URL for the camera binary
+    # Write token for the camera binary. Server URL is passed via
+    # GHOSTCAM_SERVER_URL env var; the camera writes server_url to disk
+    # after successful provisioning.
     printf '%s' "$TOKEN" > "$DATA_DIR/provision_token"
-    printf '%s' "$SERVER" > "$DATA_DIR/server_url"
     rm -f "$COOKIE_FILE"
     echo "Provision token ready: $TOKEN"
 fi

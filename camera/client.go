@@ -21,18 +21,19 @@ var Version = "dev"
 type Client struct {
 	http      *http.Client
 	serverURL string
-	apiKey    string
+	identity  *Identity
 	deviceID  string
 }
 
-// NewClient creates a new camera HTTP client.
-func NewClient(serverURL, apiKey, deviceID string) *Client {
+// NewClient creates a new camera HTTP client. Requests are authenticated
+// via ed25519 signature using the camera's permanent identity keypair.
+func NewClient(serverURL, deviceID string, identity *Identity) *Client {
 	return &Client{
 		http: &http.Client{
 			Timeout: 30 * time.Second,
 		},
 		serverURL: strings.TrimRight(serverURL, "/"),
-		apiKey:    apiKey,
+		identity:  identity,
 		deviceID:  deviceID,
 	}
 }
@@ -114,48 +115,46 @@ func (c *Client) UploadFile(ctx context.Context, presignedURL string, data []byt
 	return nil
 }
 
-// Provision calls POST /api/v1/cameras/provision (no auth required).
-// This is a standalone function since the camera doesn't have an API key yet.
-func Provision(ctx context.Context, serverURL, token, deviceSerial string) (*common.ProvisionResponse, error) {
+// Provision calls POST /api/v1/cameras/provision with the camera's
+// ed25519 public key. No secret is returned — the server just registers
+// the public key (like adding to SSH authorized_keys).
+func Provision(ctx context.Context, serverURL, token, deviceSerial string, identity *Identity) error {
 	client := &http.Client{Timeout: 30 * time.Second}
 	serverURL = strings.TrimRight(serverURL, "/")
 
 	body := common.ProvisionRequest{
 		Token:        token,
 		DeviceSerial: deviceSerial,
+		DeviceID:     identity.DeviceID,
+		PublicKey:    identity.PublicKeyHex(),
 		FwVersion:    Version,
 	}
 
 	data, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling provision request: %w", err)
+		return fmt.Errorf("marshaling provision v2 request: %w", err)
 	}
 
 	url := fmt.Sprintf("%s/api/v1/cameras/provision", serverURL)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("creating provision request: %w", err)
+		return fmt.Errorf("creating provision v2 request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("provision POST failed: %w", err)
+		return fmt.Errorf("provision v2 POST failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode/100 != 2 {
 		errBody, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("provisioning failed: %d — %s", resp.StatusCode, string(errBody))
+		return fmt.Errorf("provisioning v2 failed: %d — %s", resp.StatusCode, string(errBody))
 	}
 
-	var result common.ProvisionResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decoding provision response: %w", err)
-	}
-
-	slog.Info("provisioned", "device_id", result.DeviceID)
-	return &result, nil
+	slog.Info("provisioned", "device_id", identity.DeviceID)
+	return nil
 }
 
 // postJSON is a helper that POSTs JSON with bearer auth and returns the response body.
@@ -171,7 +170,7 @@ func (c *Client) postJSON(ctx context.Context, path string, body any) (io.ReadCl
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	c.setAuth(req)
 
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -185,4 +184,9 @@ func (c *Client) postJSON(ctx context.Context, path string, body any) (io.ReadCl
 	}
 
 	return resp.Body, nil
+}
+
+// setAuth sets the Authorization header using ed25519 signature.
+func (c *Client) setAuth(req *http.Request) {
+	SignRequest(req, c.deviceID, c.identity.PrivateKey)
 }

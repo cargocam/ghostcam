@@ -39,7 +39,26 @@ func main() {
 	slog.Info("device identity", "serial", deviceSerial)
 	SetGPSSeed(deviceSerial)
 
+	// Always load or create the ed25519 identity keypair. This is
+	// permanent camera identity (like ~/.ssh/id_ed25519) and survives
+	// server switches and credential clears.
+	identity, err := LoadOrCreateIdentity(cfg.DataDir)
+	if err != nil {
+		slog.Error("failed to load/create identity", "err", err)
+		os.Exit(1)
+	}
+	slog.Info("camera identity", "device_id", identity.DeviceID)
+
 	creds := LoadCredentials(cfg.DataDir)
+
+	// Detect server switch: env/config URL differs from stored URL.
+	// Triggers re-provisioning with the same keypair + new server.
+	if creds != nil && cfg.ServerURL != "" && cfg.ServerURL != creds.ServerURL {
+		slog.Info("server URL changed, re-provisioning",
+			"old", creds.ServerURL, "new", cfg.ServerURL)
+		creds = nil
+	}
+
 	if creds != nil {
 		// Already provisioned — block until network is up.
 		WaitForRoute(ctx)
@@ -51,7 +70,7 @@ func main() {
 		}
 
 		slog.Info("no credentials found, entering provisioning mode")
-		creds, err = RunProvisioning(ctx, cfg, deviceSerial)
+		creds, err = RunProvisioning(ctx, cfg, deviceSerial, identity)
 		if err != nil {
 			slog.Error("provisioning failed", "err", err)
 			os.Exit(1)
@@ -76,7 +95,7 @@ func main() {
 		"test_source", cfg.TestSource,
 	)
 
-	client := NewClient(cfg.ServerURL, creds.APIKey, creds.DeviceID)
+	client := NewClient(cfg.ServerURL, creds.DeviceID, identity)
 
 	if CheckFirmwareUpdate(ctx, client, cfg.DataDir) {
 		os.Exit(0) // systemd restarts; ExecStartPre installs the staged binary

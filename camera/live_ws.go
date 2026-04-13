@@ -59,8 +59,13 @@ func runLiveWSSession(ctx context.Context, client *Client, relay *LiveRelay) err
 	wsURL := buildWSURL(client.serverURL, client.deviceID)
 	slog.Info("live relay connecting", "url", wsURL)
 
+	// Build a temporary HTTP request to compute the auth header via the
+	// same setAuth path used for REST calls. The WebSocket URL uses the
+	// GET method and the /api/v1/cameras/{id}/live path.
+	authReq, _ := http.NewRequest(http.MethodGet, wsURL, nil)
+	client.setAuth(authReq)
 	headers := http.Header{}
-	headers.Set("Authorization", "Bearer "+client.apiKey)
+	headers.Set("Authorization", authReq.Header.Get("Authorization"))
 
 	conn, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		HTTPHeader: headers,

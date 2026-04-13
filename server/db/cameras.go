@@ -92,23 +92,6 @@ func (db *DB) CreateProvisionedCamera(ctx context.Context, deviceID, userID, dev
 	return nil
 }
 
-func (db *DB) GetCameraByAPIKey(ctx context.Context, apiKeyHash string) (*CameraRecord, error) {
-	row := db.pool.QueryRow(ctx,
-		`SELECT c.device_id, c.user_id, c.display_name, c.enrolled_at, c.last_seen_at, c.notes, c.resolution, c.recording_mode
-		 FROM camera_api_keys k JOIN cameras c ON k.device_id = c.device_id
-		 WHERE k.api_key_hash = $1`, apiKeyHash)
-
-	var c CameraRecord
-	err := row.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes, &c.Resolution, &c.RecordingMode)
-	if err == pgx.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("get camera by api key: %w", err)
-	}
-	return &c, nil
-}
-
 func (db *DB) GetCameraBySerial(ctx context.Context, deviceSerial string) (*CameraRecord, error) {
 	row := db.pool.QueryRow(ctx,
 		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes, resolution, recording_mode
@@ -125,23 +108,37 @@ func (db *DB) GetCameraBySerial(ctx context.Context, deviceSerial string) (*Came
 	return &c, nil
 }
 
-func (db *DB) DeleteCameraAPIKey(ctx context.Context, deviceID string) error {
-	_, err := db.pool.Exec(ctx, "DELETE FROM camera_api_keys WHERE device_id = $1", deviceID)
+// --- Camera public keys (ed25519 signature auth) ---
+
+// UpsertCameraPublicKey stores or replaces the ed25519 public key for a
+// camera. Used during v2 provisioning and legacy→v2 key registration.
+func (db *DB) UpsertCameraPublicKey(ctx context.Context, deviceID, publicKeyHex string) error {
+	now := nowUnix()
+	_, err := db.pool.Exec(ctx,
+		`INSERT INTO camera_public_keys (device_id, public_key, created_at, updated_at)
+		 VALUES ($1, $2, $3, $3)
+		 ON CONFLICT (device_id) DO UPDATE SET public_key = $2, updated_at = $3`,
+		deviceID, publicKeyHex, now)
 	if err != nil {
-		return fmt.Errorf("delete camera api key: %w", err)
+		return fmt.Errorf("upsert camera public key: %w", err)
 	}
 	return nil
 }
 
-func (db *DB) CreateCameraAPIKey(ctx context.Context, deviceID, apiKeyHash string) error {
-	now := nowUnix()
-	_, err := db.pool.Exec(ctx,
-		`INSERT INTO camera_api_keys (device_id, api_key_hash, created_at) VALUES ($1, $2, $3)`,
-		deviceID, apiKeyHash, now)
-	if err != nil {
-		return fmt.Errorf("create camera api key: %w", err)
+// GetCameraPublicKey returns the hex-encoded ed25519 public key for a
+// device. Returns empty string (not error) if no key is registered.
+func (db *DB) GetCameraPublicKey(ctx context.Context, deviceID string) (string, error) {
+	var pubKey string
+	err := db.pool.QueryRow(ctx,
+		`SELECT public_key FROM camera_public_keys WHERE device_id = $1`,
+		deviceID).Scan(&pubKey)
+	if err == pgx.ErrNoRows {
+		return "", nil
 	}
-	return nil
+	if err != nil {
+		return "", fmt.Errorf("get camera public key: %w", err)
+	}
+	return pubKey, nil
 }
 
 // --- Admin camera management ---

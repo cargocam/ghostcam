@@ -40,7 +40,7 @@ DELETE /api/v1/cameras/:id/footage         Delete footage. Query params (optiona
 POST   /api/v1/cameras/:id/telemetry       Camera telemetry POST (camera auth) → returns pending commands
 POST   /api/v1/cameras/:id/presign         Request presigned S3 URLs + confirm uploads (camera auth)
 GET    /api/v1/cameras/:id/live            WebSocket upgrade for live H.264 relay (camera auth)
-POST   /api/v1/cameras/provision            Camera provisioning with one-time token (rate limited: 10/min per IP)
+POST   /api/v1/cameras/provision            Camera sends ed25519 public key + provision token (rate limited: 10/min per IP)
 ```
 
 ## WebRTC (WHEP)
@@ -213,7 +213,7 @@ SSE connections use `http.NewResponseController` to disable the write deadline f
 
 ## Camera-Server Protocol
 
-All communication is plain HTTPS. Cameras authenticate with a Bearer API key obtained during provisioning.
+All communication is plain HTTPS. Cameras authenticate via ed25519 signature (`Signature device_id=...,ts=...,sig=...`). Each camera generates a permanent keypair on first boot and registers the public key during provisioning. The device_id is derived from the public key (SHA-256 fingerprint), so it's stable across server switches.
 
 ### Telemetry Poll (camera → server, every 10s)
 

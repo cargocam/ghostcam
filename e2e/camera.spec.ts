@@ -9,8 +9,8 @@ import { ADMIN_EMAIL, ADMIN_PASSWORD, waitForServerReady, waitForUiReady } from 
 // then waits for the first live telemetry event to arrive over SSE.
 //
 // What it proves end-to-end:
-//   1. Camera provisioning handshake (POST /provision → api_key +
-//      device_id) actually worked on container startup.
+//   1. Camera provisioning handshake (POST /provision → ed25519 public
+//      key registration) actually worked on container startup.
 //   2. The camera's presign → S3 upload → confirm round-trip wrote
 //      segment rows to postgres.
 //   3. The camera's 10s telemetry poll hit PostTelemetry on the server.

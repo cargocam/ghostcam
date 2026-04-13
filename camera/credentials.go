@@ -7,51 +7,62 @@ import (
 	"strings"
 )
 
-// Credentials holds the persisted camera identity.
+// Credentials holds the persisted camera identity and server binding.
 type Credentials struct {
-	APIKey    string
 	DeviceID  string
 	ServerURL string
+	Identity  *Identity
 }
 
-// LoadCredentials reads api_key, device_id, and server_url from flat files in dataDir.
-// Returns nil if any file is missing or empty.
+// LoadCredentials reads camera credentials from flat files in dataDir.
+// Returns nil if identity_key or server_url is missing (needs provisioning).
 func LoadCredentials(dataDir string) *Credentials {
-	apiKey := readTrimmedFile(filepath.Join(dataDir, "api_key"))
-	deviceID := readTrimmedFile(filepath.Join(dataDir, "device_id"))
-	serverURL := readTrimmedFile(filepath.Join(dataDir, "server_url"))
+	identity := loadIdentityIfExists(dataDir)
+	if identity == nil {
+		return nil
+	}
 
-	if apiKey == "" || deviceID == "" || serverURL == "" {
+	serverURL := readTrimmedFile(filepath.Join(dataDir, "server_url"))
+	if serverURL == "" {
 		return nil
 	}
 
 	return &Credentials{
-		APIKey:    apiKey,
-		DeviceID:  deviceID,
+		DeviceID:  identity.DeviceID,
 		ServerURL: serverURL,
+		Identity:  identity,
 	}
 }
 
-// SaveCredentials writes api_key, device_id, and server_url to flat files in dataDir.
+// SaveCredentials writes server_url to dataDir. Identity files are
+// managed by LoadOrCreateIdentity and are not written here.
 func SaveCredentials(dataDir string, creds *Credentials) error {
-	if err := os.WriteFile(filepath.Join(dataDir, "api_key"), []byte(creds.APIKey), 0600); err != nil {
-		return fmt.Errorf("writing api_key: %w", err)
-	}
-	if err := os.WriteFile(filepath.Join(dataDir, "device_id"), []byte(creds.DeviceID), 0600); err != nil {
-		return fmt.Errorf("writing device_id: %w", err)
-	}
 	if err := os.WriteFile(filepath.Join(dataDir, "server_url"), []byte(creds.ServerURL), 0600); err != nil {
 		return fmt.Errorf("writing server_url: %w", err)
 	}
 	return nil
 }
 
-// ClearCredentials removes api_key, device_id, and server_url from dataDir.
-// The camera will re-enter provisioning mode on next startup.
+// ClearCredentials removes server binding but preserves the camera's
+// permanent identity (keypair). The camera will re-enter provisioning
+// mode on next startup.
 func ClearCredentials(dataDir string) {
-	for _, name := range []string{"api_key", "device_id", "server_url"} {
-		_ = os.Remove(filepath.Join(dataDir, name))
+	_ = os.Remove(filepath.Join(dataDir, "server_url"))
+	// identity_key and identity_key.pub are NEVER removed.
+}
+
+// loadIdentityIfExists reads an existing keypair from dataDir without
+// creating one. Returns nil if identity_key doesn't exist.
+func loadIdentityIfExists(dataDir string) *Identity {
+	seedHex := readTrimmedFile(filepath.Join(dataDir, "identity_key"))
+	if seedHex == "" {
+		return nil
 	}
+	identity, err := LoadOrCreateIdentity(dataDir)
+	if err != nil {
+		return nil
+	}
+	return identity
 }
 
 func readTrimmedFile(path string) string {

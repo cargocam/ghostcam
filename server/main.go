@@ -225,7 +225,7 @@ func (a *App) router() http.Handler {
 	r.Post("/api/v1/webhooks/github", a.GithubWebhook)
 	r.Post("/api/v1/webhooks/resend", a.ResendInboundWebhook)
 
-	// Camera auth
+	// Camera auth (Bearer legacy + Signature v2)
 	r.Group(func(r chi.Router) {
 		r.Use(a.cameraAuth)
 		r.Post("/api/v1/cameras/{deviceID}/presign", a.Presign)

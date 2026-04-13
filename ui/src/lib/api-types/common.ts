@@ -65,19 +65,23 @@ Package common defines shared request/response types for the camera-server HTTP 
 */
 
 /**
- * ProvisionRequest is sent by the camera after scanning a provisioning QR code.
+ * ProvisionRequest is sent by the camera during provisioning. The camera
+ * sends its ed25519 public key for registration (like adding to SSH
+ * authorized_keys). The device_id is derived from the public key.
  */
 export interface ProvisionRequest {
   token: string;
   device_serial: string;
+  device_id: string; // SHA-256(public_key)[:16] hex
+  public_key: string; // hex-encoded ed25519 public key (64 chars)
   fw_version?: string;
 }
 /**
- * ProvisionResponse is returned by the server after successful provisioning.
+ * ProvisionResponse acknowledges key registration. No secret is returned.
  */
 export interface ProvisionResponse {
-  api_key: string;
-  device_id: string;
+  device_id: string; // echoed back for confirmation
+  status: string; // "registered"
 }
 /**
  * TelemetryPollRequest is sent by the camera every 10s with current sensor readings.

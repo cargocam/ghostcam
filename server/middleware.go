@@ -147,26 +147,29 @@ func (a *App) adminAuth(next http.Handler) http.Handler {
 	})
 }
 
-// cameraAuth authenticates cameras via Bearer API key and fails closed
-// if the camera's owning user has been soft-deleted — segments must
-// stop flowing the moment an admin trashes the account, even though
-// the cameras table row still exists until a dev hard-deletes it.
+// cameraAuth authenticates cameras via ed25519 Signature header. Fails
+// closed if the camera's owning user has been soft-deleted — segments
+// must stop flowing the moment an admin trashes the account.
 func (a *App) cameraAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
-		if authHeader == "" {
+		sa, err := auth.ParseSignatureHeader(authHeader)
+		if err != nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		token, ok := strings.CutPrefix(authHeader, "Bearer ")
-		if !ok {
+		pubKeyHex, err := a.DB.GetCameraPublicKey(r.Context(), sa.DeviceID)
+		if err != nil || pubKeyHex == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		if !auth.VerifySignature(sa, r.Method, r.URL.Path, pubKeyHex) {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		tokenHash := auth.HMACToken(token, a.HMACSecret)
-		camera, err := a.DB.GetCameraByAPIKey(r.Context(), tokenHash)
+		camera, err := a.DB.GetCamera(r.Context(), sa.DeviceID)
 		if err != nil || camera == nil {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
