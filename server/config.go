@@ -41,6 +41,9 @@ type ServerConfig struct {
 	// release.published events to pull Pi images from release assets
 	// into S3. Empty = webhook rejects all deliveries.
 	GithubWebhookSecret string
+	// GitHub personal access token for downloading release assets from
+	// private repos. Optional — public repos don't need it.
+	GithubToken string
 	// Segment retention in days (default 30)
 	SegmentRetentionDays int
 	// Resend (optional — email disabled if ResendAPIKey is empty, logs only).
@@ -105,6 +108,7 @@ func LoadConfig() (*ServerConfig, error) {
 
 	// GitHub webhook (env only — sensitive)
 	cfg.GithubWebhookSecret = os.Getenv("GITHUB_WEBHOOK_SECRET")
+	cfg.GithubToken = os.Getenv("GITHUB_TOKEN")
 
 	// Segment retention
 	cfg.SegmentRetentionDays = int(envOrDefaultUint64("GHOSTCAM_SEGMENT_RETENTION_DAYS", 30))

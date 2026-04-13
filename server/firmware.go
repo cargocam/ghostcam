@@ -43,6 +43,7 @@ var piImageAssetRe = regexp.MustCompile(`^ghostcam-(zero2w|pi4|pi5)-([^/]+)\.img
 var trustedAssetHostPrefixes = []string{
 	"https://github.com/",
 	"https://objects.githubusercontent.com/",
+	"https://release-assets.githubusercontent.com/",
 	"https://api.github.com/",
 }
 
@@ -63,7 +64,8 @@ type piImageMeta struct {
 // read from the webhook payload.
 type githubReleaseAsset struct {
 	Name               string `json:"name"`
-	BrowserDownloadURL string `json:"browser_download_url"`
+	URL                string `json:"url"`                  // API URL (works with token auth for private repos)
+	BrowserDownloadURL string `json:"browser_download_url"` // public download URL (only works for public repos)
 	Size               int64  `json:"size"`
 }
 
@@ -286,13 +288,20 @@ func (a *App) ingestPiImages(ctx context.Context, tag string, assets []githubRel
 		device := m[1]
 		version := m[2]
 
-		if !isTrustedAssetURL(asset.BrowserDownloadURL) {
+		// Prefer API URL with token auth (works for private repos).
+		// Fall back to browser_download_url for public repos.
+		downloadURL := asset.BrowserDownloadURL
+		if a.Config.GithubToken != "" && asset.URL != "" {
+			downloadURL = asset.URL
+		}
+
+		if !isTrustedAssetURL(downloadURL) {
 			slog.Warn("firmware: skipping asset with untrusted URL",
-				"asset", asset.Name, "url", asset.BrowserDownloadURL)
+				"asset", asset.Name, "url", downloadURL)
 			continue
 		}
 
-		size, sha256hex, err := a.streamAssetToS3(ctx, client, asset.BrowserDownloadURL, s3.PiImageKey(version, device))
+		size, sha256hex, err := a.streamAssetToS3(ctx, client, downloadURL, s3.PiImageKey(version, device))
 		if err != nil {
 			return fmt.Errorf("%s: %w", asset.Name, err)
 		}
@@ -324,6 +333,9 @@ func (a *App) streamAssetToS3(ctx context.Context, client *http.Client, url, key
 		return 0, "", err
 	}
 	req.Header.Set("Accept", "application/octet-stream")
+	if a.Config.GithubToken != "" {
+		req.Header.Set("Authorization", "Bearer "+a.Config.GithubToken)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
