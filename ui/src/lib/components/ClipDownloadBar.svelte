@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { clipStore } from '$lib/stores/clip.svelte.js';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
-	import { prepareClip, exportTelemetry, fetchCoverage } from '$lib/signaling.js';
+	import { prepareClip, exportTelemetry } from '$lib/signaling.js';
+	import { transportStore } from '$lib/stores/transport.svelte.js';
 	import { purgeFootage, formatBytes } from '$lib/footage.js';
 	import { concatSegments, type ConcatProgress } from '$lib/ffmpeg.js';
 	import { Button } from '$lib/components/ui/button/index.js';
@@ -159,7 +160,7 @@
 			// Refresh usage + coverage so the storage bar and scrubber
 			// reflect the purge without a full reload.
 			billingStore.load().catch(() => {});
-			fetchCoverage(deviceId).catch(() => {});
+			transportStore.refreshCoverage(deviceId).catch(() => {});
 			confirmingDelete = false;
 			clipStore.cancel();
 		} catch (e) {

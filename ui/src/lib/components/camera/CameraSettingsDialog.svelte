@@ -7,7 +7,8 @@
 		DialogDescription,
 	} from '$lib/components/ui/dialog/index.js';
 	import { Button } from '$lib/components/ui/button/index.js';
-	import { updateCameraSettings, deleteCamera, fetchCoverage } from '$lib/signaling.js';
+	import { updateCameraSettings, deleteCamera } from '$lib/signaling.js';
+	import { transportStore } from '$lib/stores/transport.svelte.js';
 	import { purgeFootage, formatBytes, type PurgeProgress } from '$lib/footage.js';
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
@@ -115,7 +116,7 @@
 			// Refresh so the storage bar + timeline scrubber reflect the
 			// purge without requiring a page reload.
 			billingStore.load().catch(() => {});
-			fetchCoverage(deviceId).catch(() => {});
+			transportStore.refreshCoverage(deviceId).catch(() => {});
 			confirmingPurge = false;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to delete footage';
