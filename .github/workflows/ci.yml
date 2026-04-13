@@ -250,6 +250,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Use a PAT so the tag push triggers the release workflow.
+          # GITHUB_TOKEN deliberately doesn't trigger downstream workflows
+          # to prevent recursive loops.
+          token: ${{ secrets.RELEASE_TOKEN }}
       - name: Determine next version
         id: version
         run: |
