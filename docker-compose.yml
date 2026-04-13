@@ -76,24 +76,14 @@ services:
       - AWS_SECRET_ACCESS_KEY=minioadmin
       # Public IP for WebRTC ICE-lite candidate (same IP used for MinIO presigned URLs)
       - GHOSTCAM_PUBLIC_IP=${GHOSTCAM_PUBLIC_IP:?Set GHOSTCAM_PUBLIC_IP to your LAN IP}
-      # Stripe (test mode) — enables real tier enforcement locally
-      # Replace with your Stripe test dashboard values for checkout/portal to work.
-      # Note: use `:-` default only if unset OR empty would normally both get the
-      # placeholder — we use plain `-` so that explicit STRIPE_SECRET_KEY= (empty)
-      # disables Stripe entirely, which is what e2e/ uses to give the admin the
-      # dev-mode "enterprise" fallback and allow all 3 test cameras to provision.
-      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY-sk_test_placeholder}
-      # STRIPE_WEBHOOK_SECRET intentionally omitted — stripe-webhooks container
-      # generates its own signing secret; without this var the server skips
-      # signature verification and just parses the JSON body (safe for dev).
-      - STRIPE_PRICE_ID_STARTER=${STRIPE_PRICE_ID_STARTER:-}
-      - STRIPE_PRICE_ID_PRO=${STRIPE_PRICE_ID_PRO:-}
-      - STRIPE_PRICE_ID_ENTERPRISE=${STRIPE_PRICE_ID_ENTERPRISE:-}
+      # Stripe (optional) — set STRIPE_SECRET_KEY in .env to enable billing.
+      # When unset, billing is disabled and all cameras get free-tier limits.
+      - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:-}
+      - STRIPE_PORTAL_CONFIG_ID=${STRIPE_PORTAL_CONFIG_ID:-}
       # Resend (optional — email logged to stdout when unset)
       - RESEND_API_KEY=${RESEND_API_KEY:-}
       - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL:-}
       - RESEND_REPLY_TO=${RESEND_REPLY_TO:-}
-      - STRIPE_PORTAL_CONFIG_ID=${STRIPE_PORTAL_CONFIG_ID:-}
     volumes:
       - server-data:/var/ghostcam
 
@@ -172,6 +162,7 @@ services:
   # mounts as a directory inside the container and crashes ffmpeg.
 
   stripe-webhooks:
+    profiles: [stripe]
     image: stripe/stripe-cli:latest
     restart: unless-stopped
     depends_on: [server]
@@ -180,7 +171,7 @@ services:
       - --forward-to
       - http://server:3000/api/v1/webhooks/stripe
       - --api-key
-      - ${STRIPE_SECRET_KEY-sk_test_placeholder}
+      - ${STRIPE_SECRET_KEY:-not_configured}
     environment:
       - STRIPE_CLI_TELEMETRY_OPTOUT=1
 
