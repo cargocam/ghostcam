@@ -36,10 +36,10 @@ type Config struct {
 
 // Client is a thin HTTP wrapper around Linear's GraphQL endpoint.
 type Client struct {
-	apiKey   string
-	teamID   string
-	endpoint string
-	http     *http.Client
+	apiKey     string
+	teamID     string
+	endpoint   string
+	httpClient *http.Client
 }
 
 // CreateIssueInput is the subset of Linear's IssueCreateInput we populate.
@@ -66,10 +66,10 @@ func New(cfg Config) *Client {
 		endpoint = DefaultEndpoint
 	}
 	c := &Client{
-		apiKey:   cfg.APIKey,
-		teamID:   cfg.TeamID,
-		endpoint: endpoint,
-		http:     &http.Client{Timeout: 20 * time.Second},
+		apiKey:     cfg.APIKey,
+		teamID:     cfg.TeamID,
+		endpoint:   endpoint,
+		httpClient: &http.Client{Timeout: 20 * time.Second},
 	}
 	if cfg.APIKey == "" {
 		slog.Info("linear disabled (no LINEAR_API_KEY), CreateIssue will log only")
@@ -161,7 +161,7 @@ func (c *Client) CreateIssue(ctx context.Context, in CreateIssueInput) (IssueRef
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", c.apiKey)
 
-	resp, err := c.http.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return IssueRef{}, fmt.Errorf("linear http: %w", err)
 	}

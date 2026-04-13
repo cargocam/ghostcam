@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS support_tickets (
     priority          INT,
     title             TEXT,
     linear_issue_url  TEXT,
-    status            TEXT NOT NULL,       -- 'received' | 'routed' | 'failed'
+    status            TEXT NOT NULL,       -- 'received' | 'classified' | 'routed' | 'failed'
     error             TEXT,
     created_at        BIGINT NOT NULL
 );

@@ -34,6 +34,27 @@ func (db *DB) InsertSupportTicket(ctx context.Context, t SupportTicket) (bool, e
 	return cmd.RowsAffected() == 1, nil
 }
 
+// UpdateTicketClassified records that triage ran but Linear was not
+// contacted (typically because LINEAR_API_KEY is unset in dev). The
+// classification is preserved; status='classified' lets operators
+// distinguish intentionally-unrouted tickets from genuine failures.
+func (db *DB) UpdateTicketClassified(ctx context.Context, id, category string, priority int, title string) error {
+	_, err := db.pool.Exec(ctx,
+		`UPDATE support_tickets
+		 SET category = $1,
+		     priority = $2,
+		     title = $3,
+		     status = 'classified',
+		     error = NULL
+		 WHERE id = $4`,
+		category, priority, title, id,
+	)
+	if err != nil {
+		return fmt.Errorf("update support ticket (classified): %w", err)
+	}
+	return nil
+}
+
 // UpdateTicketRouted records a successful triage + Linear routing.
 func (db *DB) UpdateTicketRouted(ctx context.Context, id, category string, priority int, title, linearURL string) error {
 	_, err := db.pool.Exec(ctx,

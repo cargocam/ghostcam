@@ -27,12 +27,17 @@ var ErrDisabled = errors.New("triage classifier disabled (no API key)")
 // Result is the cleaned-up classification of a support email, shaped
 // for direct use as a Linear issue.
 type Result struct {
-	Title       string   // suitable as Linear issue title
-	Description string   // markdown body for Linear issue
-	Priority    int      // Linear priority 1 (urgent) – 4 (low); 0 = no priority
-	Category    string   // one of the whitelist below; "other" on fallback
-	Tags        []string // opaque free-form tags for later filtering
+	Title       string // suitable as Linear issue title (<= maxTitleLen chars)
+	Description string // markdown body for Linear issue
+	Priority    int    // Linear priority 1 (urgent) – 4 (low); 0 = no priority
+	Category    string // one of the whitelist below; "other" on fallback
 }
+
+// maxTitleLen is the hard ceiling on classifier-produced titles. The
+// system prompt instructs the model to stay under this, but we also
+// truncate defensively — a verbose model response should not produce
+// a wall-of-text Linear issue title.
+const maxTitleLen = 80
 
 // Category whitelist. Any model response outside this set is coerced
 // to "other" so downstream consumers can rely on the value.
@@ -97,8 +102,7 @@ const systemPrompt = `You are the triage step for a customer support inbox for G
   "title": string,         // short Linear issue title, <= 80 chars, imperative voice
   "description": string,   // markdown body for the issue. Include a 1-2 sentence summary then a verbatim quote of the customer's most relevant text.
   "priority": integer,     // Linear priority: 1=urgent, 2=high, 3=medium, 4=low, 0=none
-  "category": string,      // one of: support_question, bug_report, billing, spam, other
-  "tags": [string]         // 0-4 short lowercase tags, no spaces
+  "category": string       // one of: support_question, bug_report, billing, spam, other
 }
 
 Rules:
@@ -119,11 +123,10 @@ Body:
 // rawModelResponse is the JSON shape we expect the model to emit.
 // Anything else is a parse failure and the caller falls back to raw.
 type rawModelResponse struct {
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	Priority    int      `json:"priority"`
-	Category    string   `json:"category"`
-	Tags        []string `json:"tags"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Priority    int    `json:"priority"`
+	Category    string `json:"category"`
 }
 
 // Classify sends a single Messages API call and parses the JSON
@@ -202,12 +205,20 @@ func parseClassifierResponse(raw string) (Result, error) {
 		priority = 3
 	}
 
+	title := strings.TrimSpace(decoded.Title)
+	// Defensive truncation: the system prompt asks for <= 80 chars but
+	// a verbose or non-compliant response shouldn't produce a
+	// wall-of-text Linear title. Rune-aware so we don't split a
+	// multi-byte character.
+	if runes := []rune(title); len(runes) > maxTitleLen {
+		title = string(runes[:maxTitleLen-1]) + "…"
+	}
+
 	return Result{
-		Title:       strings.TrimSpace(decoded.Title),
+		Title:       title,
 		Description: decoded.Description,
 		Priority:    priority,
 		Category:    cat,
-		Tags:        decoded.Tags,
 	}, nil
 }
 

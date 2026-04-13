@@ -115,12 +115,22 @@ func (a *App) ResendInboundWebhook(w http.ResponseWriter, r *http.Request) {
 		subject = "(no subject)"
 	}
 
+	// Prefer the Svix send timestamp (already validated as a Unix
+	// seconds integer inside verifyResendSignature) over time.Now() so
+	// received_at reflects when Resend received the email, not when we
+	// happened to process the webhook. Falls back to now() only if the
+	// signature check was skipped (no secret configured in dev).
+	receivedAt := time.Now().Unix()
+	if ts, err := strconv.ParseInt(svixTimestamp, 10, 64); err == nil {
+		receivedAt = ts
+	}
+
 	ticket := db.SupportTicket{
 		ID:         svixID,
 		FromEmail:  payload.Data.From,
 		Subject:    subject,
 		BodyText:   bodyText,
-		ReceivedAt: time.Now().Unix(),
+		ReceivedAt: receivedAt,
 	}
 
 	inserted, err := a.DB.InsertSupportTicket(r.Context(), ticket)
@@ -135,16 +145,23 @@ func (a *App) ResendInboundWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Cap concurrent triage runs. Over-cap deliveries still get a
-	// persisted row — they'll need manual retry (TODO noted above).
-	if triageInFlight.Load() >= maxTriageInFlight {
-		slog.Warn("resend webhook: triage queue saturated, deferring",
-			"svix_id", svixID, "in_flight", triageInFlight.Load())
-		writeJSON(w, http.StatusAccepted, supportAck{Status: "queued_offline", TicketID: svixID})
-		return
+	// Cap concurrent triage runs atomically. A naive Load-then-Add
+	// would let up to N goroutines all pass the check before any of
+	// them increments the counter, briefly exceeding the cap by
+	// parallelism. CAS loop closes that window. Over-cap deliveries
+	// still get a persisted row — they need manual retry (TODO above).
+	for {
+		cur := triageInFlight.Load()
+		if cur >= maxTriageInFlight {
+			slog.Warn("resend webhook: triage queue saturated, deferring",
+				"svix_id", svixID, "in_flight", cur)
+			writeJSON(w, http.StatusAccepted, supportAck{Status: "queued_offline", TicketID: svixID})
+			return
+		}
+		if triageInFlight.CompareAndSwap(cur, cur+1) {
+			break
+		}
 	}
-
-	triageInFlight.Add(1)
 	go func(t db.SupportTicket) {
 		defer triageInFlight.Add(-1)
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -176,10 +193,19 @@ func (a *App) runTriagePipeline(ctx context.Context, t db.SupportTicket) {
 		Priority:    result.Priority,
 	})
 	if linearErr != nil {
-		// Mark the row as failed so an operator can see it. If the
-		// error is ErrDisabled (no LINEAR_API_KEY) we still mark
-		// failed — in that mode this pipeline is logging-only by
-		// design and nothing has been "routed" anywhere.
+		// Linear intentionally unconfigured (no LINEAR_API_KEY) is
+		// not a failure — persist the classification as 'classified'
+		// so ops can distinguish "offline by config" from "Linear
+		// call errored" when querying the audit trail.
+		if errors.Is(linearErr, linear.ErrDisabled) {
+			slog.Info("triage: linear disabled, ticket classified only",
+				"svix_id", t.ID, "category", result.Category)
+			if err := a.DB.UpdateTicketClassified(ctx, t.ID, result.Category, result.Priority, result.Title); err != nil {
+				slog.Error("triage: classified UPDATE failed",
+					"svix_id", t.ID, "error", err)
+			}
+			return
+		}
 		slog.Warn("triage: linear create failed",
 			"svix_id", t.ID, "error", linearErr)
 		if err := a.DB.UpdateTicketFailed(ctx, t.ID, linearErr.Error()); err != nil {

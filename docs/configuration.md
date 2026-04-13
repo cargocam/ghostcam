@@ -243,6 +243,16 @@ Send a test email to the inbound address and confirm:
   returns `{status: "duplicate"}` and does **not** create a second
   Linear issue.
 
+`support_tickets.status` has four values so operators can tell the
+stages apart when querying the audit trail:
+
+| `status` | Meaning |
+|----------|---------|
+| `received` | Row was inserted but async triage hasn't run yet (or was deferred because the in-flight cap was hit). |
+| `classified` | Triage succeeded but Linear was intentionally unconfigured (`LINEAR_API_KEY` unset). Populated category/priority/title are preserved so a later backfill can reroute. |
+| `routed` | Linear issue created; `linear_issue_url` is set. |
+| `failed` | Linear call errored (network/auth/graphql). `error` column carries the message. |
+
 ## Retention & Cleanup
 
 The server has **no background cleanup goroutines**. All cleanup is driven by

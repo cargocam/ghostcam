@@ -16,42 +16,42 @@ func TestParseClassifierResponse(t *testing.T) {
 	}{
 		{
 			name:         "valid bug_report",
-			raw:          `{"title":"App crashes on login","description":"...","priority":2,"category":"bug_report","tags":["crash","login"]}`,
+			raw:          `{"title":"App crashes on login","description":"...","priority":2,"category":"bug_report"}`,
 			wantCategory: "bug_report",
 			wantPriority: 2,
 			wantTitle:    "App crashes on login",
 		},
 		{
 			name:         "unknown category coerced to other",
-			raw:          `{"title":"hi","description":".","priority":3,"category":"urgent_request","tags":[]}`,
+			raw:          `{"title":"hi","description":".","priority":3,"category":"urgent_request"}`,
 			wantCategory: "other",
 			wantPriority: 3,
 			wantTitle:    "hi",
 		},
 		{
 			name:         "priority out of range clamps to 3",
-			raw:          `{"title":"hi","description":".","priority":99,"category":"support_question","tags":[]}`,
+			raw:          `{"title":"hi","description":".","priority":99,"category":"support_question"}`,
 			wantCategory: "support_question",
 			wantPriority: 3,
 			wantTitle:    "hi",
 		},
 		{
 			name:         "priority zero on non-spam promotes to 3",
-			raw:          `{"title":"hi","description":".","priority":0,"category":"support_question","tags":[]}`,
+			raw:          `{"title":"hi","description":".","priority":0,"category":"support_question"}`,
 			wantCategory: "support_question",
 			wantPriority: 3,
 			wantTitle:    "hi",
 		},
 		{
 			name:         "priority zero on spam preserved",
-			raw:          `{"title":"win","description":".","priority":0,"category":"spam","tags":[]}`,
+			raw:          `{"title":"win","description":".","priority":0,"category":"spam"}`,
 			wantCategory: "spam",
 			wantPriority: 0,
 			wantTitle:    "win",
 		},
 		{
 			name:         "category trimmed + lowercased",
-			raw:          `{"title":"hi","description":".","priority":3,"category":"  BILLING  ","tags":[]}`,
+			raw:          `{"title":"hi","description":".","priority":3,"category":"  BILLING  "}`,
 			wantCategory: "billing",
 			wantPriority: 3,
 			wantTitle:    "hi",
@@ -62,6 +62,14 @@ func TestParseClassifierResponse(t *testing.T) {
 			wantCategory: "support_question",
 			wantPriority: 3,
 			wantTitle:    "hi",
+		},
+		{
+			name:         "long title is truncated with ellipsis",
+			raw:          `{"title":"` + strings.Repeat("A", 200) + `","description":".","priority":3,"category":"support_question"}`,
+			wantCategory: "support_question",
+			wantPriority: 3,
+			// 79 'A's + one ellipsis rune
+			wantTitle: strings.Repeat("A", 79) + "…",
 		},
 		{
 			name:    "not json at all errors",
