@@ -49,6 +49,7 @@ Config is loaded once at startup — there is no runtime reload endpoint. To app
 | `STRIPE_SECRET_KEY` | **required** | Stripe API key — server won't start without it |
 | `STRIPE_WEBHOOK_SECRET` | _(none)_ | Stripe webhook signing secret (signature verification skipped when unset — safe for dev) |
 | `STRIPE_PORTAL_CONFIG_ID` | _(none)_ | Portal config with plan switching |
+| `GITHUB_WEBHOOK_SECRET` | _(none)_ | HMAC-SHA256 secret for `POST /api/v1/webhooks/github`. Required in production (any server with `GHOSTCAM_PUBLIC_URL` set) — the webhook 403s when unset. See "GitHub release webhook" below. |
 | `RESEND_API_KEY` | _(none)_ | Resend API key for transactional email |
 | `RESEND_FROM_EMAIL` | _(none)_ | Sender address, e.g. `Ghostcam <noreply@ghostcam.app>` |
 | `RESEND_REPLY_TO` | _(none)_ | Optional reply-to address |
@@ -130,6 +131,38 @@ reactive:
 This is deliberate: the server has no long-running goroutines (see the
 retention/cleanup table below for the same pattern), and billing is not
 load-bearing enough for one.
+
+## GitHub Release Webhook (Pi Image Publishing)
+
+Pi device images (`ghostcam-{zero2w,pi4,pi5}-{tag}.img.xz`) are published
+to S3 automatically when a GitHub release happens — the release workflow
+already uploads them to the GitHub Release, and the server listens on
+`POST /api/v1/webhooks/github` for the `release.published` event, pulls
+the matching assets, uploads each to `firmware/{version}/ghostcam-{device}.img.xz`,
+and writes per-device metadata to Redis (`firmware:images:{device}`).
+The "Get Started" onboarding card calls `GET /api/v1/firmware/images` to
+offer viewers a direct download.
+
+**One-time repo setup** (required on each server where you want
+automatic ingestion):
+
+1. Choose a strong random value for `GITHUB_WEBHOOK_SECRET` and set it
+   in the server environment.
+2. In the `cargocam/ghostcam` GitHub repo → **Settings → Webhooks → Add
+   webhook**.
+3. Payload URL: `https://<your server>/api/v1/webhooks/github`.
+4. Content type: `application/json`.
+5. Secret: the value from step 1.
+6. Events: "Let me select individual events" → tick **Releases** only.
+7. Click "Send ping" and confirm a 200 response; the server logs
+   `github webhook: pi image ingestion complete` on the first real
+   release.
+
+With `GITHUB_WEBHOOK_SECRET` unset, the webhook returns `403` on any
+deployed server (`GHOSTCAM_PUBLIC_URL` set) — fail-closed. On a local
+dev server without `GHOSTCAM_PUBLIC_URL`, deliveries are accepted
+without signature validation so a developer can replay payloads against
+a laptop server.
 
 ## Transactional Email (Resend)
 

@@ -123,14 +123,42 @@ POST   /api/v1/billing/checkout            { tier, success_url, cancel_url } →
 POST   /api/v1/billing/portal              { return_url } → { url } (Stripe Billing Portal)
 GET    /api/v1/billing/usage               Storage + camera usage for current user
 POST   /api/v1/webhooks/stripe             Stripe webhook: checkout.session.completed, subscription.updated, subscription.deleted
+POST   /api/v1/webhooks/github              GitHub release webhook: ingests ghostcam-{device}-{version}.img.xz assets into S3 (public, HMAC-validated)
 ```
 
-## Admin
+## Firmware & Pi images
 
 ```
-GET    /api/v1/firmware/latest             Latest firmware version + presigned download URL (public, no auth)
+GET    /api/v1/firmware/latest             Latest camera firmware binary + presigned download URL (public, no auth)
+GET    /api/v1/firmware/images             Available Pi device images (zero2w / pi4 / pi5) with presigned download URLs
 POST   /api/v1/admin/firmware              Upload firmware binary to Tigris — admin only
 ```
+
+### GitHub release webhook
+
+The server's `POST /api/v1/webhooks/github` endpoint is the ingestion path
+for Pi device images. It is intended to be called by a GitHub repository
+webhook configured on the `Releases` event, not by humans.
+
+- **Authentication:** `X-Hub-Signature-256: sha256=<hex>` is required and
+  validated as HMAC-SHA256 over the raw request body using
+  `GITHUB_WEBHOOK_SECRET`. Mismatch → `401`. Missing secret on a deployed
+  server (`GHOSTCAM_PUBLIC_URL` set) → `403`.
+- **Events:**
+  - `release.published` — server iterates `release.assets` and ingests every
+    asset matching `ghostcam-{zero2w|pi4|pi5}-{tag_name}.img.xz`: downloads
+    from `browser_download_url`, uploads to S3 at
+    `firmware/{version}/ghostcam-{device}.img.xz`, and writes JSON
+    `{version, size_bytes, sha256}` to Redis key `firmware:images:{device}`.
+    Response body: `{ingested: [{device, version, size_bytes, sha256}, ...]}`.
+  - `ping` — replies with `{pong: "ghostcam"}`.
+  - Any other event type is accepted and ignored with `200`.
+
+### `GET /api/v1/firmware/images`
+
+Returns the current `PiImagesResponse` — one `PiImage` per device that has
+a published image. Fields: `device`, `version`, `download_url` (presigned
+S3 GET, TTL per `GHOSTCAM_S3_PRESIGN_TTL_SECS`), `size_bytes`, `sha256`.
 
 ## Health
 

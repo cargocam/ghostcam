@@ -17,6 +17,7 @@ import type {
 	EventEntry,
 	ListEventsResponse,
 	ListTiersResponse,
+	PiImagesResponse,
 	PortalResponse,
 	PrepareClipResponse,
 	QRRequest,
@@ -401,6 +402,22 @@ export async function deleteFootage(
 	const url = `${API_BASE}/cameras/${encodeURIComponent(deviceId)}/footage${qs ? `?${qs}` : ''}`;
 	const res = await fetch(url, { method: 'DELETE', credentials: 'include' });
 	if (!res.ok) throw new Error(`deleteFootage failed: ${res.status}`);
+	return res.json();
+}
+
+// --- Firmware / Pi images ---
+
+/**
+ * Fetch the list of available Pi device images. The server ingests
+ * these from the GitHub release webhook, so the list is empty until the
+ * first release after the server was deployed. Public endpoint — no
+ * credentials required but sent for consistency.
+ */
+export async function fetchPiImages(): Promise<PiImagesResponse> {
+	const res = await fetch(`${API_BASE}/firmware/images`, {
+		credentials: 'include',
+	});
+	if (!res.ok) throw new Error(`fetchPiImages failed: ${res.status}`);
 	return res.json();
 }
 

@@ -3,6 +3,7 @@
 	import { cameraConfigStore } from '$lib/stores/cameraConfig.svelte.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import CameraCard from '$lib/components/camera/CameraCard.svelte';
+	import GetStartedCard from '$lib/components/camera/GetStartedCard.svelte';
 	import { cn } from '$lib/utils.js';
 	import { Camera } from 'lucide-svelte';
 
@@ -19,6 +20,19 @@
 
 	let cameras = $derived(cameraStore.cameras);
 
+	// The setup guide is shown by default when the user has no cameras.
+	// Dismissal is sticky via localStorage so the "Click + to add" minimal
+	// empty state is what returning users see after they've skipped it.
+	let onboardingDismissed = $state(readDismissed());
+
+	function readDismissed(): boolean {
+		try {
+			return localStorage.getItem('ghostcam-onboarding-dismissed') === '1';
+		} catch {
+			return false;
+		}
+	}
+
 	let sortedCameras = $derived.by(() => {
 		const cams = [...cameras].sort((a, b) => (b.online ? 1 : 0) - (a.online ? 1 : 0));
 		if (gridLayout !== '1+5' || !cameraStore.selectedId) return cams;
@@ -29,7 +43,9 @@
 </script>
 
 <div class="h-full overflow-y-auto p-2">
-	{#if cameras.length === 0}
+	{#if cameras.length === 0 && !onboardingDismissed}
+		<GetStartedCard onDismiss={() => (onboardingDismissed = true)} />
+	{:else if cameras.length === 0}
 		<div class="flex flex-col items-center justify-center gap-4 text-muted-foreground py-32">
 			<Camera class="h-12 w-12 opacity-40" />
 			<div class="text-center space-y-1">

@@ -36,6 +36,14 @@ type ServerConfig struct {
 	// reachable IP address. Typically the same as GHOSTCAM_PUBLIC_IP used
 	// for MinIO presigned URLs.
 	PublicIP string
+	// GitHub release webhook. When set, POST /api/v1/webhooks/github
+	// HMAC-validates X-Hub-Signature-256 against this secret and ingests
+	// release.published events to pull Pi images from release assets
+	// into S3. Empty = webhook rejects all deliveries.
+	GithubWebhookSecret string
+	// GitHub personal access token for downloading release assets from
+	// private repos. Optional — public repos don't need it.
+	GithubToken string
 	// Segment retention in days (default 30)
 	SegmentRetentionDays int
 	// Resend (optional — email disabled if ResendAPIKey is empty, logs only).
@@ -97,6 +105,10 @@ func LoadConfig() (*ServerConfig, error) {
 	cfg.StripeSecretKey = os.Getenv("STRIPE_SECRET_KEY")
 	cfg.StripeWebhookSecret = os.Getenv("STRIPE_WEBHOOK_SECRET")
 	cfg.StripePortalConfigID = os.Getenv("STRIPE_PORTAL_CONFIG_ID")
+
+	// GitHub webhook (env only — sensitive)
+	cfg.GithubWebhookSecret = os.Getenv("GITHUB_WEBHOOK_SECRET")
+	cfg.GithubToken = os.Getenv("GITHUB_TOKEN")
 
 	// Segment retention
 	cfg.SegmentRetentionDays = int(envOrDefaultUint64("GHOSTCAM_SEGMENT_RETENTION_DAYS", 30))

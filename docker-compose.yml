@@ -79,6 +79,9 @@ services:
       # Stripe — required for billing/tier enforcement.
       - STRIPE_SECRET_KEY=${STRIPE_SECRET_KEY:?Set STRIPE_SECRET_KEY in .env}
       - STRIPE_PORTAL_CONFIG_ID=${STRIPE_PORTAL_CONFIG_ID:-}
+      # GitHub webhook (optional — Pi image auto-publishing from releases)
+      - GITHUB_WEBHOOK_SECRET=${GITHUB_WEBHOOK_SECRET:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
       # Resend (optional — email logged to stdout when unset)
       - RESEND_API_KEY=${RESEND_API_KEY:-}
       - RESEND_FROM_EMAIL=${RESEND_FROM_EMAIL:-}
