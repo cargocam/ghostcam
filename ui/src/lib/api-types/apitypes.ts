@@ -227,7 +227,6 @@ export interface ListTiersResponse {
  * "Free" for the unpaid tier.
  */
 export interface SubscriptionResponse {
-  billing_enabled: boolean;
   tier: string;
   tier_name: string;
 }

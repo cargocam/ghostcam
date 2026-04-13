@@ -46,8 +46,8 @@ Config is loaded once at startup — there is no runtime reload endpoint. To app
 | `GHOSTCAM_S3_ENDPOINT` | _(none)_ | S3 endpoint URL (Tigris, MinIO, etc.) |
 | `GHOSTCAM_S3_PRESIGN_TTL_SECS` | `3600` | Presigned URL TTL in seconds |
 | `GHOSTCAM_SEGMENT_RETENTION_DAYS` | `30` | Segment retention in days. Used as the cutoff for opportunistic prune in the presign handler and as the read cutoff for manifest / coverage queries. |
-| `STRIPE_SECRET_KEY` | _(none)_ | Stripe API key |
-| `STRIPE_WEBHOOK_SECRET` | _(none)_ | Stripe webhook signing secret |
+| `STRIPE_SECRET_KEY` | **required** | Stripe API key — server won't start without it |
+| `STRIPE_WEBHOOK_SECRET` | _(none)_ | Stripe webhook signing secret (signature verification skipped when unset — safe for dev) |
 | `STRIPE_PORTAL_CONFIG_ID` | _(none)_ | Portal config with plan switching |
 | `RESEND_API_KEY` | _(none)_ | Resend API key for transactional email |
 | `RESEND_FROM_EMAIL` | _(none)_ | Sender address, e.g. `Ghostcam <noreply@ghostcam.app>` |
@@ -73,10 +73,9 @@ Config is loaded once at startup — there is no runtime reload endpoint. To app
 
 ## Billing Tiers
 
-Billing is always enabled. Every user defaults to **free**. `effectiveTier()`
-derives the tier from Stripe subscription state; when Stripe is not configured
-(dev / self-hosted), it returns a synthetic `dev-unlimited` tier with no
-camera or storage limits.
+Billing is always enabled and Stripe is required. Every user defaults to **free**.
+`effectiveTier()` derives the tier from Stripe subscription state; users
+without an active subscription get the free tier.
 
 Paid tiers are **not hardcoded**. On startup — and on every relevant Stripe
 webhook — the server calls `prices.list(active=true, expand=data.product)`

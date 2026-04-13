@@ -141,88 +141,58 @@ func TestResolveEffectiveTier(t *testing.T) {
 	cache := billing.NewCache()
 
 	tests := []struct {
-		name             string
-		sub              *db.SubscriptionRecord
-		stripeConfigured bool
-		wantID           string
+		name   string
+		sub    *db.SubscriptionRecord
+		wantID string
 	}{
 		{
-			name:             "no subscription, stripe configured",
-			sub:              nil,
-			stripeConfigured: true,
-			wantID:           billing.FreeTierID,
+			name:   "no subscription",
+			sub:    nil,
+			wantID: billing.FreeTierID,
 		},
 		{
-			name:             "no subscription, stripe not configured (dev)",
-			sub:              nil,
-			stripeConfigured: false,
-			wantID:           "dev-unlimited",
+			name:   "free tier",
+			sub:    &db.SubscriptionRecord{Tier: billing.FreeTierID, Status: "active"},
+			wantID: billing.FreeTierID,
 		},
 		{
-			name:             "free tier with stripe",
-			sub:              &db.SubscriptionRecord{Tier: billing.FreeTierID, Status: "active"},
-			stripeConfigured: true,
-			wantID:           billing.FreeTierID,
+			name:   "paid tier without stripe subscription ID (grandfathered name)",
+			sub:    &db.SubscriptionRecord{Tier: "pro", Status: "active", StripeSubscriptionID: nil},
+			wantID: billing.FreeTierID,
 		},
 		{
-			name:             "paid tier without stripe subscription ID (grandfathered name)",
-			sub:              &db.SubscriptionRecord{Tier: "pro", Status: "active", StripeSubscriptionID: nil},
-			stripeConfigured: true,
-			wantID:           billing.FreeTierID,
+			name:   "legacy pro tier with active stripe — resolves to free (lazy migration required)",
+			sub:    &db.SubscriptionRecord{Tier: "pro", Status: "active", StripeSubscriptionID: strPtr("sub_123")},
+			wantID: billing.FreeTierID,
 		},
 		{
-			// Legacy name + active subscription: the pure function
-			// no longer resolves legacy names (Stripe is now the only
-			// source of truth for paid tier limits). The fail-closed
-			// fallback is free. The App.effectiveTier wrapper runs a
-			// one-shot migration that fetches the live Stripe price ID
-			// and rewrites the DB — after that migration, the sub row
-			// carries a price ID and resolveEffectiveTier's second
-			// pass hits the cache. That migration path is covered by
-			// the integration test, not here.
-			name:             "legacy pro tier with active stripe — resolves to free (lazy migration required)",
-			sub:              &db.SubscriptionRecord{Tier: "pro", Status: "active", StripeSubscriptionID: strPtr("sub_123")},
-			stripeConfigured: true,
-			wantID:           billing.FreeTierID,
+			name:   "legacy pro tier with canceled stripe subscription",
+			sub:    &db.SubscriptionRecord{Tier: "pro", Status: "canceled", StripeSubscriptionID: strPtr("sub_123")},
+			wantID: billing.FreeTierID,
 		},
 		{
-			name:             "legacy pro tier with canceled stripe subscription",
-			sub:              &db.SubscriptionRecord{Tier: "pro", Status: "canceled", StripeSubscriptionID: strPtr("sub_123")},
-			stripeConfigured: true,
-			wantID:           billing.FreeTierID,
-		},
-		{
-			name:             "legacy enterprise with active stripe — resolves to free (lazy migration required)",
-			sub:              &db.SubscriptionRecord{Tier: "enterprise", Status: "active", StripeSubscriptionID: strPtr("sub_456")},
-			stripeConfigured: true,
-			wantID:           billing.FreeTierID,
-		},
-		{
-			name:             "any tier without stripe configured = dev-unlimited",
-			sub:              &db.SubscriptionRecord{Tier: billing.FreeTierID, Status: "active"},
-			stripeConfigured: false,
-			wantID:           "dev-unlimited",
+			name:   "legacy enterprise with active stripe — resolves to free (lazy migration required)",
+			sub:    &db.SubscriptionRecord{Tier: "enterprise", Status: "active", StripeSubscriptionID: strPtr("sub_456")},
+			wantID: billing.FreeTierID,
 		},
 		{
 			// SECURITY: unknown tier strings in the DB must not grant
 			// unlimited resources via a fall-through to a paid tier. The
 			// safest default is the most restrictive tier (free).
-			name:             "unknown tier string falls back to free (fail-closed)",
-			sub:              &db.SubscriptionRecord{Tier: "godmode", Status: "active", StripeSubscriptionID: strPtr("sub_999")},
-			stripeConfigured: true,
-			wantID:           billing.FreeTierID,
+			name:   "unknown tier string falls back to free (fail-closed)",
+			sub:    &db.SubscriptionRecord{Tier: "godmode", Status: "active", StripeSubscriptionID: strPtr("sub_999")},
+			wantID: billing.FreeTierID,
 		},
 		{
-			name:             "empty tier string falls back to free (fail-closed)",
-			sub:              &db.SubscriptionRecord{Tier: "", Status: "active", StripeSubscriptionID: strPtr("sub_000")},
-			stripeConfigured: true,
-			wantID:           billing.FreeTierID,
+			name:   "empty tier string falls back to free (fail-closed)",
+			sub:    &db.SubscriptionRecord{Tier: "", Status: "active", StripeSubscriptionID: strPtr("sub_000")},
+			wantID: billing.FreeTierID,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := resolveEffectiveTier(tt.sub, tt.stripeConfigured, cache)
+			got := resolveEffectiveTier(tt.sub, cache)
 			if got.ID != tt.wantID {
 				t.Errorf("resolveEffectiveTier().ID = %q, want %q", got.ID, tt.wantID)
 			}

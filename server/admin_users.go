@@ -366,9 +366,6 @@ func (a *App) AdminSoftDeleteUser(w http.ResponseWriter, r *http.Request) {
 // Stripe subscription on soft delete so they stop being billed. Errors
 // are logged but not surfaced — the delete itself is the critical path.
 func (a *App) cancelStripeSubscriptionForUser(ctx context.Context, userID string) {
-	if !a.stripeConfigured() {
-		return
-	}
 	sub, err := a.DB.GetSubscription(ctx, userID)
 	if err != nil || sub == nil || sub.StripeSubscriptionID == nil || *sub.StripeSubscriptionID == "" {
 		return

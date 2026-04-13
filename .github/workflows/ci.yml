@@ -98,6 +98,8 @@ jobs:
     needs: [go, ui, docker]
     if: always() && needs.go.result == 'success' && (needs.ui.result == 'success' || needs.ui.result == 'skipped') && needs.docker.result == 'success'
     runs-on: ubuntu-latest
+    env:
+      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -124,11 +126,6 @@ jobs:
         run: bunx playwright install-deps chromium
 
       - name: Start the live stack
-        env:
-          # Explicit empty so the `-` default doesn't kick in. This
-          # keeps effectiveTier's dev-mode fallback active, which means
-          # the admin is unlimited and all 3 test cameras provision.
-          STRIPE_SECRET_KEY: ""
         run: |
           # Presigned URLs need a host that's reachable from BOTH the
           # camera containers (via container→host routing) AND any
@@ -217,8 +214,6 @@ jobs:
 
       - name: Tear down
         if: always()
-        env:
-          STRIPE_SECRET_KEY: ""
         run: |
           # GHOSTCAM_PUBLIC_IP was written to $GITHUB_ENV by the "Start
           # the live stack" step above, so we inherit it here. Fall back

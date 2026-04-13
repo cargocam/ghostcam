@@ -200,7 +200,7 @@
 					</Button>
 				</div>
 				<Separator />
-			{:else if billingStore.billingEnabled && billingStore.tiersLoaded}
+			{:else if billingStore.tiersLoaded}
 				<div>
 					<h3 class="text-sm font-medium mb-3 flex items-center gap-1.5">
 						<CreditCard class="h-4 w-4" />

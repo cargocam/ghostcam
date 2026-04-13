@@ -24,14 +24,6 @@ const presignBatchMax = 10
 // Prune is tied to normal upload activity instead of a background loop.
 const pruneBatchSize = 100
 
-// devUnlimitedTier is the tier returned when Stripe is not configured
-// (local dev / self-hosted without billing). It grants unlimited cameras
-// and storage so the dev loop doesn't require a Stripe account.
-var devUnlimitedTier = billing.Tier{
-	ID:   "dev-unlimited",
-	Name: "Dev (unlimited)",
-}
-
 // resolveEffectiveTier is the pure implementation behind the per-App
 // effectiveTier method. Extracted so tests can exercise the full decision
 // matrix without constructing a live *App / DB pool. It deliberately does
@@ -40,21 +32,15 @@ var devUnlimitedTier = billing.Tier{
 // the cache.
 //
 // Rules (applied in order):
-//  1. Stripe not configured → dev-unlimited tier (self-hosted without billing).
-//  2. No subscription row → free tier.
-//  3. sub.Tier == "free" → free tier (short-circuit).
-//  4. Any non-free paid tier without an active Stripe subscription ID → free.
-//  5. Cache lookup miss (unknown price ID, legacy name that hasn't been
+//  1. No subscription row → free tier.
+//  2. sub.Tier == "free" → free tier (short-circuit).
+//  3. Any non-free paid tier without an active Stripe subscription ID → free.
+//  4. Cache lookup miss (unknown price ID, legacy name that hasn't been
 //     migrated yet, empty string) → free, logged.
-//  6. Cache hit → the matched tier struct.
+//  5. Cache hit → the matched tier struct.
 //
 // Stripe metadata is the single source of truth for paid tier limits.
-// Hardcoded fallbacks live only on the free tier (which has no Stripe
-// price) and on the devUnlimitedTier (used when Stripe is disabled).
-func resolveEffectiveTier(sub *db.SubscriptionRecord, stripeConfigured bool, cache *billing.Cache) billing.Tier {
-	if !stripeConfigured {
-		return devUnlimitedTier
-	}
+func resolveEffectiveTier(sub *db.SubscriptionRecord, cache *billing.Cache) billing.Tier {
 	if sub == nil {
 		return billing.FreeTier
 	}
@@ -85,7 +71,7 @@ func (a *App) effectiveTier(ctx context.Context, sub *db.SubscriptionRecord) bil
 			sub = migrated
 		}
 	}
-	return resolveEffectiveTier(sub, a.stripeConfigured(), a.Tiers)
+	return resolveEffectiveTier(sub, a.Tiers)
 }
 
 // Presign handles POST /api/v1/cameras/{deviceID}/presign.
