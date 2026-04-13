@@ -26,7 +26,10 @@ ghostcam/
 │   ├── billing/     Tier definitions and storage limit enforcement
 │   ├── db/          PostgreSQL (pgx), migrations, record types (concrete *DB, no interface)
 │   ├── redis/       Telemetry streams (XADD/XREAD), pub/sub for SSE, event storage
-│   └── s3/          S3/Tigris presigned URL generation, Upload, Delete
+│   ├── s3/          S3/Tigris presigned URL generation, Upload, Delete
+│   ├── triage/      Anthropic Messages API classifier for inbound support email (no-op when ANTHROPIC_API_KEY is unset)
+│   └── linear/      Minimal GraphQL client for Linear issueCreate (no-op when LINEAR_API_KEY is unset)
+│                    (Inbound webhook handler lives in server/support.go alongside the other webhook handlers.)
 ├── tygo.yaml        Codegen config: common/ + server/apitypes/ → ui/src/lib/api-types/ (driven by `go generate ./...`)
 ├── ui/              Svelte 5 SPA: HLS playback (hls.js), timeline scrubber, GPS map
 │   └── src/lib/api-types/  Generated TypeScript types — DO NOT EDIT (see tygo.yaml)

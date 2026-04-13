@@ -125,6 +125,13 @@ server/            (package main — binary builds from this directory)
   billing.go        GetSubscription, ListTiers, CreateCheckout, CreatePortal, GetUsage,
                     StripeWebhook (idempotency via stripe_events table)
   admin.go          FirmwareLatest (public), FirmwareUpload (admin), GithubWebhook
+  support.go        ResendInboundWebhook: Svix-signed `POST /api/v1/webhooks/resend`
+                    ingest for customer support email. Verifies signature, dedupes
+                    on svix-id via support_tickets INSERT, then hands off to an
+                    async goroutine that classifies the email with Claude (optional)
+                    and creates a Linear issue. Same shape as GithubWebhook:
+                    verify-then-async + bounded concurrency counter
+                    (triageInFlight atomic.Int32, cap 16).
   qr.go             EnrollmentQR — returns JSON {payload, token, expires_at}
   provision.go      Provision — camera claims a one-time token and receives an API key.
                     ClaimCommands is atomic DELETE ... RETURNING so commands do not accumulate.
@@ -143,6 +150,16 @@ server/            (package main — binary builds from this directory)
                   Delete (used by the opportunistic prune path in presign.go).
                   No bucket-level lifecycle rules — firmware lives in the same
                   bucket and must not be auto-expired.
+  triage/         Support-email classifier wrapping the Anthropic Messages API.
+                  Returns a Linear-shaped Result (Title/Description/Priority/
+                  Category). Disabled (ErrDisabled) when ANTHROPIC_API_KEY is
+                  unset; callers fall back to the raw email subject + body.
+                  Uses claude-haiku-4-5 with the rubric in a prompt-cached
+                  system block so follow-up calls share the classifier's
+                  instructions in cache.
+  linear/         Minimal GraphQL client for Linear's issueCreate mutation.
+                  Plain net/http + encoding/json — no generated SDK. Disabled
+                  (ErrDisabled) when LINEAR_API_KEY is unset.
 ```
 
 ### Database Migrations
@@ -160,6 +177,10 @@ server/            (package main — binary builds from this directory)
 | `009_indexes.sql` | Adds `idx_segments_created_at` index for scalability |
 | `010_cleanup.sql` | Drops dead tables/columns: sessions, owner, enrollment_tokens, cameras.cert_fingerprint |
 | `011_drop_audit_log.sql` | Drops the `audit_log` table — nothing ever wrote to it; slog is the audit trail |
+| `012_admins.sql` | Admin grants table |
+| `013_user_soft_delete.sql` | Soft delete for users |
+| `014_email_tokens.sql` | One-time email secrets (verify, reset, change-email, login OTP) |
+| `015_support_tickets.sql` | Support email triage audit trail keyed on Svix message id |
 
 ## Viewer Structure
 

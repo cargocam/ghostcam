@@ -160,6 +160,37 @@ Returns the current `PiImagesResponse` — one `PiImage` per device that has
 a published image. Fields: `device`, `version`, `download_url` (presigned
 S3 GET, TTL per `GHOSTCAM_S3_PRESIGN_TTL_SECS`), `size_bytes`, `sha256`.
 
+## Support email triage
+
+```
+POST   /api/v1/webhooks/resend              Resend inbound email webhook: parse + triage + create Linear issue
+```
+
+`POST /api/v1/webhooks/resend` is the ingest for a Resend
+[inbound email route](https://resend.com/docs/dashboard/emails/inbound).
+Intended to be called by Resend, not humans.
+
+- **Authentication:** Svix-style signed webhook. Required headers
+  `svix-id`, `svix-timestamp`, `svix-signature`. The signed payload is
+  `svix-id.svix-timestamp.body` with HMAC-SHA256 keyed on the
+  `whsec_<base64>` value from `RESEND_WEBHOOK_SECRET`. Requests older
+  than 5 minutes (or more than 5 minutes in the future) are rejected.
+  Mismatch → `403`. Missing secret on a deployed server
+  (`GHOSTCAM_PUBLIC_URL` set) → `403`.
+- **Events:**
+  - `email.received` — server persists a row in `support_tickets`
+    (dedupe keyed on `svix-id`), then asynchronously classifies the
+    email via Claude (when `ANTHROPIC_API_KEY` is set) and creates a
+    Linear issue in `LINEAR_TEAM_ID` (when `LINEAR_API_KEY` is set).
+    If the classifier is disabled or fails, we fall back to creating a
+    Linear issue with the subject as title and the raw email body as
+    description. Response: `202 Accepted`, body
+    `{status: "accepted"|"duplicate"|"queued_offline", ticket_id}`.
+  - Any other Resend event type is accepted and ignored with `200`.
+
+Redeliveries (matching `svix-id`) are idempotent — the second call
+returns `{status: "duplicate"}` without creating a second Linear issue.
+
 ## Health
 
 ```

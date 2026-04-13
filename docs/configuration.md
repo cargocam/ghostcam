@@ -53,6 +53,10 @@ Config is loaded once at startup — there is no runtime reload endpoint. To app
 | `RESEND_API_KEY` | _(none)_ | Resend API key for transactional email |
 | `RESEND_FROM_EMAIL` | _(none)_ | Sender address, e.g. `Ghostcam <noreply@ghostcam.app>` |
 | `RESEND_REPLY_TO` | _(none)_ | Optional reply-to address |
+| `RESEND_WEBHOOK_SECRET` | _(none)_ | Svix webhook secret (`whsec_...`) for `POST /api/v1/webhooks/resend`. Required in production — the webhook 403s when unset. See "Support email triage" below. |
+| `ANTHROPIC_API_KEY` | _(none)_ | Claude API key for support-email triage classification. When empty, the raw email subject + body is posted to Linear as-is. |
+| `LINEAR_API_KEY` | _(none)_ | Linear personal API key for creating support tickets. When empty, the Linear step is a logging no-op. |
+| `LINEAR_TEAM_ID` | _(none)_ | Linear team UUID that support tickets are created in. Required when `LINEAR_API_KEY` is set. |
 
 ### Camera
 
@@ -197,6 +201,57 @@ with every email for maximum deliverability.
 All tokens and OTP codes are stored as HMAC-SHA256 hashes in the
 `email_tokens` table (same pattern as `api_tokens`). Raw values only exist
 in the email body.
+
+## Support Email Triage (Resend Inbound → Claude → Linear)
+
+Inbound customer support email (e.g. `support@ghostcam.app`) is pushed
+by Resend to `POST /api/v1/webhooks/resend`, classified by Claude, and
+filed as a Linear issue. Every stage is independently gated on its own
+API key — absent keys degrade to a logging no-op so local dev needs
+nothing extra.
+
+| Env var | Purpose |
+|---------|---------|
+| `RESEND_WEBHOOK_SECRET` | Svix webhook secret (`whsec_...`). Required in production; the webhook 403s without it. |
+| `ANTHROPIC_API_KEY` | Claude API key for classification. Without it the raw subject + body are posted to Linear unchanged. |
+| `LINEAR_API_KEY` | Linear personal API key for `issueCreate`. Without it the step is a no-op (row is marked `failed`). |
+| `LINEAR_TEAM_ID` | Linear team UUID the ticket is created in. Required when `LINEAR_API_KEY` is set. |
+
+Every inbound delivery is persisted to `support_tickets` (migration
+`015`) keyed on `svix-id`, so a Resend redelivery is idempotent and
+operators have an audit trail with the raw email text, classification,
+and Linear URL.
+
+Setup steps (production):
+
+1. In the Resend dashboard, verify an inbound domain and add an
+   inbound route (e.g. `support@<your-domain>`) whose webhook
+   destination is `https://<your-public-host>/api/v1/webhooks/resend`.
+2. Copy the route's `whsec_` secret into `RESEND_WEBHOOK_SECRET`.
+3. Create an Anthropic API key and set `ANTHROPIC_API_KEY`.
+4. Create a Linear personal API key, find your team's UUID (Settings
+   → API → "My account" drop-down), set `LINEAR_API_KEY` and
+   `LINEAR_TEAM_ID`.
+5. Restart the server (config is loaded once at startup; see
+   "Sensitive Fields" above).
+
+Send a test email to the inbound address and confirm:
+- a row appears in `support_tickets` with `status='routed'`;
+- a Linear issue is created with `category`, `priority`, and the
+  verbatim email body in the description;
+- a second (Resend redelivery-style) POST with the same `svix-id`
+  returns `{status: "duplicate"}` and does **not** create a second
+  Linear issue.
+
+`support_tickets.status` has four values so operators can tell the
+stages apart when querying the audit trail:
+
+| `status` | Meaning |
+|----------|---------|
+| `received` | Row was inserted but async triage hasn't run yet (or was deferred because the in-flight cap was hit). |
+| `classified` | Triage succeeded but Linear was intentionally unconfigured (`LINEAR_API_KEY` unset). Populated category/priority/title are preserved so a later backfill can reroute. |
+| `routed` | Linear issue created; `linear_issue_url` is set. |
+| `failed` | Linear call errored (network/auth/graphql). `error` column carries the message. |
 
 ## Retention & Cleanup
 

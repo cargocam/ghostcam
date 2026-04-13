@@ -50,6 +50,19 @@ type ServerConfig struct {
 	ResendAPIKey    string
 	ResendFromEmail string // e.g. "Ghostcam <noreply@ghostcam.app>"
 	ResendReplyTo   string // optional
+	// Resend inbound webhook (Svix-signed). Empty = inbound webhook
+	// rejects all deliveries in production (publicURL set) and logs
+	// every delivery as "unverified" in local dev (publicURL empty).
+	ResendWebhookSecret string
+	// Anthropic Claude API key for support-email triage. Empty =
+	// triage falls back to posting the raw email into Linear.
+	AnthropicAPIKey string
+	// Linear GraphQL API key for creating support tickets. Empty =
+	// Linear calls are logged but not sent.
+	LinearAPIKey string
+	// Linear team UUID that support tickets should be created in.
+	// Required when LinearAPIKey is set.
+	LinearTeamID string
 }
 
 // secureCookies returns true when the PublicURL is served over HTTPS.
@@ -117,6 +130,12 @@ func LoadConfig() (*ServerConfig, error) {
 	cfg.ResendAPIKey = os.Getenv("RESEND_API_KEY")
 	cfg.ResendFromEmail = os.Getenv("RESEND_FROM_EMAIL")
 	cfg.ResendReplyTo = os.Getenv("RESEND_REPLY_TO")
+	cfg.ResendWebhookSecret = os.Getenv("RESEND_WEBHOOK_SECRET")
+
+	// Support-email triage (env only — sensitive)
+	cfg.AnthropicAPIKey = os.Getenv("ANTHROPIC_API_KEY")
+	cfg.LinearAPIKey = os.Getenv("LINEAR_API_KEY")
+	cfg.LinearTeamID = os.Getenv("LINEAR_TEAM_ID")
 
 	return cfg, nil
 }
