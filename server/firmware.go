@@ -11,6 +11,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync/atomic"
@@ -157,15 +158,25 @@ func (a *App) PiImagesList(w http.ResponseWriter, r *http.Request) {
 // acceptable: S3 writes are idempotent and a later redelivery just
 // overwrites the same keys.
 func (a *App) GithubWebhook(w http.ResponseWriter, r *http.Request) {
-	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20)) // 10 MiB — webhook bodies are small JSON
+	rawBody, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 10<<20)) // 10 MiB — webhook bodies are small JSON
 	if err != nil {
 		slog.Error("github webhook: failed to read body", "error", err)
 		http.Error(w, "", http.StatusBadRequest)
 		return
 	}
 
+	// GitHub sends webhooks as either raw JSON (content_type=json) or
+	// URL-encoded form with a `payload` field (content_type=form).
+	// Support both so the webhook works regardless of configuration.
+	body := rawBody
+	if ct := r.Header.Get("Content-Type"); strings.Contains(ct, "form") {
+		if parsed, err := url.QueryUnescape(strings.TrimPrefix(string(rawBody), "payload=")); err == nil {
+			body = []byte(parsed)
+		}
+	}
+
 	if a.Config.GithubWebhookSecret != "" {
-		if !verifyGithubSignature(r.Header.Get("X-Hub-Signature-256"), body, a.Config.GithubWebhookSecret) {
+		if !verifyGithubSignature(r.Header.Get("X-Hub-Signature-256"), rawBody, a.Config.GithubWebhookSecret) {
 			slog.Warn("github webhook signature verification failed")
 			// 403 (not 401): the request did present a signature, it
 			// just didn't match. No challenge to reissue.
@@ -198,7 +209,7 @@ func (a *App) GithubWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusBadRequest)
 		return
 	}
-	if payload.Action != "published" {
+	if payload.Action != "published" && payload.Action != "released" {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
