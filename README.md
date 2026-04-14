@@ -1,186 +1,126 @@
 # Ghostcam
 
-Camera surveillance system. Cameras capture video via `rpicam-vid | ffmpeg`, upload MPEG-TS segments to S3 (Tigris), and the server generates HLS manifests on the fly. Segment requests are served via 302 redirect to S3 (re-presigned per request).
+Self-hosted camera surveillance for Raspberry Pi. Cameras capture H.264 + AAC
+with `rpicam-vid | ffmpeg`, upload MPEG-TS segments directly to S3, and a
+single Go server handles auth, HLS, and live WebRTC for the Svelte browser
+viewer.
 
 ## Architecture
 
 ```
-Camera (rpicam-vid | ffmpeg) → MPEG-TS segments → S3 (Tigris)
-                                                      ↓
-Server (Go) ← 302 redirect → Browser (hls.js)
-     ↓
-  Postgres (segments, users, cameras, billing)
-  Redis (telemetry streams, SSE pub/sub, events)
+Camera (rpicam-vid) ── raw H.264 ──┬── ffmpeg ──┬── MPEG-TS ──→ S3 (Tigris)
+                                   │            └── Opus ──┐
+                                   └── H.264 via WebSocket ┤
+                                                           ↓
+Server (Go)  ←── presigned URLs ──→  Browser (hls.js)   pion SFU
+     │                                                     ↓
+     ├─ Postgres (users, cameras, segments, billing)   Browser (WebRTC)
+     └─ Redis    (telemetry streams, SSE, events)
 ```
 
-- **No persistent connections** -- cameras POST telemetry every 10s, upload segments via presigned PUT URLs
-- **Stateless server** -- JWT auth, horizontally scalable
-- **S3-native HLS** -- manifests generated on the fly, segments served via 302 redirect to S3 (re-presigned per request)
-- **Single-instance deployment** -- designed for one server behind Fly.io, not horizontally scaled
-- **Billing always on** -- users default to free tier (5 GB / 1 camera); Stripe test mode for local dev
-- **Clip download** -- timeline range selection, client-side MP4 assembly via ffmpeg.wasm, telemetry CSV/JSON export
+- **Hybrid HLS + WebRTC** — recording is always HLS (segments on S3, manifests
+  generated on the fly, segments served via 302 redirect). Live viewing uses a
+  pion SFU (ICE-lite, no TURN) for sub-second latency, with automatic fallback
+  to HLS.
+- **On-demand relay** — cameras keep a persistent WebSocket but only push
+  H.264/Opus frames when a viewer is watching.
+- **Ed25519 identity** — each camera mints a permanent keypair on first boot;
+  device ID is `SHA-256(pubkey)[:16]`. Requests are signed per-call, so
+  switching servers only requires a new provision token.
+- **Stateless HTTP path** — JWT auth, no session table. The WebRTC SFU keeps
+  in-memory state and pins live viewing to one server instance; HLS scales
+  independently.
+- **No cleanup daemons** — segment retention is enforced opportunistically in
+  the presign handler (DB row + S3 object deleted together, bounded per call).
 
-## Quick Start
+## Quick start
 
 ```bash
-# Set your LAN IP
 echo "GHOSTCAM_PUBLIC_IP=$(ipconfig getifaddr en0)" > .env
-
-# Start everything (server + test cameras + UI)
 docker compose --profile test up -d
-
-# Open http://localhost:5173
-# Login: admin@ghostcam.dev / dev-password
+# http://localhost:5173  —  admin@ghostcam.dev / dev-password
 ```
 
-For camera setup and a full walkthrough of the viewer, see **[docs/usage.md](docs/usage.md)**.
+`--profile test` brings up the server, UI, MinIO, Stripe webhook listener, and
+three synthetic cameras. Omit it to run just the server + UI when developing
+against real Pi hardware.
 
-## Project Structure
+For camera provisioning, the viewer walkthrough, and the Pi dev loop see
+**[docs/usage.md](docs/usage.md)**.
+
+## Layout
 
 ```
-common/                  Shared Go types (camera <-> server contract)
-camera/                  Camera binary (package main): capture pipeline, S3 upload,
-                         telemetry, provisioning, gpsd
-server/                  Server binary (package main): chi router + HTTP handlers
-                         (methods on *App), plus subpackages:
-  apitypes/              Viewer<->server request/response/SSE types (tygo source)
-  auth/                  Argon2id passwords, JWT, HMAC
-  billing/               Tier definitions (free/starter/pro/enterprise)
-  db/                    PostgreSQL (pgx), migrations
-  redis/                 Telemetry streams (XADD/XREAD), pub/sub
-  s3/                    Presigned URL generation, Upload, Delete
-tygo.yaml                Codegen: common/ + server/apitypes/ -> ui/src/lib/api-types/
-Makefile                 `make generate-types` / `make check-types` (CI drift check)
-ui/                      Svelte 5 SPA (hls.js, Leaflet, Tailwind)
-  src/lib/api-types/     Generated TypeScript types — DO NOT EDIT (tygo output)
-  browser-tests/         Playwright frontend smoke tests (backend mocked)
-e2e/                     Playwright tests that drive the live docker-compose stack
-pi/                      Pi system files (systemd, GPS, NetworkManager)
-scripts/                 Developer tools (pi.sh)
+common/     Shared Go types — camera<->server wire contract
+camera/     Camera binary (package main): capture, upload, telemetry, QR provisioning, gpsd
+server/     Server binary (package main): chi router, handlers as methods on *App
+  apitypes/   Viewer<->server request/response/SSE types (tygo source)
+  auth/       Argon2id, JWT, HMAC token hashing
+  billing/    Tier definitions and storage limits
+  db/         Postgres (pgx), migrations
+  mailer/     Resend transactional email
+  redis/      Telemetry streams, pub/sub, events
+  s3/         Tigris presigned URLs
+  triage/     Anthropic classifier for inbound support email
+  linear/     Linear issueCreate client
+ui/         Svelte 5 SPA (hls.js, Leaflet, Tailwind 4)
+  src/lib/api-types/   Generated from tygo — do not edit
+e2e/        Playwright specs that drive the live compose stack
+pi/         systemd, GPS, NetworkManager configs + rpi-image-gen build
+scripts/    pi.sh — build/deploy/logs loop for real hardware
+docs/       API, architecture, configuration, debugging
 ```
 
-Both `camera/` and `server/` are top-level `package main` directories — no
-`cmd/` wrapper. `go build ./camera` and `go build ./server` produce the two
-binaries.
+Both `camera/` and `server/` are top-level `package main` — no `cmd/` wrapper.
 
-## Camera
-
-The camera binary spawns `rpicam-vid | ffmpeg` to produce 6-second MPEG-TS segments, watches the output directory, and uploads new segments to S3 via presigned PUT URLs.
-
-Key features:
-- **Capture pipeline auto-restart** with exponential backoff (1s to 30s cap)
-- **Upload retry queue**: 3 retries with exponential backoff (2s, 4s, 8s)
-- **Graceful shutdown**: WaitGroup drain with 15s timeout
-- **Segment watcher**: backpressure with 5s blocking send instead of instant drop
-- **ffmpeg cleanup**: SIGTERM to process group, then SIGKILL after 5s
-- **GPS**: real gpsd integration on Linux (localhost:2947 for SIM7600G-H modem), synthetic fallback in Docker/dev
-- **Pre-encoded test loop**: place `test-loop.mp4` in data dir for low-CPU test mode (~5% vs 49%)
-- **Motion detection**: segment-size heuristic (1.5x rolling 10-segment average)
-- **Telemetry poll backoff** on failure: 10s -> 30s -> 60s
-- **Credentials** written as 0600 permissions
-- **Segment numbering**: `-segment_start_number` avoids filename collisions on restart
-
-```bash
-# Cross-compile for Pi (3 seconds, no sysroot needed)
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./camera
-
-# Deploy to Pi
-scp ghostcam-camera pi@10.0.0.229:/usr/local/bin/
-```
-
-Cameras are provisioned via pre-provisioned token file. On first boot, the camera reads the token file containing the server URL + one-time token, provisions itself, and starts streaming. (Camera-side QR scanning is not implemented in Go.)
-
-## Server
-
-HTTP API serving HLS manifests, presigned S3 URLs, SSE telemetry, and the static UI.
-
-Key features:
-- **Registration disabled**: `POST /api/v1/auth/register` returns 403; admin creates users via DB
-- **Firmware OTA**: admin uploads via `POST /api/v1/admin/firmware` (Tigris), cameras auto-update on startup
-- **Rate limiting**: login 10/min, provision 10/min per IP
-- **Secure cookies**: conditional on `GHOSTCAM_PUBLIC_URL` being HTTPS
-- **QR codes** use configured `GHOSTCAM_PUBLIC_URL` instead of `r.Host`
-- **Storage limits**: Redis `INCRBY` atomic reservation prevents TOCTOU race
-- **Storage capped events** deduplicated (5 min cooldown per device via Redis `SETNX`)
-- **Admin auth** required for `/api/v1/admin/firmware`
-- **HTTP timeouts**: Read 30s, Write 60s, Idle 120s
-- **SSE**: write deadline disabled for long-lived connections
-- **ListSegments**: LIMIT 2000, max 24hr range validation
-- **CORS** middleware for `GHOSTCAM_PUBLIC_URL` + `localhost:5173`
-- **Failed login logging** with email + IP
-- **HLS manifest**: `#EXT-X-INDEPENDENT-SEGMENTS` tag; segments via 302 redirect to S3
-- **Auto-create** "free" subscription on user creation
-- **No cleanup daemons**: segment retention is enforced by opportunistic
-  prune in the presign handler — DB rows and their matching S3 objects
-  are deleted together (LIMIT 100 per call), tied to normal upload
-  activity. Firmware binaries share the bucket and are intentionally
-  excluded.
-- **Fail-closed billing**: `billing.GetTier` returns `(Tier, bool)`;
-  unknown tier strings never grant unlimited resources. `effectiveTier`
-  validates DB-stored tiers and Stripe webhooks refuse to escalate to a
-  paid tier on unrecognised price IDs.
+## Build
 
 ```bash
 go build -o ghostcam-server ./server
+go build -o ghostcam-camera ./camera
+
+# Cross-compile camera for Pi (no CGO, no sysroot)
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./camera
+
+# Regenerate TypeScript types after editing common/ or server/apitypes/
+go generate ./...
+
+# Tests
+go test ./...
+cd ui && bun run test            # vitest unit tests
+cd ui && bun run test:browser    # playwright smoke (backend mocked)
+cd e2e && bun run test           # real end-to-end against compose stack
 ```
 
-### Key Endpoints
-
-| Endpoint | Auth | Description |
-|----------|------|-------------|
-| `POST /api/v1/cameras/provision` | Public (rate limited) | Camera provisioning |
-| `POST /api/v1/cameras/:id/telemetry` | Camera | Telemetry POST, returns pending commands |
-| `POST /api/v1/cameras/:id/presign` | Camera | Presigned S3 URLs + confirm uploads |
-| `GET /hls/:id/live.m3u8` | Viewer | Live HLS manifest (90s sliding window) |
-| `GET /hls/:id/vod.m3u8` | Viewer | VOD HLS manifest (?from=&to=, max 24h) |
-| `GET /hls/:id/:segmentID.ts` | Viewer | 302 redirect to S3 (re-presigned per request) |
-| `GET /hls/:id/coverage` | Viewer | Segment coverage with motion flags |
-| `POST /api/v1/clips/prepare` | Viewer | Presigned segment URLs for clip download |
-| `GET /api/v1/telemetry/:id/export` | Viewer | Telemetry export (CSV/JSON) |
-| `GET /events` | Viewer | SSE stream (telemetry, motion, storage_capped, coverage) |
-| `GET /api/v1/events` | Viewer | List events with pagination |
-| `GET /api/v1/billing/subscription` | Viewer | Always returns `billing_enabled: true` |
-| `POST /api/v1/cameras` | Viewer | Returns 402 when tier camera limit reached |
-| `POST /api/v1/admin/firmware` | Admin | Upload firmware binary to Tigris |
-| `GET /api/v1/firmware/latest` | Public | Latest firmware version + presigned download URL |
-
-### Environment Variables
-
-| Variable | Description |
-|----------|-------------|
-| `GHOSTCAM_DATABASE_URL` | PostgreSQL connection string (required) |
-| `GHOSTCAM_REDIS_URL` | Redis URL for telemetry + SSE |
-| `GHOSTCAM_PUBLIC_URL` | Public URL for QR codes and CORS (e.g. `https://cam.example.com`) |
-| `GHOSTCAM_S3_BUCKET` | S3/Tigris bucket name |
-| `GHOSTCAM_S3_ENDPOINT` | S3 endpoint URL (Tigris, MinIO) |
-| `GHOSTCAM_ADMIN_EMAIL` | Admin user email |
-| `GHOSTCAM_ADMIN_PASSWORD` | Preset admin password |
-| `GHOSTCAM_SEGMENT_RETENTION_DAYS` | Segment retention (default 30); drives the opportunistic prune in the presign handler and the read cutoff for manifest/coverage queries |
-
-## Infrastructure
-
-- **Fly.io** -- server hosting (sjc)
-- **Tigris** -- S3-compatible object storage (edge-cached)
-- **Neon** -- Postgres (us-west-2)
-- **Upstash** -- Redis (sjc)
+CI runs `go vet`, `go test`, the tygo drift check, `bun run check`, `bun run
+build`, the Docker build, and the e2e suite on every push.
 
 ## Releases
 
-Releases are triggered by pushing a Git tag (`v*`). The [release workflow](.github/workflows/release.yml) produces:
+Push a `v*` tag. The [release workflow](.github/workflows/release.yml) produces:
 
 | Artifact | Description |
 |----------|-------------|
-| `ghostcam-camera-aarch64` | Standalone Linux/arm64 binary |
-| `ghostcam-camera-x86_64` | Standalone Linux/amd64 binary |
-| `ghostcam-camera_<version>_arm64.deb` | Debian package (arm64) |
-| `ghostcam-<device>-<version>.img.xz` | Flashable Pi OS image (zero2w, pi4, pi5) |
-| `checksums.txt` | SHA-256 checksums for all artifacts |
+| `ghostcam-camera-{aarch64,x86_64}` | Standalone Linux binaries |
+| `ghostcam-camera_<version>_arm64.deb` | Debian package (ffmpeg + ca-certificates deps) |
+| `ghostcam-{zero2w,pi4,pi5}-<version>.img.xz` | Flashable Pi images |
+| `checksums.txt` | SHA-256 for every artifact |
 
-```bash
-git tag v0.1.0
-git push origin v0.1.0
-```
+A GitHub webhook (`POST /api/v1/webhooks/github`) mirrors the `.img.xz` assets
+into S3 at `firmware/{version}/ghostcam-{device}.img.xz` and publishes them
+via `GET /api/v1/firmware/images` for the UI's onboarding flow.
 
-## Camera Setup & Usage
+## Infrastructure
 
-For camera setup (flashing Pi images, installing the .deb, running the raw binary), Pi developer workflow, and a walkthrough of the viewer (enrolling cameras, playback, clip downloads, billing), see **[docs/usage.md](docs/usage.md)**.
+- **Fly.io** — server (sjc)
+- **Tigris** — S3-compatible object storage, edge-cached
+- **Neon** — Postgres (us-west-2)
+- **Upstash** — Redis (sjc)
+
+## Further reading
+
+- **[docs/usage.md](docs/usage.md)** — camera setup (image / deb / binary) and viewer walkthrough
+- **[docs/api.md](docs/api.md)** — HTTP endpoints, SSE events, camera-server protocol
+- **[docs/architecture.md](docs/architecture.md)** — file-by-file structure
+- **[docs/configuration.md](docs/configuration.md)** — env vars, billing tiers, retention
+- **[docs/debugging.md](docs/debugging.md)** — troubleshooting
