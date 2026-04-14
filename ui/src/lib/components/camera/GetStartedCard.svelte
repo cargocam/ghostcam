@@ -398,12 +398,17 @@ sudo sync</pre>
 					</div>
 				</div>
 			{:else if cameraConnected}
-				<div class="flex flex-col items-center gap-2 py-4">
+				<div class="flex flex-col items-center gap-2 py-4 text-center">
 					<div class="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
 						<Check class="h-6 w-6" />
 					</div>
 					<p class="text-sm text-muted-foreground">
 						All set — this guide will close in a moment.
+					</p>
+					<p class="text-xs text-muted-foreground max-w-sm">
+						By default new cameras are in <span class="font-medium">Streaming Only</span>
+						mode — live viewing works, but nothing is recorded. Open the camera's
+						settings → Recording Mode to enable continuous or motion-based recording.
 					</p>
 				</div>
 			{/if}
