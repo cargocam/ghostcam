@@ -65,7 +65,6 @@ server/     Server binary (package main): chi router, handlers as methods on *Ap
   linear/     Linear issueCreate client
 ui/         Svelte 5 SPA (hls.js, Leaflet, Tailwind 4)
   src/lib/api-types/   Generated from tygo — do not edit
-e2e/        Playwright specs that drive the live compose stack
 pi/         systemd, GPS, NetworkManager configs + rpi-image-gen build
 scripts/    pi.sh — build/deploy/logs loop for real hardware
 docs/       API, architecture, configuration, debugging
@@ -86,14 +85,15 @@ GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./camera
 go generate ./...
 
 # Tests
-go test ./...
+go test ./...                    # unit + integration (needs Docker for testcontainers)
 cd ui && bun run test            # vitest unit tests
 cd ui && bun run test:browser    # playwright smoke (backend mocked)
-cd e2e && bun run test           # real end-to-end against compose stack
 ```
 
 CI runs `go vet`, `go test`, the tygo drift check, `bun run check`, `bun run
-build`, the Docker build, and the e2e suite on every push.
+build`, and the Docker build on every push. Docs-only pushes skip the Docker
+build (inline `paths-filter` on the `docker` job); the `go` and `ui` jobs
+always run.
 
 ## Releases
 

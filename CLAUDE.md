@@ -82,7 +82,6 @@ ghostcam/
 ├── tygo.yaml        common/ + server/apitypes/ → ui/src/lib/api-types/ (driven by go generate)
 ├── ui/              Svelte 5 SPA — HLS playback, timeline scrubber, GPS map
 │   └── src/lib/api-types/   Generated TypeScript types — DO NOT EDIT
-├── e2e/             Playwright specs that drive the live docker-compose stack
 ├── pi/              systemd, GPS, NetworkManager
 │   └── image/       rpi-image-gen build for flashable .img
 ├── scripts/         pi.sh — camera manager CLI
@@ -168,13 +167,18 @@ CI enforces this via `git diff --exit-code` against the regenerated output.
   `ui/browser-tests/` against the Vite dev server. **Every** backend call is
   stubbed via `page.route()` from typed fixtures in `helpers.ts`. Frontend
   smoke only; not run in CI.
-- **End-to-end** (`cd e2e && bun run test`) — Playwright against the live
-  `docker compose --profile test` stack. Exercises JWT, SSE delivery, HLS
-  manifest generation from real segment rows. See `e2e/README.md`. Takes
-  1–2 min; gated behind `go`/`ui`/`docker` in CI.
+- **Integration** (`go test ./server/`) — `server/integration_test.go`
+  spins up Postgres + Redis via `testcontainers-go` and exercises the HTTP
+  server end-to-end through its real chi router. Replaces the deleted
+  Playwright e2e suite. Requires Docker at test time; each test calls
+  `t.Skip` when the daemon isn't reachable, so `go test ./...` stays green
+  on dev machines without Docker.
 
-**CI** (`.github/workflows/ci.yml`): `go vet`, `go test`, tygo drift check,
-`bun run check`, `bun run test`, `bun run build`, Docker build, then `e2e`.
+**CI** (`.github/workflows/ci.yml`): `go vet`, `go test` (unit + integration),
+tygo drift check, `bun run check`, `bun run test`, `bun run build`, Docker
+build. No cross-job `changes` dependency — `go` and `ui` always run (both
+<1 min); the docker job scopes itself with an inline `paths-filter` so
+docs-only pushes skip the ~2 min image build.
 
 ## CI / Release
 
@@ -182,7 +186,7 @@ CI enforces this via `git diff --exit-code` against the regenerated output.
   - `go`: vet, test, drift check
   - `ui`: `bun install --frozen-lockfile`, `check`, `build`
   - `docker`: server + camera targets with BuildKit cache
-  - `e2e`: compose up → Playwright → compose down
+    (inline `paths-filter` — skipped on docs-only changes)
 - **`.github/workflows/release.yml`** on `v*` tags:
   - `build-camera`: aarch64 + x86_64 binaries
   - `build-camera-deb`: aarch64 `.deb` (depends on ffmpeg, ca-certificates)
