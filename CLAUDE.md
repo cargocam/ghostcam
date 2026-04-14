@@ -15,16 +15,8 @@ manifests on the fly, serves segments via 302 redirect to S3, runs a pion
 WebRTC SFU for sub-second live viewing, and exposes a REST + SSE API consumed
 by a Svelte 5 viewer.
 
-```
-Camera (rpicam-vid) ── raw H.264 ──┬── ffmpeg ──┬── MPEG-TS ──→ S3 (Tigris)
-                                   │            └── Opus ──┐
-                                   └── H.264 via WebSocket ┤
-                                                           ↓
-Server (Go)  ←── presigned URLs ──→  Browser (hls.js)   pion SFU
-     │                                                     ↓
-     ├─ Postgres (users, cameras, segments, billing)   Browser (WebRTC)
-     └─ Redis    (telemetry streams, SSE, events)
-```
+See the topology diagram in [README.md](README.md#architecture);
+[docs/architecture.md](docs/architecture.md) has the file-by-file breakdown.
 
 ### Architectural notes
 
@@ -34,8 +26,9 @@ Server (Go)  ←── presigned URLs ──→  Browser (hls.js)   pion SFU
   viewer shows "LIVE" when WebRTC is up and "DELAYED" when it's on HLS.
   VOD/clip/timeline is HLS only.
 - **On-demand relay.** Cameras keep a persistent WebSocket but only send
-  H.264 + Opus frames when the server sends `start_stream`. When a viewer is
-  active, upload bandwidth roughly doubles (S3 segments + WebSocket relay).
+  H.264 + Opus frames between server `start_stream` / `stop_stream` control
+  messages. When a viewer is active, upload bandwidth roughly doubles
+  (S3 segments + WebSocket relay).
 - **Ed25519 identity.** Each camera mints a permanent keypair on first boot
   (`/var/ghostcam/identity_key[.pub]`). Device ID = `SHA-256(pubkey)[:16]`.
   Requests are signed per-call
@@ -131,10 +124,19 @@ docker compose up -d
 ```
 
 Both can run simultaneously — synthetic and real cameras talk to the same
-server. `pi.sh` subcommands: `setup`, `deploy`, `logs`, `status`, `restart`,
-`ssh`, `unenroll`, `wifi-off [SECS]`. Defaults come from `.pi.env`
-(gitignored) or positional `[HOST] [USER] [PASS]` args. Clean restart:
-`docker compose down -v && docker compose up -d`.
+server. Defaults come from `.pi.env` (gitignored); positional args override.
+Clean restart: `docker compose down -v && docker compose up -d`.
+
+| Subcommand | Args | Purpose |
+|------------|------|---------|
+| `setup`    | `[HOST] [USER] [PASS]`        | First-time Pi provisioning |
+| `deploy`   | `[HOST] [USER] [PASS]`        | Cross-compile + deploy + tail logs (primary dev loop) |
+| `logs`     | `[HOST] [USER] [PASS]`        | Stream camera logs |
+| `status`   | `[HOST] [USER] [PASS]`        | Health check |
+| `restart`  | `[HOST] [USER] [PASS]`        | Restart camera service |
+| `ssh`      | `[HOST] [USER] [PASS]`        | Interactive SSH |
+| `unenroll` | `[HOST] [USER] [PASS]`        | Reset camera enrollment state |
+| `wifi-off` | `[SECS] [HOST] [USER] [PASS]` | Drop WiFi for N seconds (cellular failover test) — **`SECS` comes first** |
 
 ## API type generation
 
