@@ -2,6 +2,8 @@
 	import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '$lib/components/ui/sheet/index.js';
 	import AlertPanel from './AlertPanel.svelte';
 	import { alertsStore } from '$lib/stores/alerts.svelte.js';
+	import { settingsStore } from '$lib/stores/settings.svelte.js';
+	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 
 	let {
 		open = $bindable(false),
@@ -32,6 +34,11 @@
 			<AlertPanel
 				onNavigate={() => (open = false)}
 				onOpenSettings={() => { open = false; onOpenSettings?.(); }}
+				onMotion={(cameraId, timestampMs) => {
+					// Alert timestamps are epoch ms; the scrubber works in epoch seconds.
+					settingsStore.openCameraView(cameraId);
+					scrubberStore.seekTo(timestampMs / 1000);
+				}}
 			/>
 		</div>
 	</SheetContent>
