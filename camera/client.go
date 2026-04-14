@@ -14,7 +14,8 @@ import (
 	"github.com/cargocam/ghostcam/common"
 )
 
-// Version is set at build time via -ldflags.
+// Version is set at build time via -ldflags "-X main.Version=vX.Y.Z".
+// Dev builds keep "dev" which skips firmware update checks.
 var Version = "dev"
 
 // Client is the camera's HTTP client for server communication.
