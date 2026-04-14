@@ -6,13 +6,16 @@ on:
     branches: [main]
 
 jobs:
-  # Detect which paths changed to skip unnecessary work
+  # Detect which paths changed to skip unnecessary work.
+  # `code` is true when any deployable code changed (Go, UI, Docker).
+  # Workflow-only, docs-only, or scripts-only pushes skip expensive jobs.
   changes:
     runs-on: ubuntu-latest
     outputs:
       camera: ${{ steps.filter.outputs.camera }}
       server: ${{ steps.filter.outputs.server }}
       ui: ${{ steps.filter.outputs.ui }}
+      code: ${{ steps.filter.outputs.code }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -31,9 +34,20 @@ jobs:
               - 'go.sum'
             ui:
               - 'ui/**'
+            code:
+              - 'camera/**'
+              - 'server/**'
+              - 'common/**'
+              - 'ui/**'
+              - 'go.mod'
+              - 'go.sum'
+              - 'Dockerfile'
+              - 'docker-compose.yml'
+              - 'e2e/**'
 
   go:
     needs: changes
+    if: needs.changes.outputs.code == 'true' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -75,7 +89,7 @@ jobs:
 
   docker:
     needs: [go, ui, changes]
-    if: always() && needs.go.result == 'success' && (needs.ui.result == 'success' || needs.ui.result == 'skipped')
+    if: always() && needs.changes.outputs.code == 'true' && needs.go.result == 'success' && (needs.ui.result == 'success' || needs.ui.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -99,8 +113,8 @@ jobs:
   # segments, JWT round-trip). See e2e/README.md for what this covers
   # and what it deliberately does not.
   e2e:
-    needs: [go, ui, docker]
-    if: always() && needs.go.result == 'success' && (needs.ui.result == 'success' || needs.ui.result == 'skipped') && needs.docker.result == 'success'
+    needs: [go, ui, docker, changes]
+    if: always() && needs.changes.outputs.code == 'true' && needs.go.result == 'success' && (needs.ui.result == 'success' || needs.ui.result == 'skipped') && needs.docker.result == 'success'
     runs-on: ubuntu-latest
     env:
       STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
@@ -226,8 +240,8 @@ jobs:
           docker compose --profile test down -v
 
   deploy:
-    needs: [go, ui, docker, e2e]
-    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.go.result == 'success' && (needs.ui.result == 'success' || needs.ui.result == 'skipped') && needs.docker.result == 'success' && needs.e2e.result == 'success'
+    needs: [go, ui, docker, e2e, changes]
+    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.changes.outputs.code == 'true' && needs.go.result == 'success' && (needs.ui.result == 'success' || needs.ui.result == 'skipped') && needs.docker.result == 'success' && needs.e2e.result == 'success'
     runs-on: ubuntu-latest
     concurrency: deploy-production
     steps:

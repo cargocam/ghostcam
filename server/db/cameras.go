@@ -9,11 +9,11 @@ import (
 
 func (db *DB) GetCamera(ctx context.Context, deviceID string) (*CameraRecord, error) {
 	row := db.pool.QueryRow(ctx,
-		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes, resolution, recording_mode
+		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes, resolution, recording_mode, fw_version
 		 FROM cameras WHERE device_id = $1`, deviceID)
 
 	var c CameraRecord
-	err := row.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes, &c.Resolution, &c.RecordingMode)
+	err := row.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes, &c.Resolution, &c.RecordingMode, &c.FwVersion)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -25,7 +25,7 @@ func (db *DB) GetCamera(ctx context.Context, deviceID string) (*CameraRecord, er
 
 func (db *DB) ListCameras(ctx context.Context, userID string) ([]CameraRecord, error) {
 	rows, err := db.pool.Query(ctx,
-		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes, resolution, recording_mode
+		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes, resolution, recording_mode, fw_version
 		 FROM cameras WHERE user_id = $1 ORDER BY enrolled_at`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list cameras: %w", err)
@@ -35,7 +35,7 @@ func (db *DB) ListCameras(ctx context.Context, userID string) ([]CameraRecord, e
 	var cameras []CameraRecord
 	for rows.Next() {
 		var c CameraRecord
-		if err := rows.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes, &c.Resolution, &c.RecordingMode); err != nil {
+		if err := rows.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes, &c.Resolution, &c.RecordingMode, &c.FwVersion); err != nil {
 			return nil, fmt.Errorf("scanning camera: %w", err)
 		}
 		cameras = append(cameras, c)
@@ -61,13 +61,23 @@ func (db *DB) UpdateCamera(ctx context.Context, deviceID string, update *CameraU
 	return nil
 }
 
-// TouchCameraLastSeen updates last_seen_at to the current unix timestamp (seconds).
-func (db *DB) TouchCameraLastSeen(ctx context.Context, deviceID string) error {
-	_, err := db.pool.Exec(ctx,
-		`UPDATE cameras SET last_seen_at = $1 WHERE device_id = $2`,
-		nowUnix(), deviceID)
-	if err != nil {
-		return fmt.Errorf("touch camera last_seen_at: %w", err)
+// TouchCameraLastSeen updates last_seen_at and fw_version. Called on
+// every telemetry POST so the cameras row always reflects current state.
+func (db *DB) TouchCameraLastSeen(ctx context.Context, deviceID, fwVersion string) error {
+	if fwVersion != "" {
+		_, err := db.pool.Exec(ctx,
+			`UPDATE cameras SET last_seen_at = $1, fw_version = $2 WHERE device_id = $3`,
+			nowUnix(), fwVersion, deviceID)
+		if err != nil {
+			return fmt.Errorf("touch camera last_seen_at: %w", err)
+		}
+	} else {
+		_, err := db.pool.Exec(ctx,
+			`UPDATE cameras SET last_seen_at = $1 WHERE device_id = $2`,
+			nowUnix(), deviceID)
+		if err != nil {
+			return fmt.Errorf("touch camera last_seen_at: %w", err)
+		}
 	}
 	return nil
 }
@@ -94,11 +104,11 @@ func (db *DB) CreateProvisionedCamera(ctx context.Context, deviceID, userID, dev
 
 func (db *DB) GetCameraBySerial(ctx context.Context, deviceSerial string) (*CameraRecord, error) {
 	row := db.pool.QueryRow(ctx,
-		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes, resolution, recording_mode
+		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes, resolution, recording_mode, fw_version
 		 FROM cameras WHERE device_serial = $1`, deviceSerial)
 
 	var c CameraRecord
-	err := row.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes, &c.Resolution, &c.RecordingMode)
+	err := row.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes, &c.Resolution, &c.RecordingMode, &c.FwVersion)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

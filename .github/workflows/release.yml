@@ -12,6 +12,25 @@ env:
   IMAGE_PREFIX: ghcr.io/${{ github.repository_owner }}/ghostcam
 
 jobs:
+  # Detect whether Pi image files changed to skip slow image builds
+  # when only camera/server code changed.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      pi: ${{ steps.filter.outputs.pi }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - id: filter
+        run: |
+          # Compare against the previous commit on the tag
+          if git diff --name-only HEAD~1 HEAD | grep -qE '^(pi/|Dockerfile|\.github/workflows/release\.yml)'; then
+            echo "pi=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "pi=false" >> "$GITHUB_OUTPUT"
+          fi
+
   build-camera:
     runs-on: ubuntu-latest
     strategy:
@@ -31,7 +50,8 @@ jobs:
       - name: Build camera binary
         run: |
           CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-            go build -o ${{ matrix.name }} ./camera
+            go build -ldflags "-X main.Version=${{ github.ref_name }}" \
+            -o ${{ matrix.name }} ./camera
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.name }}
@@ -93,20 +113,16 @@ jobs:
           cache-to: type=gha,mode=max
 
   build-pi-image:
-    needs: build-camera-deb
+    needs: [build-camera-deb, changes]
+    if: needs.changes.outputs.pi == 'true'
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/${{ github.repository_owner }}/rpi-image-gen:latest
     strategy:
       matrix:
         device: [zero2w, pi4, pi5]
     steps:
       - uses: actions/checkout@v4
-      - name: Clone rpi-image-gen
-        run: git clone --depth 1 https://github.com/raspberrypi/rpi-image-gen.git /tmp/rpi-image-gen
-      - name: Install rpi-image-gen dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y binfmt-support qemu-user-static
-          sudo /tmp/rpi-image-gen/install_deps.sh
       - uses: actions/download-artifact@v4
         with:
           name: ghostcam-camera-deb
@@ -114,39 +130,62 @@ jobs:
       - name: Set device-specific video profile
         run: |
           PROFILE="${{ matrix.device }}"
-          [ "$PROFILE" = "zero2w" ] && PROFILE="zero2w"
           echo "GHOSTCAM_VIDEO_PROFILE=$PROFILE" >> pi/image/files/ghostcam.env
       - name: Build image for ${{ matrix.device }}
         run: |
-          sudo /tmp/rpi-image-gen/rpi-image-gen build \
+          /opt/rpi-image-gen/rpi-image-gen build \
             -c "$GITHUB_WORKSPACE/pi/image/config/ghostcam-${{ matrix.device }}.yaml" \
             -S "$GITHUB_WORKSPACE/pi/image"
       - name: Compress image
         run: |
-          IMG=$(sudo find work/ -name '*.img' | head -1)
-          sudo xz -9 -T0 "$IMG"
-          sudo cp "${IMG}.xz" "ghostcam-${{ matrix.device }}-${{ github.ref_name }}.img.xz"
+          IMG=$(find work/ -name '*.img' | head -1)
+          xz -3 -T0 "$IMG"
+          cp "${IMG}.xz" "ghostcam-${{ matrix.device }}-${{ github.ref_name }}.img.xz"
       - uses: actions/upload-artifact@v4
         with:
           name: ghostcam-${{ matrix.device }}-image
           path: ghostcam-${{ matrix.device }}-*.img.xz
 
+  # Publish the release as soon as camera binaries + .deb are ready.
+  # Pi images are large and only needed for flashing new hardware,
+  # so they're attached later by the attach-pi-images job.
   release:
-    needs: [build-camera, build-camera-deb, build-docker, build-pi-image]
-    if: always() && needs.build-camera.result == 'success' && needs.build-camera-deb.result == 'success'
+    needs: [build-camera, build-camera-deb, build-docker]
+    if: needs.build-camera.result == 'success' && needs.build-camera-deb.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
         with:
           merge-multiple: true
       - name: Generate checksums
-        run: sha256sum ghostcam-camera* ghostcam-*.img.xz > checksums.txt 2>/dev/null || sha256sum ghostcam-camera* > checksums.txt
+        run: sha256sum ghostcam-camera* > checksums.txt
       - uses: softprops/action-gh-release@v2
         with:
           files: |
             ghostcam-camera-aarch64
             ghostcam-camera-x86_64
             ghostcam-camera_*.deb
-            ghostcam-*.img.xz
             checksums.txt
           generate_release_notes: true
+
+  # Attach Pi images to the release after they finish building.
+  # Skipped entirely when pi/ files haven't changed.
+  attach-pi-images:
+    needs: [build-pi-image, release]
+    if: always() && needs.release.result == 'success' && needs.build-pi-image.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ghostcam-*-image
+          merge-multiple: true
+      - name: Attach Pi images to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          for img in ghostcam-*.img.xz; do
+            [ -f "$img" ] && gh release upload "${{ github.ref_name }}" "$img" --repo "${{ github.repository }}" --clobber
+          done
+          # Update checksums with Pi images included
+          sha256sum ghostcam-*.img.xz >> checksums.txt 2>/dev/null || true
+          gh release upload "${{ github.ref_name }}" checksums.txt --repo "${{ github.repository }}" --clobber

@@ -121,9 +121,9 @@ func (c *Client) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// FirmwareKey returns the S3 key for a firmware binary.
+// FirmwareKey returns the S3 key for a firmware .deb package.
 func FirmwareKey(version string) string {
-	return fmt.Sprintf("firmware/%s/ghostcam-camera", version)
+	return fmt.Sprintf("firmware/%s/ghostcam-camera.deb", version)
 }
 
 // PiImageKey returns the S3 key for a Pi device image

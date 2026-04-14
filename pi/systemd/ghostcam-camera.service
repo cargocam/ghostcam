@@ -10,12 +10,12 @@ Group=yurei
 SupplementaryGroups=video dialout audio
 EnvironmentFile=-/etc/ghostcam/env
 Environment=MALLOC_ARENA_MAX=2
-# Firmware update with rollback. If a staged update exists:
-#   1. If boot_ok marker is missing (previous boot crashed), restore backup and discard the staged update.
-#   2. Otherwise, back up current binary, install staged update.
+# Firmware update with rollback. If a staged .deb exists:
+#   1. If boot_ok marker is missing (previous boot crashed), restore backup and discard the staged .deb.
+#   2. Otherwise, back up current binary, install staged .deb via dpkg (handles dependencies).
 # The camera binary writes boot_ok after first successful telemetry POST.
 ExecStartPre=+/bin/sh -c '\
-  STAGED=/var/ghostcam/staged-update; \
+  STAGED=/var/ghostcam/staged-update.deb; \
   BIN=/usr/local/bin/ghostcam-camera; \
   PREV=${BIN}.prev; \
   BOOT_OK=/var/ghostcam/boot_ok; \
@@ -25,7 +25,7 @@ ExecStartPre=+/bin/sh -c '\
       cp "$PREV" "$BIN" && chmod +x "$BIN"; \
       rm -f "$STAGED"; \
     else \
-      cp "$BIN" "$PREV" && mv "$STAGED" "$BIN" && chmod +x "$BIN"; \
+      cp "$BIN" "$PREV" && dpkg -i "$STAGED" && rm -f "$STAGED"; \
     fi; \
   fi; \
   rm -f "$BOOT_OK"; \

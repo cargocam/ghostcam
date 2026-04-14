@@ -149,6 +149,7 @@ type CameraRecord struct {
 	Notes         *string
 	Resolution    string
 	RecordingMode string
+	FwVersion     *string
 }
 
 // CameraUpdate holds optional fields for updating a camera.

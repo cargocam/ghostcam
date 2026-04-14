@@ -93,6 +93,7 @@ type CameraResponse struct {
 	Notes         *string         `json:"notes,omitempty"`
 	Resolution    string          `json:"resolution"`
 	RecordingMode string          `json:"recording_mode"`
+	FwVersion     string          `json:"fw_version,omitempty"`
 	Telemetry     *TelemetryEntry `json:"telemetry,omitempty"`
 }
 
