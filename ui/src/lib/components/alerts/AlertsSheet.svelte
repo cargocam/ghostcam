@@ -2,11 +2,17 @@
 	import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '$lib/components/ui/sheet/index.js';
 	import AlertPanel from './AlertPanel.svelte';
 	import { alertsStore } from '$lib/stores/alerts.svelte.js';
+	import { settingsStore } from '$lib/stores/settings.svelte.js';
+	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 
 	let {
 		open = $bindable(false),
+		onOpenSettings,
 	}: {
 		open?: boolean;
+		/** Called when an alert (e.g. storage_capped) requests the settings panel.
+		 *  Parent should open settings; the sheet closes itself. */
+		onOpenSettings?: () => void;
 	} = $props();
 
 	// Mark all as read when sheet opens
@@ -25,7 +31,15 @@
 		</SheetHeader>
 
 		<div class="mt-4 -mx-6 h-[calc(100vh-8rem)]">
-			<AlertPanel />
+			<AlertPanel
+				onNavigate={() => (open = false)}
+				onOpenSettings={() => { open = false; onOpenSettings?.(); }}
+				onMotion={(cameraId, timestampMs) => {
+					// Alert timestamps are epoch ms; the scrubber works in epoch seconds.
+					settingsStore.openCameraView(cameraId);
+					scrubberStore.seekTo(timestampMs / 1000);
+				}}
+			/>
 		</div>
 	</SheetContent>
 </Sheet>

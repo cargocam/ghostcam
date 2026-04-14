@@ -283,6 +283,11 @@ Click the **bell icon** in the header to open the alerts panel. You'll see:
 
 Unread counts appear as a red badge on the bell. Opening the panel marks alerts as read.
 
+Alerts are clickable:
+
+- **Motion** — jumps to the relevant camera's view and seeks the timeline to the motion timestamp.
+- **Storage capped** — opens the global settings panel (Billing section) so you can upgrade.
+
 ## 8. Billing & Storage
 
 Click the **gear icon** in the header to open global settings. The **Billing** section shows:

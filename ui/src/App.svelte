@@ -120,7 +120,7 @@
 {/if}
 
 <SettingsDialog bind:open={settingsOpen} />
-<AlertsSheet bind:open={alertsOpen} />
+<AlertsSheet bind:open={alertsOpen} onOpenSettings={() => (settingsOpen = true)} />
 
 <style>
 	/* Pad the top (notch) and bottom (home indicator) on devices with
