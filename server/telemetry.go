@@ -27,8 +27,8 @@ func (a *App) PostTelemetry(w http.ResponseWriter, r *http.Request) {
 		redis.WriteTelemetry(r.Context(), a.Redis, deviceID, &body.Telemetry)
 	}
 
-	// Mark camera as seen (non-fatal).
-	if err := a.DB.TouchCameraLastSeen(r.Context(), deviceID); err != nil {
+	// Mark camera as seen + store firmware version (non-fatal).
+	if err := a.DB.TouchCameraLastSeen(r.Context(), deviceID, body.FwVersion); err != nil {
 		slog.Warn("failed to touch camera last_seen_at", "device_id", deviceID, "error", err)
 	}
 

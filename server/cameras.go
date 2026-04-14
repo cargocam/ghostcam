@@ -39,6 +39,7 @@ func (a *App) ListCameras(w http.ResponseWriter, r *http.Request) {
 			Notes:         c.Notes,
 			Resolution:    c.Resolution,
 			RecordingMode: c.RecordingMode,
+			FwVersion:     derefStr(c.FwVersion),
 		}
 		if a.Redis != nil {
 			entry, _ := redis.QueryTelemetryLatest(ctx, a.Redis, c.DeviceID)
@@ -128,7 +129,15 @@ func (a *App) GetCamera(w http.ResponseWriter, r *http.Request) {
 		Notes:         camera.Notes,
 		Resolution:    camera.Resolution,
 		RecordingMode: camera.RecordingMode,
+		FwVersion:     derefStr(camera.FwVersion),
 	})
+}
+
+func derefStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // UpdateCamera handles PATCH /api/v1/cameras/{deviceID}.

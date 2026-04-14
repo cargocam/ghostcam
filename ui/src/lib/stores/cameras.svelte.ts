@@ -17,6 +17,7 @@ export interface CameraState {
 	lastServerTs: number | null;
 	resolution: string;
 	recording_mode: string;
+	fw_version: string;
 }
 
 class CameraStore {
@@ -53,6 +54,7 @@ class CameraStore {
 				lastServerTs: null,
 				resolution: c.resolution ?? '720p',
 				recording_mode: c.recording_mode ?? 'constant',
+				fw_version: c.fw_version ?? '',
 			};
 		});
 	}

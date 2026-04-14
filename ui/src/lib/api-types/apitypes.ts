@@ -100,6 +100,7 @@ export interface CameraResponse {
   notes?: string;
   resolution: string;
   recording_mode: string;
+  fw_version?: string;
   telemetry?: TelemetryEntry;
 }
 /**

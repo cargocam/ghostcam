@@ -1,0 +1,1 @@
+ALTER TABLE cameras ADD COLUMN IF NOT EXISTS fw_version TEXT;

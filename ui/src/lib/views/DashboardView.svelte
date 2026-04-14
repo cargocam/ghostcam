@@ -220,6 +220,7 @@
 							<th class="text-right px-4 py-2 font-medium text-muted-foreground">CPU</th>
 							<th class="text-right px-4 py-2 font-medium text-muted-foreground">Memory</th>
 							<th class="text-right px-4 py-2 font-medium text-muted-foreground">Temp</th>
+							<th class="text-right px-4 py-2 font-medium text-muted-foreground">Firmware</th>
 						</tr>
 					</thead>
 					<tbody>
@@ -263,6 +264,9 @@
 									{:else}
 										<span class="text-muted-foreground">--</span>
 									{/if}
+								</td>
+								<td class="px-4 py-2.5 font-mono text-right text-muted-foreground">
+									{camera.fw_version || '--'}
 								</td>
 							</tr>
 						{/each}
