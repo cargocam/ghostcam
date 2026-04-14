@@ -1,9 +1,35 @@
 <script lang="ts">
-	import { alertsStore, type AlertType } from '$lib/stores/alerts.svelte.js';
+	import { alertsStore, type Alert, type AlertType } from '$lib/stores/alerts.svelte.js';
+	import { settingsStore } from '$lib/stores/settings.svelte.js';
+	import { scrubberStore } from '$lib/stores/scrubber.svelte.js';
 	import { Button } from '$lib/components/ui/button/index.js';
 	import { ScrollArea } from '$lib/components/ui/scroll-area/index.js';
 	import { Separator } from '$lib/components/ui/separator/index.js';
 	import { cn } from '$lib/utils.js';
+
+	let {
+		onOpenSettings,
+		onNavigate,
+	}: {
+		/** Called when an alert requests the settings panel (e.g. storage_capped). */
+		onOpenSettings?: () => void;
+		/** Called after an alert navigates the user somewhere (e.g. a camera view),
+		 *  so the parent can dismiss the alerts sheet/popover. */
+		onNavigate?: () => void;
+	} = $props();
+
+	function handleAlertClick(alert: Alert) {
+		alertsStore.markRead(alert.id);
+		if (alert.type === 'motion' && alert.cameraId) {
+			// Focus the camera and seek the timeline to the motion timestamp.
+			// Alert timestamps are epoch ms; the scrubber works in epoch seconds.
+			settingsStore.openCameraView(alert.cameraId);
+			scrubberStore.seekTo(alert.timestamp / 1000);
+			onNavigate?.();
+		} else if (alert.type === 'storage_capped') {
+			onOpenSettings?.();
+		}
+	}
 
 	function alertIcon(type: AlertType): string {
 		switch (type) {
@@ -90,8 +116,8 @@
 						)}
 						role="button"
 						tabindex="0"
-						onclick={() => alertsStore.markRead(alert.id)}
-						onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') alertsStore.markRead(alert.id); }}
+						onclick={() => handleAlertClick(alert)}
+						onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleAlertClick(alert); } }}
 					>
 						<span class="text-sm mt-0.5 shrink-0" role="img" aria-label={alert.type}>
 							{alertIcon(alert.type)}

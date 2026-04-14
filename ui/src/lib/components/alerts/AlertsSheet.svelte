@@ -5,8 +5,12 @@
 
 	let {
 		open = $bindable(false),
+		onOpenSettings,
 	}: {
 		open?: boolean;
+		/** Called when an alert (e.g. storage_capped) requests the settings panel.
+		 *  Parent should open settings; the sheet closes itself. */
+		onOpenSettings?: () => void;
 	} = $props();
 
 	// Mark all as read when sheet opens
@@ -25,7 +29,10 @@
 		</SheetHeader>
 
 		<div class="mt-4 -mx-6 h-[calc(100vh-8rem)]">
-			<AlertPanel />
+			<AlertPanel
+				onNavigate={() => (open = false)}
+				onOpenSettings={() => { open = false; onOpenSettings?.(); }}
+			/>
 		</div>
 	</SheetContent>
 </Sheet>
