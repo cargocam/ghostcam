@@ -191,6 +191,29 @@ services:
     environment:
       - STRIPE_CLI_TELEMETRY_OPTOUT=1
 
+  # Self-hosted GitHub Actions runner. Requires GITHUB_RUNNER_TOKEN in .env
+  # (generate at repo Settings → Actions → Runners → New self-hosted runner).
+  actions-runner:
+    image: ghcr.io/actions/actions-runner:latest
+    restart: unless-stopped
+    profiles: [runner]
+    user: runner
+    working_dir: /home/runner
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        ./config.sh --url https://github.com/cargocam/ghostcam \
+          --token "$GITHUB_RUNNER_TOKEN" \
+          --name ghostcam-dev \
+          --labels self-hosted,linux \
+          --replace --unattended \
+        && ./run.sh
+    environment:
+      - GITHUB_RUNNER_TOKEN=${GITHUB_RUNNER_TOKEN:-}
+    volumes:
+      - runner-data:/home/runner/_work
+      - /var/run/docker.sock:/var/run/docker.sock
+
 volumes:
   pg-data:
   redis-data:
@@ -199,3 +222,4 @@ volumes:
   camera-1-data:
   camera-2-data:
   camera-3-data:
+  runner-data:
