@@ -26,7 +26,7 @@ type CameraConfig struct {
 	VideoFPS              uint32
 	VideoBitrate          uint32
 	VideoKeyframeInterval uint32
-	RecordingMode         string // "constant" or "motion"
+	RecordingMode         string // "constant", "motion", or "never" (streaming-only)
 	LocalStorageCapBytes  uint64 // max local segment storage before eviction
 }
 
@@ -141,7 +141,24 @@ func LoadConfig() (*CameraConfig, error) {
 		}
 	}
 
-	recordingMode := "constant"
+	// Default is "never" (streaming-only) — a freshly-flashed camera doesn't
+	// start uploading segments until the user explicitly opts into recording.
+	// This matches the DB column default so a brand-new enrollment behaves the
+	// same whether or not the server has yet issued a set_recording_mode
+	// command. Existing installs already have a value persisted on disk, so
+	// this default only applies to fresh data dirs.
+	//
+	// Resolution order mirrors the other settings:
+	//   1. persisted file at {dataDir}/recording_mode (written by the server
+	//      via set_recording_mode) — primary source of truth after first use.
+	//   2. GHOSTCAM_RECORDING_MODE env var — for fixtures (docker-compose
+	//      test cameras) and anyone who wants to pin a mode at provisioning
+	//      time before the server has had a chance to set it.
+	//   3. built-in "never" default.
+	recordingMode := "never"
+	if env := envOpt("GHOSTCAM_RECORDING_MODE"); env != "" {
+		recordingMode = env
+	}
 	if stored := readStoredFile(resolvedDataDir, "recording_mode"); stored != "" {
 		recordingMode = stored
 		slog.Info("applying stored recording mode override", "mode", stored)

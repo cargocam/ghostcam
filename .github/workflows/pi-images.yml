@@ -1,0 +1,54 @@
+name: Build Pi Images
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release tag to build images for (e.g. v0.6.7)'
+        required: true
+
+jobs:
+  build-pi-image:
+    runs-on: self-hosted
+    timeout-minutes: 60
+    strategy:
+      matrix:
+        device: [zero2w, pi4, pi5]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download .deb from release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p pi/image/pkgs
+          gh release download "${{ github.event.inputs.version }}" \
+            --pattern "ghostcam-camera_*_arm64.deb" \
+            --dir pi/image/pkgs
+
+      - name: Clone rpi-image-gen
+        run: git clone --depth 1 https://github.com/raspberrypi/rpi-image-gen.git /tmp/rpi-image-gen
+
+      - name: Install rpi-image-gen dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y binfmt-support qemu-user-static
+          sudo /tmp/rpi-image-gen/install_deps.sh
+
+      - name: Set device-specific video profile
+        run: echo "GHOSTCAM_VIDEO_PROFILE=${{ matrix.device }}" >> pi/image/files/ghostcam.env
+
+      - name: Build image for ${{ matrix.device }}
+        run: |
+          sudo /tmp/rpi-image-gen/rpi-image-gen build \
+            -c "$GITHUB_WORKSPACE/pi/image/config/ghostcam-${{ matrix.device }}.yaml" \
+            -S "$GITHUB_WORKSPACE/pi/image"
+
+      - name: Compress and upload image to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          IMG=$(sudo find work/ -name '*.img' | head -1)
+          sudo xz -9 -T0 "$IMG"
+          IMG_NAME="ghostcam-${{ matrix.device }}-${{ github.event.inputs.version }}.img.xz"
+          sudo cp "${IMG}.xz" "$IMG_NAME"
+          gh release upload "${{ github.event.inputs.version }}" "$IMG_NAME"

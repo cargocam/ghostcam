@@ -33,8 +33,6 @@ ghostcam/
 ├── tygo.yaml        Codegen config: common/ + server/apitypes/ → ui/src/lib/api-types/ (driven by `go generate ./...`)
 ├── ui/              Svelte 5 SPA: HLS playback (hls.js), timeline scrubber, GPS map
 │   └── src/lib/api-types/  Generated TypeScript types — DO NOT EDIT (see tygo.yaml)
-├── e2e/             Real end-to-end Playwright specs that drive the live
-│                    docker-compose stack (not mocked). Run via CI e2e job.
 ├── pi/              Pi system files: systemd services, GPS, NetworkManager configs
 │   └── image/       rpi-image-gen build system: device configs, layer, files for flashable .img
 ├── scripts/         Developer tools: pi.sh (camera manager CLI)
@@ -87,8 +85,10 @@ without regenerating is hard-rejected — the drift check uses
 
 ### Testing
 
-**Go** (`go test ./...`): Table-driven tests for pure functions. No mocking framework — tests cover:
+**Go** (`go test ./...`): Table-driven unit tests and testcontainers integration tests. No mocking framework — tests cover:
 - `server/`: `effectiveTier()` billing logic, `epochMsToISO8601` formatting, `TestCameraLimitAllowed` (tier-based camera upload enforcement)
+- `server/auth/`: Password hashing round-trip, salt uniqueness, malformed-hash safety, HMAC token determinism, JWT sign/verify including the privilege-escalation invariant (tampered payload rejected)
+- `server/integration_test.go`: Testcontainers-based integration tests that spin up real Postgres + Redis containers and exercise the HTTP server through its chi router. Covers JWT cookie auth, login flows, tampered token rejection. Requires Docker; skips gracefully without it.
 - `server/billing/`: `GetTier()` tier resolution, `StorageLimitBytes()` computation
 - `camera/`: motion detector (file-size fallback, rolling window), MPEG-TS sync byte validation, pending confirms persistence, config helpers (`coalesceStr`, `resolveVideoProfile`, `trimString`), H.264 NAL parser (start code detection, IDR identification, ring buffer overflow)
 
@@ -107,18 +107,10 @@ not end-to-end tests. Fixture shapes are typed against the tygo-generated
 `$lib/api-types/` file, so drift from the server structs is a compile error,
 but runtime behavior downstream of the HTTP boundary is untested.
 
-**Real e2e tests** (`cd e2e && bun run test`): Playwright specs in `e2e/`
-that drive the live `docker compose --profile test` stack — real Go server,
-Postgres, Redis, MinIO, and three synthetic test cameras. Covers the seams
-between layers that nothing else can: JWT round-trip, SSE telemetry delivery,
-HLS manifest generation from real segment rows. See `e2e/README.md` for
-what is and isn't covered and how to run locally. Takes ~1–2 minutes per
-run; gated behind `go` + `ui` + `docker` jobs in CI.
-
-**CI** (`.github/workflows/ci.yml`): Runs `go vet`, `go test`, `go generate ./... (drift check)`,
-`bun run check`, `bun run test`, `bun run build`, Docker build, and the
-`e2e` job (compose up, Playwright, compose down) on every push/PR. The
-`ui/browser-tests/` suite is not run in CI — it's a local smoke test only.
+**CI** (`.github/workflows/ci.yml`): Runs `go vet`, `go test` (unit + integration),
+`go generate ./... (drift check)`, `bun run check`, `bun run test`, `bun run build`,
+and Docker image builds on every push/PR. The `go` and `ui` jobs always run (<1 min each);
+Docker builds are path-gated to skip on docs-only changes.
 
 ### Local dev
 
@@ -148,6 +140,12 @@ docker compose up -d                  # server + UI only (no test cameras)
 
 The Pi camera connects to the Docker server via the host's LAN IP (`GHOSTCAM_PUBLIC_IP`). Both workflows can run simultaneously -- test cameras and real hardware connect to the same server.
 
+**Self-hosted CI runner** (optional):
+```bash
+docker compose up -d --profile runner  # GitHub Actions self-hosted runner
+```
+Requires `GITHUB_RUNNER_TOKEN` in `.env` (generate at repo Settings → Actions → Runners → New self-hosted runner). The runner registers with labels `self-hosted,linux,x64` and picks up workflow jobs. Docker socket is mounted so jobs can run containers (integration tests, Docker builds).
+
 ```bash
 # Camera manager CLI (all Pi operations):
 ./scripts/pi.sh setup    [HOST] [USER] [PASS]   # First-time Pi provisioning
@@ -166,16 +164,20 @@ The Pi camera connects to the Docker server via the host's LAN IP (`GHOSTCAM_PUB
 ## CI
 
 `.github/workflows/ci.yml` — triggers on push/PR to main:
-- **go**: `go vet ./...`, `go test ./...`
-- **ui**: `bun install --frozen-lockfile`, `bun run check`, `bun run build`
-- **docker**: builds both server and camera targets with BuildKit cache
+- **go**: `go vet ./...`, `go build`, `go test ./...` (unit + integration), drift check
+- **ui**: `bun install --frozen-lockfile`, `bun run check`, `bun run test`, `bun run build`
+- **docker**: builds server and camera targets with BuildKit cache (path-gated)
+- **deploy**: `flyctl deploy` on main push (after go + ui + docker pass)
+- **release-tag**: auto-bumps patch version tag when camera code changes on main
 
 `.github/workflows/release.yml` — triggers on tags (`v*`):
 - **build-camera**: cross-compiles camera binary for aarch64 and x86_64
 - **build-camera-deb**: packages aarch64 binary as `.deb` (depends: ffmpeg, ca-certificates)
-- **build-pi-image**: builds flashable `.img` for zero2w, pi4, pi5 using `rpi-image-gen`, sets device-specific video profile
 - **build-docker**: builds and pushes server Docker image to GHCR
-- **release**: attaches binaries, `.deb`, `.img.xz`, and checksums to the GitHub Release
+- **release**: attaches binaries, `.deb`, and checksums to the GitHub Release
+
+`.github/workflows/pi-images.yml` — manual `workflow_dispatch` (input: version tag):
+- **build-pi-image**: downloads `.deb` from release, builds flashable `.img` for zero2w, pi4, pi5 using `rpi-image-gen`, uploads to release
 
 ## Key Ports
 

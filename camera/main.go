@@ -175,17 +175,27 @@ func main() {
 		}
 	}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		RunSegmentWatcher(ctx, cfg.SegmentDir, cfg.DataDir, cfg.LocalStorageCapBytes, segments)
-	}()
+	// Segment watcher + upload loop only run when the camera is configured
+	// to produce recordings. In "never" mode the capture pipeline has no
+	// segment sink (see capture.go), so there would be nothing on disk to
+	// watch and nothing to upload. The live relay and telemetry poll still
+	// run so the server can issue a set_recording_mode command that flips
+	// this back on with the normal process-restart cycle.
+	if cfg.RecordingMode != "never" {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			RunSegmentWatcher(ctx, cfg.SegmentDir, cfg.DataDir, cfg.LocalStorageCapBytes, segments)
+		}()
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		RunUploadLoop(ctx, client, cfg.DataDir, segments)
-	}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			RunUploadLoop(ctx, client, cfg.DataDir, segments)
+		}()
+	} else {
+		slog.Info("recording disabled (recording_mode=never) — skipping segment watcher and upload loop")
+	}
 
 	wg.Add(1)
 	go func() {

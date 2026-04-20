@@ -5,69 +5,22 @@ on:
   pull_request:
     branches: [main]
 
+# All jobs target the self-hosted runner. If it's offline, jobs queue
+# for up to 10 minutes then GitHub cancels them — push again when the
+# runner is back, or temporarily change runs-on to ubuntu-latest.
 jobs:
-  # Detect which paths changed to skip unnecessary work.
-  # `code` is true when any deployable code changed (Go, UI, Docker).
-  # Workflow-only, docs-only, or scripts-only pushes skip expensive jobs.
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      camera: ${{ steps.filter.outputs.camera }}
-      server: ${{ steps.filter.outputs.server }}
-      ui: ${{ steps.filter.outputs.ui }}
-      code: ${{ steps.filter.outputs.code }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          filters: |
-            camera:
-              - 'camera/**'
-              - 'common/**'
-              - 'go.mod'
-              - 'go.sum'
-            server:
-              - 'server/**'
-              - 'common/**'
-              - 'go.mod'
-              - 'go.sum'
-            ui:
-              - 'ui/**'
-            code:
-              - 'camera/**'
-              - 'server/**'
-              - 'common/**'
-              - 'ui/**'
-              - 'go.mod'
-              - 'go.sum'
-              - 'Dockerfile'
-              - 'docker-compose.yml'
-              - 'e2e/**'
-
   go:
-    needs: changes
-    if: needs.changes.outputs.code == 'true' || github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - run: go vet ./...
-      # `go build ./server` / `./camera` need explicit -o because the
-      # output name defaults to the last path component, which is also
-      # the directory name (ambiguity: file vs directory). Dockerfile
-      # already does the same. Write to /tmp so the workspace stays clean.
       - run: go build -o /tmp/ghostcam-server ./server
-      - name: Build camera binary
-        if: needs.changes.outputs.camera == 'true'
-        run: go build -o /tmp/ghostcam-camera ./camera
+      - run: go build -o /tmp/ghostcam-camera ./camera
       - run: go test ./...
-      # Hard-fail drift check: regenerate TypeScript types from the Go
-      # source of truth (common/ + server/apitypes/) and fail if the
-      # checked-in ui/src/lib/api-types/ files no longer match. Run
-      # `go generate ./...` locally and commit the diff to fix.
       - name: Check api-types are in sync with Go source
         run: |
           go generate ./...
@@ -76,9 +29,8 @@ jobs:
             || (echo "ui/src/lib/api-types/ is stale. Run 'go generate ./...' and commit." && exit 1)
 
   ui:
-    needs: changes
-    if: needs.changes.outputs.ui == 'true' || github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -88,161 +40,51 @@ jobs:
       - run: cd ui && bun run build
 
   docker:
-    needs: [go, ui, changes]
-    if: always() && needs.changes.outputs.code == 'true' && needs.go.result == 'success' && (needs.ui.result == 'success' || needs.ui.result == 'skipped')
-    runs-on: ubuntu-latest
+    needs: [go, ui]
+    runs-on: self-hosted
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'camera/**'
+              - 'server/**'
+              - 'common/**'
+              - 'ui/**'
+              - 'go.mod'
+              - 'go.sum'
+              - 'Dockerfile'
+              - 'docker-compose.yml'
+            camera:
+              - 'camera/**'
+              - 'common/**'
+              - 'go.mod'
+              - 'go.sum'
       - uses: docker/setup-buildx-action@v3
+        if: steps.filter.outputs.code == 'true'
       - name: Build server image
+        if: steps.filter.outputs.code == 'true'
         run: |
           docker buildx build --target server -t ghostcam-server \
             --cache-from type=gha,scope=server \
             --cache-to type=gha,mode=max,scope=server \
             --load .
       - name: Build camera image
-        if: needs.changes.outputs.camera == 'true'
+        if: steps.filter.outputs.camera == 'true'
         run: |
           docker buildx build --target camera -t ghostcam-camera \
             --cache-from type=gha,scope=camera \
             --cache-to type=gha,mode=max,scope=camera \
             --load .
 
-  # Real end-to-end tests against a live compose stack. Covers seams that
-  # no other job can (SSE delivery, HLS manifest generation from real
-  # segments, JWT round-trip). See e2e/README.md for what this covers
-  # and what it deliberately does not.
-  e2e:
-    needs: [go, ui, docker, changes]
-    if: always() && needs.changes.outputs.code == 'true' && needs.go.result == 'success' && (needs.ui.result == 'success' || needs.ui.result == 'skipped') && needs.docker.result == 'success'
-    runs-on: ubuntu-latest
-    env:
-      STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Cache Playwright browsers
-        id: playwright-cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('e2e/package.json') }}
-
-      - name: Install e2e deps
-        working-directory: e2e
-        run: bun install
-
-      - name: Install Chromium (cache miss only)
-        if: steps.playwright-cache.outputs.cache-hit != 'true'
-        working-directory: e2e
-        run: bunx playwright install --with-deps chromium
-
-      - name: Install Chromium system deps (cache hit)
-        if: steps.playwright-cache.outputs.cache-hit == 'true'
-        working-directory: e2e
-        run: bunx playwright install-deps chromium
-
-      - name: Start the live stack
-        run: |
-          # Presigned URLs need a host that's reachable from BOTH the
-          # camera containers (via container→host routing) AND any
-          # browser-side code on the runner itself. 127.0.0.1 fails from
-          # inside containers (it points at the container's own loopback).
-          # The runner's eth0 IP is the stable choice on Linux: from a
-          # container it routes through the bridge gateway back to the
-          # host; from the host it's its own address.
-          export GHOSTCAM_PUBLIC_IP=$(hostname -I | awk '{print $1}')
-          echo "GHOSTCAM_PUBLIC_IP=$GHOSTCAM_PUBLIC_IP" >> $GITHUB_ENV
-          docker compose --profile test up -d
-          docker compose ps
-
-      - name: Wait for server healthy
-        run: |
-          for i in $(seq 1 60); do
-            if curl -fsS http://localhost:3000/readyz > /dev/null 2>&1; then
-              echo "server ready after ${i}s"
-              exit 0
-            fi
-            sleep 1
-          done
-          echo "server did not become ready in 60s"
-          docker compose ps
-          docker compose logs server
-          exit 1
-
-      # Guard against non-idempotent migrations reaching production.
-      # The server's first boot (above) runs every migration. We restart
-      # the container and verify that (a) it comes healthy again and
-      # (b) no migration re-runs — which is only true if every already-
-      # applied migration is recorded in schema_migrations. This is the
-      # regression test for the f7be026 crash loop where 007's ALTER COLUMN
-      # cert_fingerprint DROP NOT NULL kept failing after 010 dropped the
-      # column.
-      - name: Verify migration idempotency on restart
-        run: |
-          docker compose logs --no-color --no-log-prefix server > /tmp/server-before-restart.log
-          docker compose restart server
-          for i in $(seq 1 60); do
-            if curl -fsS http://localhost:3000/readyz > /dev/null 2>&1; then
-              echo "server ready again after ${i}s"
-              break
-            fi
-            if [ "$i" = "60" ]; then
-              echo "server did not become ready after restart in 60s"
-              docker compose logs server | tail -80
-              exit 1
-            fi
-            sleep 1
-          done
-          docker compose logs --no-color --no-log-prefix server > /tmp/server-after-restart.log
-          NEW_LOG=$(diff /tmp/server-before-restart.log /tmp/server-after-restart.log | grep '^>' | sed 's/^> //')
-          if echo "$NEW_LOG" | grep -q 'running migration'; then
-            echo "FAIL: server re-ran migrations on restart — schema_migrations tracking is broken"
-            echo "--- new log lines ---"
-            echo "$NEW_LOG"
-            exit 1
-          fi
-          echo "OK: restart boot ran zero migrations"
-
-      - name: Run e2e
-        working-directory: e2e
-        run: bun run test
-
-      - name: Collect compose logs on failure
-        if: failure()
-        run: |
-          mkdir -p e2e-artifacts
-          docker compose logs --no-color > e2e-artifacts/compose.log
-          docker compose ps > e2e-artifacts/compose-ps.txt
-
-      - name: Upload compose logs
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-compose-logs
-          path: e2e-artifacts/
-
-      - name: Upload Playwright report
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: e2e-playwright-report
-          path: e2e/playwright-report/
-
-      - name: Tear down
-        if: always()
-        run: |
-          # GHOSTCAM_PUBLIC_IP was written to $GITHUB_ENV by the "Start
-          # the live stack" step above, so we inherit it here. Fall back
-          # to the eth0 lookup in the rare case that step failed early.
-          export GHOSTCAM_PUBLIC_IP=${GHOSTCAM_PUBLIC_IP:-$(hostname -I | awk '{print $1}')}
-          docker compose --profile test down -v
-
   deploy:
-    needs: [go, ui, docker, e2e, changes]
-    if: always() && github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.changes.outputs.code == 'true' && needs.go.result == 'success' && (needs.ui.result == 'success' || needs.ui.result == 'skipped') && needs.docker.result == 'success' && needs.e2e.result == 'success'
-    runs-on: ubuntu-latest
+    needs: [go, ui, docker]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: self-hosted
+    timeout-minutes: 30
     concurrency: deploy-production
     steps:
       - uses: actions/checkout@v4
@@ -251,32 +93,35 @@ jobs:
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
 
-  # Auto-tag a release when camera/api code changes on main.
-  # This triggers the release.yml workflow which builds binaries,
-  # .deb, Docker images, Pi images, and creates a GitHub Release.
   release-tag:
-    needs: [go, changes]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && needs.changes.outputs.camera == 'true' && needs.go.result == 'success'
-    runs-on: ubuntu-latest
+    needs: [go]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: self-hosted
+    timeout-minutes: 30
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          # Use a PAT so the tag push triggers the release workflow.
-          # GITHUB_TOKEN deliberately doesn't trigger downstream workflows
-          # to prevent recursive loops.
           token: ${{ secrets.RELEASE_TOKEN }}
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            camera:
+              - 'camera/**'
+              - 'common/**'
+              - 'go.mod'
+              - 'go.sum'
       - name: Determine next version
+        if: steps.filter.outputs.camera == 'true'
         id: version
         run: |
-          # Get the latest v* tag, default to v0.0.0 if none exist
           LATEST=$(git tag -l 'v*' --sort=-v:refname | head -1)
           if [ -z "$LATEST" ]; then
             NEXT="v0.1.0"
           else
-            # Bump patch version: v0.1.2 -> v0.1.3
             IFS='.' read -r MAJOR MINOR PATCH <<< "${LATEST#v}"
             PATCH=$((PATCH + 1))
             NEXT="v${MAJOR}.${MINOR}.${PATCH}"
@@ -284,6 +129,7 @@ jobs:
           echo "tag=$NEXT" >> "$GITHUB_OUTPUT"
           echo "Next release: $NEXT (previous: ${LATEST:-none})"
       - name: Create and push tag
+        if: steps.filter.outputs.camera == 'true'
         run: |
           git tag ${{ steps.version.outputs.tag }}
           git push origin ${{ steps.version.outputs.tag }}

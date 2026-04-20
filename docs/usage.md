@@ -247,12 +247,31 @@ Hover a camera tile and click the **gear icon**, or click the gear next to the c
 |-------|---------|
 | **Name** | Free text |
 | **Resolution** | 480p / 720p / 1080p (matches Pi video profiles) |
-| **Recording Mode** | Continuous or On Motion (motion mode only uploads segments with detected motion, saving storage) |
+| **Recording Mode** | Streaming Only / On Motion / Continuous — see [Recording Modes](#recording-modes) |
 | **Motion Alerts** | Toggle — emit SSE events on motion detection |
 
 Saving resolution or recording mode issues a command to the camera, which persists it to disk and restarts via systemd. The camera reappears online within a few seconds.
 
 **Delete Camera** removes the camera record but leaves existing recordings in S3 until retention deletes them.
+
+### Recording Modes
+
+New cameras default to **Streaming Only** — live viewing works but no
+footage is saved. You can switch modes at any time from the settings
+dialog; the camera persists the new mode to disk and restarts to apply.
+
+| Mode | Live view | Timeline / clips | Storage | Upload bandwidth |
+|------|-----------|------------------|---------|------------------|
+| **Streaming Only** (`never`, default) | Yes | Empty | None | Only while a viewer is watching |
+| **On Motion** (`motion`) | Yes | Motion-only segments | Low | Bursty around motion events |
+| **Continuous** (`constant`) | Yes | Full coverage | High (~2–4 GB / camera / day at 720p) | Sustained |
+
+Pick **Streaming Only** when you only care about live monitoring (no
+evidence trail, no scrubbing back). Pick **On Motion** to keep clips of
+interesting activity without paying for idle footage — motion detection
+is heuristic (H.264 P-frame size heuristic, with a file-size fallback) so
+very subtle changes may be missed. Pick **Continuous** when you need a
+complete record and you've sized your tier's storage cap accordingly.
 
 ## 7. Alerts & Events
 
