@@ -38,8 +38,45 @@ jobs:
       - run: cd ui && bun run test
       - run: cd ui && bun run build
 
+  infra:
+    runs-on: self-hosted
+    timeout-minutes: 30
+    concurrency: infra-production
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check for infra changes
+        id: changed
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE=${{ github.event.pull_request.base.sha }}
+          else
+            BASE=${{ github.event.before }}
+          fi
+          git diff --name-only "$BASE" HEAD | grep -q '^infra/' && echo "infra=true" >> "$GITHUB_OUTPUT" || echo "infra=false" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-go@v5
+        if: steps.changed.outputs.infra == 'true'
+        with:
+          go-version-file: infra/go.mod
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+        if: steps.changed.outputs.infra == 'true'
+      - uses: pulumi/actions@v5
+        if: steps.changed.outputs.infra == 'true'
+        with:
+          command: ${{ github.event_name == 'push' && 'up' || 'preview' }}
+          stack-name: prod
+          work-dir: infra
+          comment-on-pr: true
+        env:
+          PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          STRIPE_API_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+
   deploy:
-    needs: [go, ui]
+    needs: [go, ui, infra]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: self-hosted
     timeout-minutes: 30

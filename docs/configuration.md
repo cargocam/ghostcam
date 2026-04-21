@@ -2,6 +2,8 @@
 
 Both server and camera support TOML config files with layered resolution. Environment variables and CLI flags always take precedence. Config files are **optional** -- the env-var-only workflow still works (Docker uses this).
 
+> **Production**: All env vars are managed by Pulumi IaC (`infra/`). Run `pulumi up` to provision infrastructure and wire secrets into Fly. See `infra/Pulumi.prod.yaml` for the full config surface and `CLAUDE.md` § Infrastructure as Code for quickstart.
+
 ## Layering Order
 
 **Server**: defaults -> config file -> env vars

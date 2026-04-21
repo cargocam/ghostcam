@@ -16,6 +16,14 @@ primary_region = "sjc"
   auto_start_machines = true
   min_machines_running = 1
 
+# WebRTC ICE-lite UDP — requires dedicated IPv4 (shared_v4 is TCP-only).
+# Pion binds to 0.0.0.0:50000-50200 (SetEphemeralUDPPortRange).
+[[services]]
+  internal_port = 50000
+  protocol = "udp"
+  [[services.ports]]
+    port = 50000
+
 [checks]
   [checks.health]
     type = "http"

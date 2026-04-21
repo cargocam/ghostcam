@@ -186,7 +186,8 @@ server/            (package main — binary builds from this directory)
 | `015_support_tickets.sql` | Support email triage audit trail keyed on Svix message id |
 | `016_camera_public_keys.sql` | `camera_public_keys` table (later inlined — see 017) |
 | `017_inline_public_key.sql` | Inlines camera public key on `cameras` and drops stale API-key tables |
-| `018_recording_mode_never_default.sql` | Flips `cameras.recording_mode` default from `'constant'` to `'never'` (streaming-only) so new enrollments opt-in to recording |
+| `018_camera_fw_version.sql` | Adds `fw_version` text column to `cameras` for OTA firmware tracking |
+| `019_recording_mode_never_default.sql` | Flips `cameras.recording_mode` default from `'constant'` to `'never'` (streaming-only) so new enrollments opt-in to recording |
 
 ## Viewer Structure
 
