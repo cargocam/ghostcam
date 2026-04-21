@@ -197,17 +197,19 @@ services:
     image: ghcr.io/actions/actions-runner:latest
     restart: unless-stopped
     profiles: [runner]
-    user: runner
     working_dir: /home/runner
     entrypoint: ["/bin/bash", "-c"]
     command:
       - |
-        ./config.sh --url https://github.com/cargocam/ghostcam \
-          --token "$GITHUB_RUNNER_TOKEN" \
-          --name ghostcam-dev \
-          --labels self-hosted,linux \
-          --replace --unattended \
-        && ./run.sh
+        sudo chown -R runner:runner /home/runner/_work
+        if [ ! -f /home/runner/.runner ]; then
+          ./config.sh --url https://github.com/cargocam/ghostcam \
+            --token "$GITHUB_RUNNER_TOKEN" \
+            --name ghostcam-dev \
+            --labels self-hosted,linux \
+            --replace --unattended
+        fi
+        ./run.sh
     environment:
       - GITHUB_RUNNER_TOKEN=${GITHUB_RUNNER_TOKEN:-}
     volumes:
