@@ -11,7 +11,7 @@ if [ ! -f "$FILE" ]; then
   exit 1
 fi
 
-while IFS= read -r line; do
+while IFS= read -r line || [ -n "$line" ]; do
   # Skip comments and blank lines
   [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
 

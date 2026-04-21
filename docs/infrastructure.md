@@ -173,9 +173,9 @@ The `infra` job in `.github/workflows/ci.yml` runs on every push and PR:
 |--------|----------------|
 | `PULUMI_ACCESS_TOKEN` | [Pulumi Cloud](https://app.pulumi.com/) → Access Tokens |
 | `FLY_API_TOKEN` | `flyctl auth token` |
-| `NEON_API_KEY` | [Neon Console](https://console.neon.tech/) → API Keys |
-| `STRIPE_SECRET_KEY` | [Stripe Dashboard](https://dashboard.stripe.com/apikeys) |
-| `RESEND_API_KEY` | [Resend Dashboard](https://resend.com/api-keys) |
+
+Neon, Stripe, and Resend API keys are read from Pulumi encrypted config (decrypted via
+`PULUMI_ACCESS_TOKEN`), not from CI environment variables.
 
 ## Adopting existing infrastructure
 

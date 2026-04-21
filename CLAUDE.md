@@ -110,8 +110,8 @@ but runtime behavior downstream of the HTTP boundary is untested.
 
 **CI** (`.github/workflows/ci.yml`): Runs `go vet`, `go test` (unit + integration),
 `go generate ./... (drift check)`, `bun run check`, `bun run test`, `bun run build`,
-and Docker image builds on every push/PR. The `go` and `ui` jobs always run (<1 min each);
-Docker builds are path-gated to skip on docs-only changes.
+on every push/PR. The `go` and `ui` jobs always run (<1 min each);
+the `infra` job is path-gated to skip when `infra/` is unchanged.
 
 ### Local dev
 
@@ -167,7 +167,6 @@ Requires `GITHUB_RUNNER_TOKEN` in `.env` (generate at repo Settings → Actions 
 `.github/workflows/ci.yml` — triggers on push/PR to main:
 - **go**: `go vet ./...`, `go build`, `go test ./...` (unit + integration), drift check
 - **ui**: `bun install --frozen-lockfile`, `bun run check`, `bun run test`, `bun run build`
-- **docker**: builds server and camera targets with BuildKit cache (path-gated)
 - **infra**: `pulumi up` on main push (after go + ui pass) — provisions backing services
 - **deploy**: `flyctl deploy` on main push (after go + ui + infra pass)
 - **release-tag**: auto-bumps patch version tag when camera code changes on main
@@ -211,8 +210,8 @@ Tigris S3 bucket, Stripe products/prices/webhook/portal, Resend domain/webhook, 
 all 23 Fly secrets. **What Pulumi doesn't manage**: application deployment (`flyctl deploy`),
 DNS records (add manually from stack outputs), database migrations (auto-run on server start).
 
-**CI secrets required**: `PULUMI_ACCESS_TOKEN`, `FLY_API_TOKEN`, `NEON_API_KEY`,
-`STRIPE_SECRET_KEY`, `RESEND_API_KEY`.
+**CI secrets required**: `PULUMI_ACCESS_TOKEN`, `FLY_API_TOKEN` (Neon/Stripe/Resend
+keys are read from Pulumi encrypted config, not CI env vars).
 
 ## Key Ports
 

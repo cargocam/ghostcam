@@ -39,6 +39,7 @@ jobs:
       - run: cd ui && bun run build
 
   infra:
+    needs: [go, ui]
     runs-on: self-hosted
     timeout-minutes: 30
     concurrency: infra-production
@@ -71,9 +72,6 @@ jobs:
         env:
           PULUMI_ACCESS_TOKEN: ${{ secrets.PULUMI_ACCESS_TOKEN }}
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
-          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
-          STRIPE_API_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
 
   deploy:
     needs: [go, ui, infra]
