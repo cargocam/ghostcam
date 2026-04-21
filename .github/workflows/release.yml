@@ -1,13 +1,13 @@
 name: Release
 on:
   push:
-    tags: ['v*']
+    branches: [main]
 
 permissions:
   contents: write
 
 jobs:
-  build-and-release:
+  release:
     runs-on: self-hosted
     timeout-minutes: 30
     steps:
@@ -19,25 +19,24 @@ jobs:
       - name: Build camera (aarch64)
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-            go build -ldflags "-X main.Version=${{ github.ref_name }}" \
+            go build -ldflags "-X main.Version=v0.1.0-alpha" \
             -o ghostcam-camera-aarch64 ./camera
 
       - name: Build camera (x86_64)
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build -ldflags "-X main.Version=${{ github.ref_name }}" \
+            go build -ldflags "-X main.Version=v0.1.0-alpha" \
             -o ghostcam-camera-x86_64 ./camera
 
       - name: Package .deb
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
-          PKG_DIR="ghostcam-camera_${VERSION}_arm64"
+          PKG_DIR="ghostcam-camera_0.1.0-alpha_arm64"
           mkdir -p "$PKG_DIR/DEBIAN" "$PKG_DIR/usr/local/bin"
           cp ghostcam-camera-aarch64 "$PKG_DIR/usr/local/bin/ghostcam-camera"
           chmod +x "$PKG_DIR/usr/local/bin/ghostcam-camera"
           cat > "$PKG_DIR/DEBIAN/control" << EOF
           Package: ghostcam-camera
-          Version: ${VERSION}
+          Version: 0.1.0~alpha
           Architecture: arm64
           Maintainer: Ghostcam <noreply@ghostcam.dev>
           Depends: ffmpeg, ca-certificates
@@ -51,13 +50,19 @@ jobs:
       - name: Generate checksums
         run: sha256sum ghostcam-camera-aarch64 ghostcam-camera-x86_64 ghostcam-camera_*.deb > checksums.txt
 
-      - name: Create release
+      - name: Upsert release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ github.ref_name }}" \
+          # Delete existing release if present, then recreate
+          gh release delete v0.1.0-alpha --yes 2>/dev/null || true
+          git tag -f v0.1.0-alpha
+          git push origin v0.1.0-alpha --force
+          gh release create v0.1.0-alpha \
             ghostcam-camera-aarch64 \
             ghostcam-camera-x86_64 \
             ghostcam-camera_*.deb \
             checksums.txt \
-            --generate-notes
+            --prerelease \
+            --title "v0.1.0-alpha (latest main)" \
+            --notes "Rolling pre-release built from main at $(git rev-parse --short HEAD). Updated on every push."
