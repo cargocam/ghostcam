@@ -167,9 +167,11 @@ Requires `GITHUB_RUNNER_TOKEN` in `.env` (generate at repo Settings → Actions 
 `.github/workflows/ci.yml` — triggers on push/PR to main:
 - **go**: `go vet ./...`, `go build`, `go test ./...` (unit + integration), drift check
 - **ui**: `bun install --frozen-lockfile`, `bun run check`, `bun run test`, `bun run build`
-- **infra**: `pulumi up` on main push (after go + ui pass) — provisions backing services
-- **deploy**: `flyctl deploy` on main push (after go + ui + infra pass)
+- **infra**: `pulumi preview` on PRs, `pulumi up` on main push (after go + ui pass) — provisions backing services
 - **release-tag**: auto-bumps patch version tag when camera code changes on main
+
+`.github/workflows/deploy.yml` — triggers after CI passes on main:
+- **deploy**: `flyctl deploy --remote-only` (gated on CI success via `workflow_run`)
 
 `.github/workflows/release.yml` — triggers on tags (`v*`):
 - **build-camera**: cross-compiles camera binary for aarch64 and x86_64
