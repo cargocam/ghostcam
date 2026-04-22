@@ -35,6 +35,7 @@ ghostcam/
 │   └── src/lib/api-types/  Generated TypeScript types — DO NOT EDIT (see tygo.yaml)
 ├── pi/              Pi system files: systemd services, GPS, NetworkManager configs
 │   └── image/       rpi-image-gen build system: device configs, layer, files for flashable .img
+├── infra/           Pulumi IaC (Go): provisions Fly, Neon, Upstash, Tigris, Stripe, Resend
 ├── scripts/         Developer tools: pi.sh (camera manager CLI)
 ├── docs/            Detailed reference: API, architecture, configuration, debugging
 ├── Dockerfile       Multi-stage: server, camera (synthetic sensors), camera-prod (real sensors)
@@ -109,8 +110,8 @@ but runtime behavior downstream of the HTTP boundary is untested.
 
 **CI** (`.github/workflows/ci.yml`): Runs `go vet`, `go test` (unit + integration),
 `go generate ./... (drift check)`, `bun run check`, `bun run test`, `bun run build`,
-and Docker image builds on every push/PR. The `go` and `ui` jobs always run (<1 min each);
-Docker builds are path-gated to skip on docs-only changes.
+on every push/PR. The `go` and `ui` jobs always run (<1 min each);
+the `infra` job is path-gated to skip when `infra/` is unchanged.
 
 ### Local dev
 
@@ -166,9 +167,11 @@ Requires `GITHUB_RUNNER_TOKEN` in `.env` (generate at repo Settings → Actions 
 `.github/workflows/ci.yml` — triggers on push/PR to main:
 - **go**: `go vet ./...`, `go build`, `go test ./...` (unit + integration), drift check
 - **ui**: `bun install --frozen-lockfile`, `bun run check`, `bun run test`, `bun run build`
-- **docker**: builds server and camera targets with BuildKit cache (path-gated)
-- **deploy**: `flyctl deploy` on main push (after go + ui + docker pass)
+- **infra**: `pulumi preview` on PRs, `pulumi up` on main push (after go + ui pass) — provisions backing services
 - **release-tag**: auto-bumps patch version tag when camera code changes on main
+
+`.github/workflows/deploy.yml` — triggers after CI passes on main:
+- **deploy**: `flyctl deploy --remote-only` (gated on CI success via `workflow_run`)
 
 `.github/workflows/release.yml` — triggers on tags (`v*`):
 - **build-camera**: cross-compiles camera binary for aarch64 and x86_64
@@ -178,6 +181,39 @@ Requires `GITHUB_RUNNER_TOKEN` in `.env` (generate at repo Settings → Actions 
 
 `.github/workflows/pi-images.yml` — manual `workflow_dispatch` (input: version tag):
 - **build-pi-image**: downloads `.deb` from release, builds flashable `.img` for zero2w, pi4, pi5 using `rpi-image-gen`, uploads to release
+
+## Infrastructure as Code
+
+Production infrastructure is managed by Pulumi (Go) under `infra/`. Pulumi provisions
+the backing services; `flyctl deploy` handles application deployment (unchanged).
+
+```bash
+cd infra
+export FLY_API_TOKEN=$(flyctl auth token)
+
+# First-time setup
+pulumi stack init prod
+pulumi config set --secret stripeSecretKey sk_live_...
+pulumi config set --secret neonApiKey ...
+# (see Pulumi.prod.yaml for all config keys)
+
+# Preview changes
+pulumi preview --stack prod
+
+# Apply changes (provisions Fly app, Neon DB, Redis, Tigris, Stripe, Resend, wires secrets)
+pulumi up --stack prod
+
+# View outputs (IPs for DNS, Resend DNS records, etc.)
+pulumi stack output
+```
+
+**What Pulumi manages**: Fly app/volume/IPs/cert, Neon Postgres project, Upstash Redis,
+Tigris S3 bucket, Stripe products/prices/webhook/portal, Resend domain/webhook, and
+all 23 Fly secrets. **What Pulumi doesn't manage**: application deployment (`flyctl deploy`),
+DNS records (add manually from stack outputs), database migrations (auto-run on server start).
+
+**CI secrets required**: `PULUMI_ACCESS_TOKEN`, `FLY_API_TOKEN` (Neon/Stripe/Resend
+keys are read from Pulumi encrypted config, not CI env vars).
 
 ## Key Ports
 
@@ -221,6 +257,7 @@ For detailed subsystem documentation see:
 - **[docs/api.md](docs/api.md)** — API endpoints, SSE events, camera-server protocol
 - **[docs/architecture.md](docs/architecture.md)** — Camera, server, and viewer file-by-file structure
 - **[docs/configuration.md](docs/configuration.md)** — Environment variables, config files, billing tiers, retention & cleanup
+- **[docs/infrastructure.md](docs/infrastructure.md)** — Pulumi IaC: from-scratch setup, day-to-day ops, CI, adopting existing infra
 - **[docs/debugging.md](docs/debugging.md)** — Troubleshooting common issues
 
 ## Code Conventions

@@ -1,0 +1,51 @@
+# Pulumi stack config for production.
+# Encrypted values are set via: pulumi config set --secret <key> <value>
+#
+# Required secrets (set these before first `pulumi up`):
+#   pulumi config set --secret fly:apiToken <FLY_API_TOKEN>
+#   pulumi config set --secret neonApiKey <NEON_API_KEY>
+#   pulumi config set --secret stripeSecretKey <sk_live_...>
+#   pulumi config set --secret adminEmail <admin email>
+#   pulumi config set --secret adminPassword <password>
+#   pulumi config set --secret resendApiKey <RESEND_API_KEY>
+#   pulumi config set --secret githubWebhookSecret <secret>
+#
+# Optional secrets:
+#   pulumi config set --secret githubToken <token>
+#   pulumi config set --secret anthropicApiKey <key>
+#   pulumi config set --secret linearApiKey <key>
+#   pulumi config set --secret linearTeamId <uuid>
+
+config:
+  # App identity
+  ghostcam-infra:appName: ghostcam
+  ghostcam-infra:region: sjc
+  ghostcam-infra:hostname: ghostcam.app
+  ghostcam-infra:publicUrl: https://ghostcam.app
+  # Neon Postgres
+  ghostcam-infra:neonRegion: aws-us-west-2
+  # Resend email
+  ghostcam-infra:resendFromEmail: "Ghostcam <noreply@ghostcam.app>"
+  ghostcam-infra:resendReplyTo: ""
+  # Stripe tier pricing (cents/month)
+  ghostcam-infra:starterPriceCents: "999"
+  ghostcam-infra:proPriceCents: "2499"
+  ghostcam-infra:enterprisePriceCents: "9999"
+  # Segment retention
+  ghostcam-infra:segmentRetentionDays: "30"
+  ghostcam-infra:neonApiKey:
+    secure: AAABABjeVZBkI3FsHKXNXkap0tZGuGzr9Rrn3I8N09qnDxZEU0xzksd5odPA+m2cTOuuK0xiJB5KlZcIVXt4Rn9eRUdwBF5pIFvC+89Fo2EodQd0Ndwt0U2mlLnFXXbLgTY3Olc=
+  ghostcam-infra:stripeSecretKey:
+    secure: AAABAGilqCcpU6ci0t1sNq+h6Sat9H0qKoM7026EyXt4fKJUKIXBIpbTPw3sRxdgxf+YpKJonVLFU4NH/TfjIG8Y1gLVdMIIBzD5aCh/6WhlAhGlSl4FmQDJALU9iYrKOS163uWf5/3b6QsylYuP3GPCziPqZ5tma97dCKkBKcqso87BdvPOREPKlQ==
+  ghostcam-infra:adminEmail:
+    secure: AAABAO4jOZug/sc/7hF9pvwKaFRrcxsiG7sratjSA/05iawXK1SBaOkB0dXkDZZNVOM=
+  ghostcam-infra:adminPassword:
+    secure: AAABACwO9eUyAVEGtI1TQW0gIzvAqMa+XMBRPvTCYW6Okh+cCFEst0OSTOOw+gwvfTE4lg==
+  ghostcam-infra:resendApiKey:
+    secure: AAABAObrRe0XS6T3sQKiuI6vCxYledXal9pobIHPtvgPIynD48wnuGbbgxExeg13HZ7V1itktwuk9WNaSEYlMpj3Jj8=
+  ghostcam-infra:githubWebhookSecret:
+    secure: AAABALgyXsxbrv/tcpv2tweRCFTsvLcuffHdgEfFWkLFIpt/vydxG+gVBDL4b357kTmoVIJkow==
+  ghostcam-infra:githubToken:
+    secure: AAABANL+uegbOvxqBiXGLjWbZocBmZ023zA3DdGk+RDO1eo9xQeiGJvGIqgDJwxkCAwg1A5VRit/9xT6o4/vWZCiaADTcpPc
+  ghostcam-infra:redisUrl:
+    secure: AAABALkd2X1RPXYV7KqG1yrsmat49dvhrCGDoCDPszQ=
