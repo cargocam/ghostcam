@@ -31,14 +31,20 @@ func setupFly(ctx *pulumi.Context, cfg *config.Config) (*FlyOutputs, error) {
 		return nil, err
 	}
 
-	_, err = fly.NewVolume(ctx, "ghostcam-data", &fly.VolumeArgs{
-		App:    app.Name,
-		Name:   pulumi.String("ghostcam_data"),
-		Region: pulumi.String(region),
-		Size:   pulumi.Int(1),
-	})
-	if err != nil {
-		return nil, err
+	// Volume is only created for new stacks. For existing infrastructure,
+	// the volume is already provisioned and managing it via Pulumi risks
+	// replacement (destroy + create) on immutable field changes, which
+	// would lose data. Skip if skipVolume is set.
+	if cfg.Get("skipVolume") != "true" {
+		_, err = fly.NewVolume(ctx, "ghostcam-data", &fly.VolumeArgs{
+			App:    app.Name,
+			Name:   pulumi.String("ghostcam_data"),
+			Region: pulumi.String(region),
+			Size:   pulumi.Int(1),
+		})
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Dedicated IPv4 — required for WebRTC UDP (shared IPv4 is TCP-only).

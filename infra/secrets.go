@@ -102,6 +102,13 @@ func setupSecrets(
 		)
 	}).(pulumi.StringOutput)
 
+	// Skip secrets import if secrets are already managed externally
+	// (e.g. during initial adoption of existing infrastructure).
+	// Set `pulumi config set ghostcam-infra:skipSecrets true` to skip.
+	if cfg.Get("skipSecrets") == "true" {
+		return nil
+	}
+
 	// Pipe secrets into flyctl via stdin to avoid exposing values in /proc/cmdline.
 	_, err := local.NewCommand(ctx, "fly-secrets", &local.CommandArgs{
 		Create: pulumi.Sprintf(

@@ -14,30 +14,34 @@ type StripeOutputs struct {
 	PortalConfigID pulumi.StringOutput
 }
 
-// stripeProduct creates a Stripe product with ghostcam billing metadata.
-// Returns the product ID as Stdout.
+// stripeProduct finds or creates a Stripe product with ghostcam billing metadata.
 func stripeProduct(
 	ctx *pulumi.Context,
 	name, displayName, cameraLimit, storageGB string,
 	apiKey pulumi.StringInput,
 ) (*local.Command, error) {
 	return local.NewCommand(ctx, "stripe-product-"+name, &local.CommandArgs{
+		// Idempotent: find existing product by metadata, or create.
 		Create: pulumi.Sprintf(
-			`curl -sf -X POST https://api.stripe.com/v1/products `+
+			`EXISTING=$(curl -sf https://api.stripe.com/v1/products/search `+
+				`-u "$STRIPE_API_KEY:" `+
+				`-G --data-urlencode "query=metadata['ghostcam_tier']:'%s'" `+
+				`| jq -r '.data[0].id // empty'); `+
+				`if [ -n "$EXISTING" ]; then echo "$EXISTING"; else `+
+				`curl -sf -X POST https://api.stripe.com/v1/products `+
 				`-u "$STRIPE_API_KEY:" `+
 				`-d "name=%s" `+
 				`-d "metadata[ghostcam_tier]=%s" `+
 				`-d "metadata[ghostcam_camera_limit]=%s" `+
 				`-d "metadata[ghostcam_storage_gb]=%s" `+
-				`| jq -r '.id'`,
-			displayName, name, cameraLimit, storageGB,
+				`| jq -r '.id'; fi`,
+			name, displayName, name, cameraLimit, storageGB,
 		),
 		Environment: pulumi.StringMap{"STRIPE_API_KEY": apiKey},
 	}, pulumi.RetainOnDelete(true))
 }
 
-// stripePrice creates a recurring monthly price attached to a product.
-// Returns the price ID as Stdout.
+// stripePrice finds or creates a recurring monthly price for a product.
 func stripePrice(
 	ctx *pulumi.Context,
 	name string,
@@ -46,15 +50,20 @@ func stripePrice(
 	apiKey pulumi.StringInput,
 ) (*local.Command, error) {
 	return local.NewCommand(ctx, "stripe-price-"+name, &local.CommandArgs{
+		// Idempotent: find existing active price for this product, or create.
 		Create: pulumi.Sprintf(
-			`curl -sf -X POST https://api.stripe.com/v1/prices `+
+			`EXISTING=$(curl -sf "https://api.stripe.com/v1/prices?product=%s&active=true" `+
+				`-u "$STRIPE_API_KEY:" `+
+				`| jq -r '.data[0].id // empty'); `+
+				`if [ -n "$EXISTING" ]; then echo "$EXISTING"; else `+
+				`curl -sf -X POST https://api.stripe.com/v1/prices `+
 				`-u "$STRIPE_API_KEY:" `+
 				`-d "product=%s" `+
 				`-d "unit_amount=%s" `+
 				`-d "currency=usd" `+
 				`-d "recurring[interval]=month" `+
-				`| jq -r '.id'`,
-			productID, cents,
+				`| jq -r '.id'; fi`,
+			productID, productID, cents,
 		),
 		Environment: pulumi.StringMap{"STRIPE_API_KEY": apiKey},
 	}, pulumi.RetainOnDelete(true))
@@ -64,7 +73,7 @@ func setupStripe(ctx *pulumi.Context, cfg *config.Config, fly *FlyOutputs) (*Str
 	apiKey := cfg.RequireSecret("stripeSecretKey")
 	hostname := cfg.Require("hostname")
 
-	// ── Products ──────────────────────────────────────────────────────
+	// ── Products (find-or-create by ghostcam_tier metadata) ───────────
 	starter, err := stripeProduct(ctx, "starter", "Starter", "4", "50", apiKey)
 	if err != nil {
 		return nil, err
@@ -78,7 +87,7 @@ func setupStripe(ctx *pulumi.Context, cfg *config.Config, fly *FlyOutputs) (*Str
 		return nil, err
 	}
 
-	// ── Prices ────────────────────────────────────────────────────────
+	// ── Prices (find-or-create by product) ────────────────────────────
 	starterPrice, err := stripePrice(ctx, "starter", starter.Stdout, cfg.Require("starterPriceCents"), apiKey)
 	if err != nil {
 		return nil, err
@@ -92,7 +101,7 @@ func setupStripe(ctx *pulumi.Context, cfg *config.Config, fly *FlyOutputs) (*Str
 		return nil, err
 	}
 
-	// ── Webhook endpoint ──────────────────────────────────────────────
+	// ── Webhook (find-or-create by URL) ───────────────────────────────
 	events := []string{
 		"checkout.session.completed",
 		"customer.subscription.updated",
@@ -110,13 +119,20 @@ func setupStripe(ctx *pulumi.Context, cfg *config.Config, fly *FlyOutputs) (*Str
 	}
 
 	webhook, err := local.NewCommand(ctx, "stripe-webhook", &local.CommandArgs{
+		// Idempotent: if a webhook for this URL exists, output its secret.
+		// Existing webhooks don't expose the secret via GET, so we output
+		// "existing" and the server uses the already-configured secret.
 		Create: pulumi.Sprintf(
-			`curl -sf -X POST https://api.stripe.com/v1/webhook_endpoints `+
+			`EXISTING=$(curl -sf https://api.stripe.com/v1/webhook_endpoints `+
+				`-u "$STRIPE_API_KEY:" `+
+				`| jq -r '.data[] | select(.url == "https://%s/api/v1/webhooks/stripe") | .id' | head -1); `+
+				`if [ -n "$EXISTING" ]; then echo "existing"; else `+
+				`curl -sf -X POST https://api.stripe.com/v1/webhook_endpoints `+
 				`-u "$STRIPE_API_KEY:" `+
 				`-d "url=https://%s/api/v1/webhooks/stripe" `+
 				`%s`+
-				`| jq -r '.secret'`,
-			hostname, eventFlags,
+				`| jq -r '.secret'; fi`,
+			hostname, hostname, eventFlags,
 		),
 		Environment: pulumi.StringMap{"STRIPE_API_KEY": apiKey},
 	}, pulumi.RetainOnDelete(true))
@@ -124,8 +140,7 @@ func setupStripe(ctx *pulumi.Context, cfg *config.Config, fly *FlyOutputs) (*Str
 		return nil, err
 	}
 
-	// ── Customer portal ───────────────────────────────────────────────
-	// Needs all 3 product IDs + price IDs for plan switching.
+	// ── Portal (find-or-create) ───────────────────────────────────────
 	portal, err := local.NewCommand(ctx, "stripe-portal", &local.CommandArgs{
 		Create: pulumi.All(
 			starter.Stdout, starterPrice.Stdout,
@@ -135,8 +150,13 @@ func setupStripe(ctx *pulumi.Context, cfg *config.Config, fly *FlyOutputs) (*Str
 			sProd, sPrice := args[0].(string), args[1].(string)
 			pProd, pPrice := args[2].(string), args[3].(string)
 			eProd, ePrice := args[4].(string), args[5].(string)
+			// Check for existing portal config first
 			return fmt.Sprintf(
-				`curl -sf -X POST https://api.stripe.com/v1/billing_portal/configurations `+
+				`EXISTING=$(curl -sf https://api.stripe.com/v1/billing_portal/configurations `+
+					`-u "$STRIPE_API_KEY:" `+
+					`| jq -r '.data[0].id // empty'); `+
+					`if [ -n "$EXISTING" ]; then echo "$EXISTING"; else `+
+					`curl -sf -X POST https://api.stripe.com/v1/billing_portal/configurations `+
 					`-u "$STRIPE_API_KEY:" `+
 					`-d "business_profile[headline]=Manage your Ghostcam subscription" `+
 					`-d "features[subscription_update][enabled]=true" `+
@@ -149,7 +169,7 @@ func setupStripe(ctx *pulumi.Context, cfg *config.Config, fly *FlyOutputs) (*Str
 					`-d "features[subscription_update][products][2][prices][]=%s" `+
 					`-d "features[subscription_cancel][enabled]=true" `+
 					`-d "features[subscription_cancel][mode]=at_period_end" `+
-					`| jq -r '.id'`,
+					`| jq -r '.id'; fi`,
 				sProd, sPrice, pProd, pPrice, eProd, ePrice,
 			)
 		}).(pulumi.StringOutput),

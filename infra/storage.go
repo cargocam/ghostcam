@@ -18,32 +18,44 @@ type StorageOutputs struct {
 
 func setupStorage(ctx *pulumi.Context, cfg *config.Config, fly *FlyOutputs) (*StorageOutputs, error) {
 	appName := cfg.Require("appName")
-	bucketSuffix := cfg.Get("s3BucketSuffix")
-	if bucketSuffix == "" {
-		bucketSuffix = "segments"
+	// Allow overriding the full bucket name for adopting existing infrastructure
+	// (Fly auto-generates names like "broken-pond-7013").
+	bucketName := cfg.Get("s3BucketName")
+	if bucketName == "" {
+		bucketSuffix := cfg.Get("s3BucketSuffix")
+		if bucketSuffix == "" {
+			bucketSuffix = "segments"
+		}
+		bucketName = appName + "-" + bucketSuffix
 	}
-	bucketName := appName + "-" + bucketSuffix
 
-	// Tigris S3-compatible object storage via Fly's integration.
-	// flyctl storage create outputs KEY: VALUE lines — we capture all stdout
-	// and parse it in Go.
+	// Idempotent: if the bucket exists, output its name. Credentials for
+	// existing buckets can't be re-read from flyctl, so they're provided
+	// via Pulumi config when adopting existing infrastructure.
+	//
+	// For new buckets, flyctl storage create outputs the credentials.
 	cmd, err := local.NewCommand(ctx, "tigris-bucket", &local.CommandArgs{
 		Create: pulumi.Sprintf(
-			`flyctl storage create -n %s -o personal -y`,
-			bucketName,
+			`if flyctl storage status %s >/dev/null 2>&1 || flyctl storage list 2>&1 | grep -q '%s'; then `+
+				`echo "BUCKET_NAME: %s"; `+
+				`echo "AWS_ENDPOINT_URL_S3: https://fly.storage.tigris.dev"; `+
+				`echo "AWS_ACCESS_KEY_ID: ${TIGRIS_ACCESS_KEY_ID:-existing}"; `+
+				`echo "AWS_SECRET_ACCESS_KEY: ${TIGRIS_SECRET_ACCESS_KEY:-existing}"; `+
+				`else `+
+				`flyctl storage create -n %s -o personal -y; `+
+				`fi`,
+			bucketName, bucketName, bucketName, bucketName,
 		),
 		Delete: pulumi.Sprintf(`flyctl storage destroy %s -y`, bucketName),
+		Environment: pulumi.StringMap{
+			"TIGRIS_ACCESS_KEY_ID":     cfg.GetSecret("s3AccessKeyId"),
+			"TIGRIS_SECRET_ACCESS_KEY": cfg.GetSecret("s3SecretAccessKey"),
+		},
 	})
 	if err != nil {
 		return nil, err
 	}
 
-	// Parse KEY: VALUE lines from flyctl output.
-	// Example output:
-	//   AWS_ACCESS_KEY_ID: tid_...
-	//   AWS_ENDPOINT_URL_S3: https://fly.storage.tigris.dev
-	//   AWS_SECRET_ACCESS_KEY: tsec_...
-	//   BUCKET_NAME: ghostcam-test-segments
 	parsed := cmd.Stdout.ApplyT(func(raw string) map[string]string {
 		m := make(map[string]string)
 		for _, line := range strings.Split(raw, "\n") {

@@ -18,17 +18,26 @@ func setupNeon(ctx *pulumi.Context, cfg *config.Config) (*NeonOutputs, error) {
 	}
 	appName := cfg.Require("appName")
 
-	// Neon Pulumi provider is beta (v0.0.1-beta.1) with limited resource support.
-	// Use the REST API via Command provider for reliability. The connection_uri
-	// in the response includes role, password, host, and database.
-	//
-	// RetainOnDelete: `pulumi destroy` should never drop the production database.
+	// Idempotent: if a project with this name exists, return its connection URI.
+	// Otherwise create a new one.
 	cmd, err := local.NewCommand(ctx, "neon-project", &local.CommandArgs{
-		Create: pulumi.Sprintf(`curl -sf -X POST "https://console.neon.tech/api/v2/projects" `+
-			`-H "Authorization: Bearer $NEON_API_KEY" `+
-			`-H "Content-Type: application/json" `+
-			`-d '{"project":{"name":"%s","region_id":"%s","pg_version":16}}' `+
-			`| jq -r '.connection_uris[0].connection_uri'`, appName, neonRegion),
+		Create: pulumi.Sprintf(
+			`EXISTING=$(curl -sf "https://console.neon.tech/api/v2/projects" `+
+				`-H "Authorization: Bearer $NEON_API_KEY" `+
+				`| jq -r '.projects[] | select(.name == "%s") | .id' | head -1); `+
+				`if [ -n "$EXISTING" ]; then `+
+				`curl -sf "https://console.neon.tech/api/v2/projects/$EXISTING/connection_uri" `+
+				`-H "Authorization: Bearer $NEON_API_KEY" `+
+				`| jq -r '.uri'; `+
+				`else `+
+				`curl -sf -X POST "https://console.neon.tech/api/v2/projects" `+
+				`-H "Authorization: Bearer $NEON_API_KEY" `+
+				`-H "Content-Type: application/json" `+
+				`-d '{"project":{"name":"%s","region_id":"%s","pg_version":16}}' `+
+				`| jq -r '.connection_uris[0].connection_uri'; `+
+				`fi`,
+			appName, appName, neonRegion,
+		),
 		Environment: pulumi.StringMap{
 			"NEON_API_KEY": cfg.RequireSecret("neonApiKey"),
 		},
