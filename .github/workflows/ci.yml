@@ -20,12 +20,29 @@ jobs:
       - run: go build -o /tmp/ghostcam-server ./server
       - run: go build -o /tmp/ghostcam-camera ./camera
       - run: go test ./...
-      - name: Check api-types are in sync with Go source
+      - name: Check generated types are in sync with Go source
         run: |
           go generate ./...
-          git add --intent-to-add ui/src/lib/api-types/ 2>/dev/null || true
-          git diff --exit-code -- ui/src/lib/api-types/ \
-            || (echo "ui/src/lib/api-types/ is stale. Run 'go generate ./...' and commit." && exit 1)
+          git add --intent-to-add ui/src/lib/api-types/ ghostcam-py/ghostcam/wire/ 2>/dev/null || true
+          git diff --exit-code -- ui/src/lib/api-types/ ghostcam-py/ghostcam/wire/ \
+            || (echo "Generated wire types are stale. Run 'go generate ./...' and commit." && exit 1)
+
+  python:
+    runs-on: self-hosted
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: ghostcam-py
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: mypy ghostcam
+      - run: pytest -q
+      - run: python -m build || pip install build && python -m build
 
   ui:
     runs-on: self-hosted

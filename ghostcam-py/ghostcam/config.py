@@ -18,6 +18,7 @@ import os
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -106,7 +107,7 @@ def write_stored_file(data_dir: Path, name: str, value: str) -> None:
     (data_dir / name).write_text(value)
 
 
-def _load_config_file(cli_path: str) -> dict:
+def _load_config_file(cli_path: str) -> dict[str, Any]:
     candidates = [
         cli_path,
         _env("GHOSTCAM_CONFIG_FILE"),

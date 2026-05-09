@@ -13,6 +13,7 @@ next process startup re-confirms.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -81,10 +82,8 @@ class PendingConfirms:
         try:
             tmp.write_text(json.dumps(data))
             os.replace(tmp, self._path)
-            try:
+            with contextlib.suppress(OSError):
                 self._path.chmod(0o600)
-            except OSError:
-                pass
         except OSError as e:
             logger.warning("failed to persist pending confirms: %s", e)
 
@@ -98,7 +97,7 @@ class _UploadState:
 async def run_upload_loop(
     client: Client,
     data_dir: Path,
-    segments: asyncio.Queue["NewSegment"],
+    segments: asyncio.Queue[NewSegment],
 ) -> None:
     """Consume segments, upload via presigned URLs, persist confirms.
 
@@ -110,7 +109,7 @@ async def run_upload_loop(
     if state.confirms:
         logger.info("resuming %d pending upload confirmations", len(state.confirms))
 
-    retry: deque["NewSegment"] = deque()
+    retry: deque[NewSegment] = deque()
 
     try:
         while True:
@@ -138,7 +137,7 @@ async def run_upload_loop(
                 )
                 pending.save([])
                 logger.info("flushed %d pending confirms on shutdown", len(state.confirms))
-            except (asyncio.TimeoutError, Exception) as e:
+            except (TimeoutError, Exception) as e:
                 logger.warning("failed to flush pending confirms on shutdown: %s", e)
         raise
 
@@ -146,10 +145,10 @@ async def run_upload_loop(
 async def _upload_with_retry(
     client: Client,
     data_dir: Path,
-    seg: "NewSegment",
+    seg: NewSegment,
     state: _UploadState,
     pending: PendingConfirms,
-) -> "NewSegment | None":
+) -> NewSegment | None:
     ok = await _upload_segment(client, data_dir, seg, state, pending)
     if ok:
         return None
@@ -170,7 +169,7 @@ async def _upload_with_retry(
 async def _upload_segment(
     client: Client,
     data_dir: Path,
-    seg: "NewSegment",
+    seg: NewSegment,
     state: _UploadState,
     pending: PendingConfirms,
 ) -> bool:
@@ -220,10 +219,8 @@ async def _upload_segment(
     ))
     pending.save(state.confirms)
 
-    try:
+    with contextlib.suppress(OSError):
         seg.path.unlink()
-    except OSError:
-        pass
     return True
 
 

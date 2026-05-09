@@ -12,6 +12,7 @@ camera's `var Version = "dev"`.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import logging
 from pathlib import Path
@@ -74,10 +75,8 @@ async def check_firmware_update(client: Client, data_dir: Path) -> bool:
         if actual != resp.release.sha256:
             logger.error("firmware hash mismatch (expected=%s actual=%s)",
                          resp.release.sha256, actual)
-            try:
+            with contextlib.suppress(OSError):
                 staged.unlink()
-            except OSError:
-                pass
             return False
         logger.info("firmware hash verified: %s", actual)
 
@@ -96,13 +95,12 @@ async def _get_firmware_latest(client: Client) -> FirmwareResponse:
 
 async def _download_to_file(url: str, dest: Path) -> None:
     tmp = dest.with_suffix(dest.suffix + ".tmp")
-    async with httpx.AsyncClient(timeout=300.0) as http:
-        async with http.stream("GET", url) as resp:
-            if resp.status_code != 200:
-                raise RuntimeError(f"download returned {resp.status_code}")
-            with tmp.open("wb") as f:
-                async for chunk in resp.aiter_bytes(65536):
-                    f.write(chunk)
+    async with httpx.AsyncClient(timeout=300.0) as http, http.stream("GET", url) as resp:
+        if resp.status_code != 200:
+            raise RuntimeError(f"download returned {resp.status_code}")
+        with tmp.open("wb") as f:
+            async for chunk in resp.aiter_bytes(65536):
+                f.write(chunk)
     tmp.replace(dest)
 
 

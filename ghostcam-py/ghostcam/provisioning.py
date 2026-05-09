@@ -10,6 +10,7 @@ in dev/Docker just need the env vars.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from pathlib import Path
 
@@ -77,10 +78,8 @@ async def run_provisioning(
 
     token_file = cfg.data_dir / "provision_token"
     if token_file.exists():
-        try:
+        with contextlib.suppress(OSError):
             token_file.unlink()
-        except OSError:
-            pass
 
     logger.info("provisioning complete: device_id=%s", creds.device_id)
     return creds

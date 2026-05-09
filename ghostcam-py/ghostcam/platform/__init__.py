@@ -21,6 +21,10 @@ import secrets
 import time
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ghostcam.wire import QRPayload, TelemetryDatagram
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +46,10 @@ def _select() -> bool:
 _USE_SYNTHETIC = _select()
 
 if _USE_SYNTHETIC:
-    from ghostcam.platform import synthetic as _impl
+    from ghostcam.platform import synthetic as _impl  # noqa: F401
     logger.debug("platform: synthetic sensors")
 else:
-    from ghostcam.platform import linux as _impl
+    from ghostcam.platform import linux as _impl  # type: ignore[no-redef]  # noqa: F811
     logger.debug("platform: real Linux sensors")
 
 
@@ -108,7 +112,7 @@ def get_device_serial(data_dir: Path) -> str:
     return _generate_and_store_serial(data_dir)
 
 
-def read_telemetry():  # type: ignore[no-untyped-def]
+def read_telemetry() -> "TelemetryDatagram":  # noqa: UP037
     """Return a fully-populated TelemetryDatagram for the current platform."""
     return _impl.read_telemetry()
 
@@ -118,7 +122,7 @@ async def wait_for_route(timeout: float | None = None) -> bool:
     success. Mirrors camera/network_*.go.
     """
     if hasattr(_impl, "wait_for_route"):
-        return await _impl.wait_for_route(timeout)
+        return bool(await _impl.wait_for_route(timeout))
     return True
 
 
@@ -128,10 +132,10 @@ async def ensure_wifi(ssid: str, psk: str | None) -> None:
         await _impl.ensure_wifi(ssid, psk)
 
 
-async def scan_qr(timeout: float = 300.0):  # type: ignore[no-untyped-def]
+async def scan_qr(timeout: float = 300.0) -> "QRPayload | None":  # noqa: UP037
     """Scan the camera sensor for a provisioning QR. Returns QRPayload or None."""
     if hasattr(_impl, "scan_qr"):
-        return await _impl.scan_qr(timeout)
+        return await _impl.scan_qr(timeout)  # type: ignore[no-any-return]
     return None
 
 

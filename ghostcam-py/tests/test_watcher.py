@@ -8,6 +8,7 @@ up a full ffmpeg pipeline (we craft .ts files by hand).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import time
@@ -75,10 +76,8 @@ async def test_watcher_picks_up_quiesced_segment(tmp_path: Path) -> None:
         seg = await asyncio.wait_for(queue.get(), timeout=4.0)
     finally:
         task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
 
     assert seg.filename == "seg00001.ts"
     assert seg.path == p
@@ -106,10 +105,8 @@ async def test_watcher_skips_corrupt_ts(tmp_path: Path) -> None:
         seg = await asyncio.wait_for(queue.get(), timeout=4.0)
     finally:
         task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
 
     assert seg.filename == "good.ts"
 
@@ -149,10 +146,8 @@ async def test_watcher_seeds_known_from_pending_confirms(tmp_path: Path) -> None
         seg = await asyncio.wait_for(queue.get(), timeout=4.0)
     finally:
         task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
 
     # Only the fresh one should make it onto the queue.
     assert seg.filename == "seg00002.ts"

@@ -18,10 +18,10 @@ margin on Pi Zero 2W).
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from dataclasses import dataclass
 from typing import Protocol
-
-import asyncio
 
 # Tunable ring depth. ~120 covers ~4 s of interleaved video+audio.
 DEFAULT_RING_SIZE = 120
@@ -120,14 +120,10 @@ class LiveRelay:
             return
         except asyncio.QueueFull:
             pass
-        try:
+        with contextlib.suppress(asyncio.QueueEmpty):
             self._queue.get_nowait()
-        except asyncio.QueueEmpty:
-            pass
-        try:
+        with contextlib.suppress(asyncio.QueueFull):
             self._queue.put_nowait(frame)
-        except asyncio.QueueFull:
-            pass
 
 
 class NullLiveRelay:

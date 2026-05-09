@@ -8,8 +8,6 @@ to diagnose in production.
 
 from __future__ import annotations
 
-import asyncio
-
 import pytest
 
 from ghostcam.live_relay import (

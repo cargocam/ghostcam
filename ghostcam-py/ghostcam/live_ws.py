@@ -19,10 +19,12 @@ back on. Reconnects with exponential backoff 2 → 30 s on disconnect.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import struct
 import time
+from typing import Any
 
 import websockets
 from websockets.exceptions import ConnectionClosed
@@ -98,14 +100,12 @@ async def _run_one_session(client: Client, relay: LiveRelay) -> None:
                     return
         finally:
             control_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await control_task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
-                pass
 
 
 async def _read_control_messages(
-    conn,  # type: ignore[no-untyped-def]
+    conn: Any,
     streaming: asyncio.Event,
 ) -> None:
     try:

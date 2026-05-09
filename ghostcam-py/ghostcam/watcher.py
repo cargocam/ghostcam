@@ -149,11 +149,11 @@ async def _scan_once(
 
     now_ms = int(time.time() * 1000)
     candidates: list[_Candidate] = []
-    for e in entries:
-        if e.suffix != ".ts" or e.name in state.known:
+    for entry in entries:
+        if entry.suffix != ".ts" or entry.name in state.known:
             continue
         try:
-            stat = e.stat()
+            stat = entry.stat()
         except OSError:
             continue
         if stat.st_size == 0:
@@ -161,12 +161,12 @@ async def _scan_once(
         mtime_ms = int(stat.st_mtime * 1000)
         if now_ms - mtime_ms < MTIME_QUIESCENCE_MS:
             continue
-        if not _is_valid_ts(e):
-            logger.warning("skipping corrupt/partial segment: %s", e.name)
+        if not _is_valid_ts(entry):
+            logger.warning("skipping corrupt/partial segment: %s", entry.name)
             continue
         candidates.append(_Candidate(
-            name=e.name,
-            path=e,
+            name=entry.name,
+            path=entry,
             mtime_ms=mtime_ms,
             size=stat.st_size,
         ))
@@ -189,6 +189,6 @@ async def _scan_once(
         )
         try:
             await asyncio.wait_for(out.put(seg), QUEUE_PUT_TIMEOUT)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("segment queue full after %.0fs, dropping: %s",
                            QUEUE_PUT_TIMEOUT, seg.filename)

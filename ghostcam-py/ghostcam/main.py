@@ -15,6 +15,7 @@ SIGTERM/SIGINT cancels the group with a 15 s drain budget, then exits.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import signal
@@ -175,11 +176,9 @@ def _install_signal_handlers(loop: asyncio.AbstractEventLoop, root_task: asyncio
         root_task.cancel()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
-        try:
+        # Windows / non-main-thread loops don't support add_signal_handler.
+        with contextlib.suppress(NotImplementedError, RuntimeError):
             loop.add_signal_handler(sig, _cancel, sig.name)
-        except (NotImplementedError, RuntimeError):
-            # Windows / non-main-thread.
-            pass
 
 
 def run() -> None:
@@ -205,7 +204,7 @@ async def _run_with_shutdown() -> int:
     except asyncio.CancelledError:
         try:
             await asyncio.wait_for(asyncio.shield(task), timeout=SHUTDOWN_TIMEOUT)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
+        except (TimeoutError, asyncio.CancelledError):
             logger.warning("shutdown timeout, some tasks did not drain")
         except SystemExit as e:
             return int(e.code or 0)

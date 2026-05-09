@@ -13,6 +13,7 @@ None — same as the Go camera's no-op stub.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -40,6 +41,7 @@ def read_device_serial(data_dir: Path) -> str:
 
 
 def read_telemetry() -> TelemetryDatagram:
+    lat, lon, alt, fix = _gpsd_query()
     return TelemetryDatagram(
         ts=int(__import__("time").time() * 1000),
         cpu=_read_cpu(),
@@ -47,7 +49,10 @@ def read_telemetry() -> TelemetryDatagram:
         temp=_read_temperature(),
         uptime=_read_uptime(),
         sig=_read_wifi_signal(),
-        **_read_gps_fields(),
+        lat=lat,
+        lon=lon,
+        alt=alt,
+        gps_fix=fix,
     )
 
 
@@ -139,11 +144,6 @@ def _read_wifi_signal() -> int | None:
 
 
 # --- gpsd ---
-
-
-def _read_gps_fields() -> dict[str, float | int | None]:
-    lat, lon, alt, fix = _gpsd_query()
-    return {"lat": lat, "lon": lon, "alt": alt, "gps_fix": fix}
 
 
 def _gpsd_query(
@@ -282,8 +282,8 @@ async def scan_qr(timeout: float = 300.0) -> QRPayload | None:
         logger.debug("rpicam-still not on PATH, skipping QR scan")
         return None
     try:
-        from pyzbar.pyzbar import decode  # noqa: F401
         from PIL import Image  # noqa: F401
+        from pyzbar.pyzbar import decode  # noqa: F401
     except ImportError:
         logger.warning("pyzbar/Pillow not installed; install ghostcam[real] for QR support")
         return None
@@ -305,24 +305,22 @@ async def scan_qr(timeout: float = 300.0) -> QRPayload | None:
 
     try:
         return await asyncio.wait_for(_qr_loop(proc), timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         logger.info("QR scan timed out")
         return None
     finally:
         if proc.returncode is None:
-            try:
+            with contextlib.suppress(ProcessLookupError, OSError):
                 os.killpg(os.getpgid(proc.pid), 15)
-            except (ProcessLookupError, OSError):
-                pass
             try:
                 await asyncio.wait_for(proc.wait(), 5.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 proc.kill()
 
 
 async def _qr_loop(proc: asyncio.subprocess.Process) -> QRPayload | None:
-    from pyzbar.pyzbar import decode
     from PIL import Image
+    from pyzbar.pyzbar import decode
 
     assert proc.stdout is not None
     while True:

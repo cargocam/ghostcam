@@ -21,6 +21,7 @@ via `pass_fds`. ffmpeg's pipe protocol accepts arbitrary fd numbers.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from pathlib import Path
@@ -169,10 +170,8 @@ async def _copy_to_two(
         for w in sinks:
             if w is None:
                 continue
-            try:
+            with contextlib.suppress(Exception):
                 w.close()
-            except Exception:  # noqa: BLE001
-                pass
 
 
 async def _audio_reader_task(

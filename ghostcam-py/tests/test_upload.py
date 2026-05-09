@@ -9,6 +9,7 @@ ordering without sockets.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -111,10 +112,8 @@ async def test_storage_capped_keeps_segments_locally(tmp_path: Path) -> None:
     task = asyncio.create_task(run_upload_loop(fake, tmp_path, queue))  # type: ignore[arg-type]
     await asyncio.sleep(0.05)
     task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await task
-    except asyncio.CancelledError:
-        pass
 
     assert flags.storage_capped is True
     # Segment still on disk; nothing was uploaded.
@@ -144,10 +143,8 @@ async def test_4xx_clears_url_cache(tmp_path: Path) -> None:
     # Wait long enough for the retry attempt to actually fire.
     await asyncio.sleep(4.5)
     task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await task
-    except asyncio.CancelledError:
-        pass
 
     # First presign call (count=3, no confirms), then a second presign
     # call after the 4xx wiped the URL cache.
@@ -173,10 +170,8 @@ async def test_resumes_pending_confirms_on_startup(tmp_path: Path) -> None:
     task = asyncio.create_task(run_upload_loop(fake, tmp_path, queue))  # type: ignore[arg-type]
     await asyncio.sleep(0.05)
     task.cancel()
-    try:
+    with contextlib.suppress(asyncio.CancelledError):
         await task
-    except asyncio.CancelledError:
-        pass
 
     # The first presign call should carry the previously-pending confirm.
     assert fake.presign_calls
