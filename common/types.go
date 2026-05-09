@@ -1,4 +1,16 @@
 // Package common defines shared request/response types for the camera-server HTTP API.
+//
+// Both consumers of this package (the Go server and the Python camera) get
+// their types via codegen from these struct definitions:
+//   - tygo emits TypeScript to ui/src/lib/api-types/ (driven by the
+//     directive in server/apitypes/apitypes.go).
+//   - tools/pydanticgen emits pydantic v2 models to
+//     ghostcam-py/ghostcam/wire/ (driven by the directive below).
+//
+// Both run together as part of `go generate ./...`. CI fails if either
+// generated tree is stale.
+//
+//go:generate bash -c "cd $(git rev-parse --show-toplevel) && go run ./tools/pydanticgen ./common ./ghostcam-py/ghostcam/wire"
 package common
 
 // ProvisionRequest is sent by the camera during provisioning. The camera
