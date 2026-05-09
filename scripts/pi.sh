@@ -7,13 +7,18 @@ set -euo pipefail
 #
 # Usage:
 #   ./scripts/pi.sh setup    [HOST] [USER] [PASS]          # Full provisioning (fresh Pi)
-#   ./scripts/pi.sh deploy   [HOST] [USER] [PASS]          # Quick build + deploy binary
+#   ./scripts/pi.sh deploy   [HOST] [USER] [PASS]          # Build wheel + deploy to Pi
 #   ./scripts/pi.sh logs     [HOST] [USER] [PASS]          # Stream camera logs
 #   ./scripts/pi.sh status   [HOST] [USER] [PASS]          # Health check
 #   ./scripts/pi.sh wifi-off [SECS] [HOST] [USER] [PASS]   # Toggle WiFi for failover testing
 #   ./scripts/pi.sh restart  [HOST] [USER] [PASS]          # Restart camera service
 #   ./scripts/pi.sh ssh      [HOST] [USER] [PASS]          # Interactive SSH session
 #   ./scripts/pi.sh unenroll [HOST] [USER] [PASS]          # Clear enrollment state
+#
+# Camera install layout on the Pi:
+#   /opt/ghostcam/                              (Python venv with the wheel)
+#   /usr/local/bin/ghostcam-camera              (symlink → /opt/ghostcam/bin/ghostcam-camera)
+#   /etc/systemd/system/ghostcam-camera.service (ExecStart=/usr/local/bin/ghostcam-camera)
 #
 # Defaults: HOST=10.0.0.229  USER=yurei  PASS=password
 #
@@ -33,7 +38,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
 PI_DIR="${PROJECT_ROOT}/pi"
-# Camera binary is cross-compiled with: GOOS=linux GOARCH=arm64 CGO_ENABLED=0
+GHOSTCAM_PY_DIR="${PROJECT_ROOT}/ghostcam-py"
+# The Python camera ships as a wheel installed into a Pi-side venv at
+# /opt/ghostcam, with /opt/ghostcam/bin/ghostcam-camera symlinked to
+# /usr/local/bin/ghostcam-camera so the systemd unit's ExecStart path
+# is unchanged from the Go-camera era.
+VENV_DIR="/opt/ghostcam"
 
 SSH_OPTS="-o StrictHostKeyChecking=accept-new -o ConnectTimeout=10"
 
@@ -77,20 +87,45 @@ stop_camera() {
 }
 
 build_and_deploy() {
-    local target_bin="${PROJECT_ROOT}/ghostcam-camera"
+    # The wheel is pure Python — no cross-compilation needed. We build
+    # locally, scp the artifact, then install into the Pi-side venv.
+    local dist_dir="${GHOSTCAM_PY_DIR}/dist"
+    rm -rf "${dist_dir}"
 
-    echo "Cross-compiling Go camera for linux/arm64..."
-    (cd "${PROJECT_ROOT}" && GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o "${target_bin}" ./camera)
-
-    if [ ! -f "${target_bin}" ]; then
-        echo "ERROR: Build failed - binary not found at ${target_bin}"
+    echo "Building Python wheel..."
+    if ! (cd "${GHOSTCAM_PY_DIR}" && python3 -m build --wheel --outdir "${dist_dir}" 2>&1 | tail -10); then
+        echo "ERROR: wheel build failed"
+        echo "  Hint: ensure 'python -m build' is available (pip install build)."
         exit 1
     fi
 
-    echo "Deploying binary to /usr/local/bin/ghostcam-camera..."
-    pi_scp "${target_bin}" "/tmp/ghostcam-camera"
-    pi_ssh "sudo mv /tmp/ghostcam-camera /usr/local/bin/ghostcam-camera && sudo chmod +x /usr/local/bin/ghostcam-camera"
-    rm -f "${target_bin}"
+    local wheel_path
+    wheel_path="$(ls "${dist_dir}"/*.whl 2>/dev/null | head -1)"
+    if [ -z "${wheel_path}" ] || [ ! -f "${wheel_path}" ]; then
+        echo "ERROR: no wheel produced in ${dist_dir}"
+        exit 1
+    fi
+    local wheel_name
+    wheel_name="$(basename "${wheel_path}")"
+
+    echo "Deploying ${wheel_name} to ${PI_HOST}..."
+    pi_scp "${wheel_path}" "/tmp/${wheel_name}"
+
+    # First-time install creates the venv; subsequent deploys upgrade in
+    # place. --break-system-packages would also work but venv keeps the
+    # camera's pip lockstep clean of system Python.
+    pi_ssh "
+set -e
+if [ ! -x ${VENV_DIR}/bin/python3 ]; then
+    sudo python3 -m venv ${VENV_DIR}
+fi
+sudo ${VENV_DIR}/bin/pip install --quiet --upgrade pip
+# [real] extra pulls pyzbar (libzbar0 is installed by 'setup').
+sudo ${VENV_DIR}/bin/pip install --quiet --upgrade '/tmp/${wheel_name}[real]'
+sudo ln -sf ${VENV_DIR}/bin/ghostcam-camera /usr/local/bin/ghostcam-camera
+rm -f /tmp/${wheel_name}
+"
+    rm -rf "${dist_dir}"
     echo "Deployed."
 }
 
@@ -104,7 +139,11 @@ cmd_setup() {
     echo ""
     echo "=== Installing system packages ==="
 
-    local packages="libasound2 alsa-utils gpsd gpsd-clients modemmanager libqmi-utils usb-modeswitch network-manager curl jq htop"
+    # python3 / python3-venv: the camera daemon is a Python wheel installed
+    # into /opt/ghostcam (see build_and_deploy).
+    # libzbar0: required by pyzbar for the QR provisioning path.
+    # ffmpeg: video encoding pipeline.
+    local packages="libasound2 alsa-utils gpsd gpsd-clients modemmanager libqmi-utils usb-modeswitch network-manager curl jq htop python3 python3-venv libzbar0 ffmpeg"
 
     # Check for video capture tool
     local has_video
