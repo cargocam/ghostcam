@@ -11,6 +11,83 @@ telemetry.go   TelemetryDatagram — JSON payload with optional fields (CPU, tem
 
 ## Camera Structure
 
+The camera daemon is being ported from Go to Python. Both implementations
+exist on disk during the port; `docker compose --profile test` and
+`./scripts/pi.sh deploy` use the Python build. The Go camera under
+`camera/` stays buildable until the cutover commit deletes it.
+
+### Python camera (`ghostcam-py/`) — primary
+
+```
+ghostcam-py/
+  pyproject.toml          Hatchling wheel build, console_scripts entry: `ghostcam-camera`
+  ghostcam/
+    main.py               Entrypoint: load config, signal handling, asyncio.TaskGroup with
+                          5 tasks (live_ws, capture supervisor, telemetry, watcher, upload),
+                          15s graceful drain on SIGINT/SIGTERM. Mirrors camera/main.go's
+                          goroutine structure as cancellable asyncio tasks.
+    config.py             CameraConfig + tomllib + argparse + env layering — same
+                          /boot/ghostcam.conf → {dataDir}/camera.toml → env → flags precedence
+                          as the Go camera, including the persisted runtime overrides at
+                          {dataDir}/recording_mode and {dataDir}/resolution.
+    identity.py           PyNaCl ed25519 keypair with hex-on-disk seed at {dataDir}/identity_key.
+                          PyNaCl produces byte-identical signatures to Go's crypto/ed25519
+                          (verified by tools/sigverify cross-language harness).
+    credentials.py        Flat-file persistence; permanent identity, replaceable server_url.
+    signing.py            Authorization: Signature device_id=<hex>,ts=<int>,sig=<b64>
+                          builder. Unix SECONDS in the signed payload (telemetry uses ms).
+    client.py             httpx.AsyncClient: post_telemetry, request_presigned_urls,
+                          upload_segment (PUT to S3 with Content-Type video/mp2t), provision.
+    capture.py            asyncio.create_subprocess_exec orchestration of rpicam-vid + ffmpeg.
+                          Audio side-channel uses `pipe:{wfd}` with pass_fds — NOT Go's fixed
+                          fd 3 layout, which silently breaks under Python's child interpreter
+                          (verified during planning Spike 2).
+    ogg_reader.py         OGG page parser → Opus packets, async-friendly.
+    watcher.py            Polls segment_dir every 2s for finished .ts files, validates the
+                          0x47 sync byte, runs MotionDetector, pushes onto upload queue.
+                          Seeds known set from pending_confirms.json on startup.
+    upload.py             asyncio upload loop with PendingConfirms (atomic JSON store),
+                          retries (2s/4s/8s backoff), 4xx-clears-URL-cache, storage-cap,
+                          server-unreachable flag observed by capture supervisor.
+    motion.py             ffprobe P-frame size analysis with file-size fallback —
+                          same 1.5x-rolling-avg threshold as the Go camera.
+    live_relay.py         H.264 Annex B start-code scanner (pure-Python bytes.find;
+                          ~221 MB/s on Pi Zero 2W per planning Spike 1, ~883x margin
+                          over the production rate). asyncio.Queue(maxsize=120) ring
+                          with drop-oldest semantics. _find_nal_boundaries is the
+                          isolated swap point for a future Rust+pyo3 native module.
+    live_ws.py            websockets client; on-connect "ready" JSON message, then
+                          binary frames `[ts:4 BE][flags:1][payload]` — byte-identical
+                          to camera/live_ws.go::sendFrame. start_stream/stop_stream
+                          control messages flip the streaming gate.
+    telemetry_poll.py     10s loop, 30s after 3 fails, 60s after 5; writes boot_ok
+                          marker after first successful POST.
+    commands.py           reboot, unregister, set_recording_mode, set_resolution,
+                          network_config, update_firmware, remove_network — most
+                          os._exit(0) for systemd to restart with new state.
+    provisioning.py       CLI/env → flat files → QR scan resolution; QR-supplied WiFi
+                          credentials trigger ensure_wifi + wait_for_route.
+    firmware.py           Self-update: GET /api/v1/firmware/latest, sha256-verified
+                          download to {dataDir}/staged-update.deb, exit for systemd.
+    platform/             Replaces Go's build tags. selected at import time:
+      __init__.py           GHOSTCAM_SYNTHETIC=1 → synthetic; Linux+/proc → linux; else synthetic
+      synthetic.py          Deterministic Seattle-orbit GPS, fixed CPU/mem/temp — Docker/CI
+      linux.py              /proc/stat, /proc/meminfo, /sys/class/thermal, /proc/net/wireless,
+                            gpsd, nmcli, rpicam-still + pyzbar QR
+    wire/                 Generated pydantic v2 models — DO NOT EDIT.
+                          Source: common/types.go + common/telemetry.go via tools/pydanticgen.
+  tests/                  pytest suite (71 tests):
+                          * test_wire_format.py + test_signing_roundtrip.py — every
+                            must-not-drift wire item has a fixture; signing parity
+                            is enforced by Python signs / Go verifies (and vice versa)
+                            via tools/sigverify, byte-identical across the boundary.
+                          * test_live_relay.py, test_ogg_reader.py, test_motion.py,
+                            test_config.py, test_upload.py, test_watcher.py,
+                            test_live_ws.py, test_capture.py, test_platform.py.
+```
+
+### Go camera (`camera/`) — DEPRECATED, removed by the cutover commit
+
 ```
 camera/            (package main — binary builds from this directory)
   main.go          Entrypoint: config, signal handling, goroutine orchestration (WaitGroup),
