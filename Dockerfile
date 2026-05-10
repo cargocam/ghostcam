@@ -5,9 +5,10 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /ghostcam-server ./server
-RUN CGO_ENABLED=0 go build -o /ghostcam-camera ./camera
+# Legacy Go camera. Kept buildable until the cutover commit deletes legacy_camera/.
+RUN CGO_ENABLED=0 go build -o /ghostcam-camera ./legacy_camera
 # Test camera: synthetic sensors (GPS, CPU, etc.) instead of real hardware
-RUN CGO_ENABLED=0 go build -tags synthetic -o /ghostcam-camera-synthetic ./camera
+RUN CGO_ENABLED=0 go build -tags synthetic -o /ghostcam-camera-synthetic ./legacy_camera
 
 # --- UI builder ---
 FROM oven/bun:1 AS ui-builder
@@ -26,15 +27,17 @@ COPY ui/ .
 EXPOSE 5173
 CMD ["bun", "run", "dev"]
 
-# --- Camera target (test/Docker — synthetic sensors) ---
-FROM alpine:3.21 AS camera
+# --- Legacy Go camera target (test/Docker — synthetic sensors) ---
+# Removed by the cutover commit. Kept here so docker-compose's pre-cutover
+# fallback path (`target: legacy-camera`) still builds for comparisons.
+FROM alpine:3.21 AS legacy-camera
 RUN apk add --no-cache ca-certificates ffmpeg wget font-dejavu tzdata
 COPY --from=builder /ghostcam-camera-synthetic /usr/local/bin/ghostcam-camera
 COPY docker/camera-entrypoint.sh /usr/local/bin/camera-entrypoint.sh
 ENTRYPOINT ["camera-entrypoint.sh"]
 
-# --- Camera target (production — real hardware sensors) ---
-FROM alpine:3.21 AS camera-prod
+# --- Legacy Go camera target (production — real hardware sensors) ---
+FROM alpine:3.21 AS legacy-camera-prod
 RUN apk add --no-cache ca-certificates ffmpeg wget
 COPY --from=builder /ghostcam-camera /usr/local/bin/ghostcam-camera
 COPY docker/camera-entrypoint.sh /usr/local/bin/camera-entrypoint.sh
@@ -43,16 +46,17 @@ ENTRYPOINT ["camera-entrypoint.sh"]
 # --- Python camera builder ---
 FROM python:3.11-slim AS python-camera-builder
 WORKDIR /build
-COPY ghostcam-py/pyproject.toml ./
-COPY ghostcam-py/ghostcam ./ghostcam
+COPY camera/pyproject.toml ./
+COPY camera/ghostcam ./ghostcam
 RUN pip install --no-cache-dir build \
     && python -m build --wheel --outdir /wheels
 
-# --- Python camera (test/Docker — synthetic sensors) ---
-# Drop-in replacement for the Go `camera` stage. Same entrypoint, same
-# auto-provisioning shell script — `ghostcam-camera` is the console
-# script installed from the wheel, so the rest of compose doesn't care.
-FROM python:3.11-slim AS camera-py
+# --- Camera (test/Docker — Python, synthetic sensors) ---
+# This is the canonical test camera image. docker-compose's --profile test
+# fleet builds this stage. The auto-provisioning shell entrypoint is
+# unchanged from the legacy era — `ghostcam-camera` is the console script
+# the wheel installs at /usr/local/bin/ghostcam-camera.
+FROM python:3.11-slim AS camera
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates ffmpeg wget fonts-dejavu tzdata \
     && rm -rf /var/lib/apt/lists/*
@@ -62,10 +66,10 @@ ENV GHOSTCAM_SYNTHETIC=1
 COPY docker/camera-entrypoint.sh /usr/local/bin/camera-entrypoint.sh
 ENTRYPOINT ["camera-entrypoint.sh"]
 
-# --- Python camera (production — real hardware sensors) ---
+# --- Camera (production — Python, real hardware sensors) ---
 # For Pi production builds. libzbar0 enables the QR provisioning path.
 # Real sensors come for free because GHOSTCAM_SYNTHETIC isn't set.
-FROM python:3.11-slim AS camera-py-prod
+FROM python:3.11-slim AS camera-prod
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates ffmpeg wget libzbar0 \
     && rm -rf /var/lib/apt/lists/*

@@ -18,13 +18,13 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go build -o /tmp/ghostcam-server ./server
-      - run: go build -o /tmp/ghostcam-camera ./camera
+      - run: go build -o /tmp/ghostcam-camera ./legacy_camera
       - run: go test ./...
       - name: Check generated types are in sync with Go source
         run: |
           go generate ./...
-          git add --intent-to-add ui/src/lib/api-types/ ghostcam-py/ghostcam/wire/ 2>/dev/null || true
-          git diff --exit-code -- ui/src/lib/api-types/ ghostcam-py/ghostcam/wire/ \
+          git add --intent-to-add ui/src/lib/api-types/ camera/ghostcam/wire/ 2>/dev/null || true
+          git diff --exit-code -- ui/src/lib/api-types/ camera/ghostcam/wire/ \
             || (echo "Generated wire types are stale. Run 'go generate ./...' and commit." && exit 1)
 
   python:
@@ -32,7 +32,7 @@ jobs:
     timeout-minutes: 30
     defaults:
       run:
-        working-directory: ghostcam-py
+        working-directory: camera
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

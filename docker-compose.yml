@@ -108,7 +108,7 @@ services:
     profiles: [test]
     build:
       context: .
-      target: camera-py
+      target: camera
     restart: unless-stopped
     depends_on: [server]
     environment:
@@ -130,7 +130,7 @@ services:
     profiles: [test]
     build:
       context: .
-      target: camera-py
+      target: camera
     restart: unless-stopped
     depends_on: [server]
     environment:
@@ -152,7 +152,7 @@ services:
     profiles: [test]
     build:
       context: .
-      target: camera-py
+      target: camera
     restart: unless-stopped
     depends_on: [server]
     environment:

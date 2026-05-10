@@ -68,7 +68,7 @@ their types via codegen from these struct definitions:
   - tygo emits TypeScript to ui/src/lib/api-types/ (driven by the
     directive in server/apitypes/apitypes.go).
   - tools/pydanticgen emits pydantic v2 models to
-    ghostcam-py/ghostcam/wire/ (driven by the directive below).
+    camera/ghostcam/wire/ (driven by the directive below).
 
 Both run together as part of `go generate ./...`. CI fails if either
 generated tree is stale.

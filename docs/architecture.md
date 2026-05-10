@@ -14,17 +14,17 @@ telemetry.go   TelemetryDatagram — JSON payload with optional fields (CPU, tem
 The camera daemon is being ported from Go to Python. Both implementations
 exist on disk during the port; `docker compose --profile test` and
 `./scripts/pi.sh deploy` use the Python build. The Go camera under
-`camera/` stays buildable until the cutover commit deletes it.
+`legacy_camera/` stays buildable until the cutover commit deletes it.
 
-### Python camera (`ghostcam-py/`) — primary
+### Python camera (`camera/`) — primary
 
 ```
-ghostcam-py/
+camera/
   pyproject.toml          Hatchling wheel build, console_scripts entry: `ghostcam-camera`
   ghostcam/
     main.py               Entrypoint: load config, signal handling, asyncio.TaskGroup with
                           5 tasks (live_ws, capture supervisor, telemetry, watcher, upload),
-                          15s graceful drain on SIGINT/SIGTERM. Mirrors camera/main.go's
+                          15s graceful drain on SIGINT/SIGTERM. Mirrors legacy_camera/main.go's
                           goroutine structure as cancellable asyncio tasks.
     config.py             CameraConfig + tomllib + argparse + env layering — same
                           /boot/ghostcam.conf → {dataDir}/camera.toml → env → flags precedence
@@ -58,7 +58,7 @@ ghostcam-py/
                           isolated swap point for a future Rust+pyo3 native module.
     live_ws.py            websockets client; on-connect "ready" JSON message, then
                           binary frames `[ts:4 BE][flags:1][payload]` — byte-identical
-                          to camera/live_ws.go::sendFrame. start_stream/stop_stream
+                          to legacy_camera/live_ws.go::sendFrame. start_stream/stop_stream
                           control messages flip the streaming gate.
     telemetry_poll.py     10s loop, 30s after 3 fails, 60s after 5; writes boot_ok
                           marker after first successful POST.
@@ -86,14 +86,14 @@ ghostcam-py/
                             test_live_ws.py, test_capture.py, test_platform.py.
 ```
 
-### Go camera (`camera/`) — DEPRECATED, removed by the cutover commit
+### Go camera (`legacy_camera/`) — DEPRECATED, removed by the cutover commit
 
 ```
-camera/            (package main — binary builds from this directory)
+legacy_camera/     (package main — binary builds from this directory)
   main.go          Entrypoint: config, signal handling, goroutine orchestration (WaitGroup),
                    capture crash recovery with exponential backoff (1s→30s) and 5-minute stability threshold,
                    graceful shutdown (WaitGroup drain, 15s timeout). Pure orchestration — all logic in the
-                   other camera/ files.
+                   other legacy_camera/ files.
   config.go        CameraConfig + cameraConfigFile, layered TOML/env/CLI resolution
                    RecordingMode ("constant"/"motion"/"never") — runtime override via {dataDir}/recording_mode.
                    "never" (streaming-only) is the default for fresh data dirs and new DB rows: ffmpeg

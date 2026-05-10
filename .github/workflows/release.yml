@@ -20,13 +20,13 @@ jobs:
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
             go build -ldflags "-X main.Version=v0.1.0-alpha" \
-            -o ghostcam-camera-aarch64 ./camera
+            -o ghostcam-camera-aarch64 ./legacy_camera
 
       - name: Build camera (x86_64)
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
             go build -ldflags "-X main.Version=v0.1.0-alpha" \
-            -o ghostcam-camera-x86_64 ./camera
+            -o ghostcam-camera-x86_64 ./legacy_camera
 
       - name: Package .deb
         run: |

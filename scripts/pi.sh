@@ -38,7 +38,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
 PI_DIR="${PROJECT_ROOT}/pi"
-GHOSTCAM_PY_DIR="${PROJECT_ROOT}/ghostcam-py"
+CAMERA_DIR="${PROJECT_ROOT}/camera"
 # The Python camera ships as a wheel installed into a Pi-side venv at
 # /opt/ghostcam, with /opt/ghostcam/bin/ghostcam-camera symlinked to
 # /usr/local/bin/ghostcam-camera so the systemd unit's ExecStart path
@@ -89,11 +89,11 @@ stop_camera() {
 build_and_deploy() {
     # The wheel is pure Python — no cross-compilation needed. We build
     # locally, scp the artifact, then install into the Pi-side venv.
-    local dist_dir="${GHOSTCAM_PY_DIR}/dist"
+    local dist_dir="${CAMERA_DIR}/dist"
     rm -rf "${dist_dir}"
 
     echo "Building Python wheel..."
-    if ! (cd "${GHOSTCAM_PY_DIR}" && python3 -m build --wheel --outdir "${dist_dir}" 2>&1 | tail -10); then
+    if ! (cd "${CAMERA_DIR}" && python3 -m build --wheel --outdir "${dist_dir}" 2>&1 | tail -10); then
         echo "ERROR: wheel build failed"
         echo "  Hint: ensure 'python -m build' is available (pip install build)."
         exit 1

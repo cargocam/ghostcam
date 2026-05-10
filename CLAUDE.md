@@ -6,7 +6,7 @@ When making changes to the codebase, **always update the relevant READMEs, docs/
 
 ## What is this project?
 
-Ghostcam is a camera surveillance system. The **server** is Go. The **camera daemon** is being ported from Go to Python (in `ghostcam-py/`) for hackability and easier open-source contribution; long-term plan is to push the CPU-bound H.264 NAL relay slice into a Rust crate and expose it through pyo3, but v1 is pure Python. Both camera implementations exist on disk during the port; `docker-compose --profile test` and the production Pi `.deb` use the Python build. Cameras capture H.264 video + AAC audio via `rpicam-vid | ffmpeg`, upload MPEG-TS segments to S3 (Tigris) via presigned URLs, and POST telemetry over HTTP. The server generates HLS manifests on the fly, serves segment requests via 302 redirects to S3, and exposes a REST + SSE API consumed by a Svelte 5 browser viewer.
+Ghostcam is a camera surveillance system. The **server** is Go. The **camera daemon** is being ported from Go to Python (in `camera/`) for hackability and easier open-source contribution; long-term plan is to push the CPU-bound H.264 NAL relay slice into a Rust crate and expose it through pyo3, but v1 is pure Python. Both camera implementations exist on disk during the port; `docker-compose --profile test` and the production Pi `.deb` use the Python build. Cameras capture H.264 video + AAC audio via `rpicam-vid | ffmpeg`, upload MPEG-TS segments to S3 (Tigris) via presigned URLs, and POST telemetry over HTTP. The server generates HLS manifests on the fly, serves segment requests via 302 redirects to S3, and exposes a REST + SSE API consumed by a Svelte 5 browser viewer.
 
 ## Repository Layout
 
@@ -14,10 +14,11 @@ Ghostcam is a camera surveillance system. The **server** is Go. The **camera dae
 ghostcam/
 ├── common/          Shared Go types: camera<->server contract (telemetry, presign, provisioning).
 │                    Source of truth for both ui/src/lib/api-types/ (TS via tygo) AND
-│                    ghostcam-py/ghostcam/wire/ (Python via tools/pydanticgen).
-├── camera/          DEPRECATED: original Go camera. Kept buildable until the cutover commit
-│                    deletes it. New code goes in ghostcam-py/ instead.
-├── ghostcam-py/     Python camera daemon (replaces camera/).
+│                    camera/ghostcam/wire/ (Python via tools/pydanticgen).
+├── camera/          Python camera daemon. Capture pipeline, motion detection,
+│   │                upload, live WebSocket relay, telemetry, provisioning, firmware.
+│   │                Built as a wheel via `python -m build`; deployed to /opt/ghostcam
+│   │                on the Pi by scripts/pi.sh.
 │   ├── ghostcam/    Package: capture, motion, watcher, upload, live_relay, live_ws,
 │   │                telemetry_poll, commands, provisioning, firmware, identity, signing,
 │   │                client, config, main.
@@ -27,6 +28,8 @@ ghostcam/
 │                    OGG decode, motion, config, upload retry, watcher, capture pipe-fd
 │                    plumbing, and platform selection. A cross-language signature
 │                    round-trip via tools/sigverify keeps Python ↔ Go signing byte-identical.
+├── legacy_camera/   DEPRECATED: original Go camera. Kept buildable for comparison
+│                    until the cutover commit deletes it. New code goes in camera/.
 ├── server/          Server binary (package main): chi router + HTTP handlers as methods
 │                    on *App, middleware, rate limiting. main.go lives here — no cmd/ wrapper.
 │   ├── apitypes/    Viewer<->server HTTP request/response + SSE payload types.
@@ -43,7 +46,7 @@ ghostcam/
 │                    (Inbound webhook handler lives in server/support.go alongside the other webhook handlers.)
 ├── tools/
 │   ├── pydanticgen/ Go AST walker → pydantic v2 emitter. Reads common/ + server/apitypes/
-│   │                and writes ghostcam-py/ghostcam/wire/. Wired into go generate alongside tygo.
+│   │                and writes camera/ghostcam/wire/. Wired into go generate alongside tygo.
 │   └── sigverify/   Cross-language ed25519 signature parity harness used by the
 │                    Python test suite to assert byte-identical signing.
 ├── tygo.yaml        Codegen config: common/ + server/apitypes/ → ui/src/lib/api-types/ (driven by `go generate ./...`)
@@ -54,9 +57,9 @@ ghostcam/
 ├── infra/           Pulumi IaC (Go): provisions Fly, Neon, Upstash, Tigris, Stripe, Resend
 ├── scripts/         Developer tools: pi.sh (camera manager CLI)
 ├── docs/            Detailed reference: API, architecture, configuration, debugging
-├── Dockerfile       Multi-stage: server, camera (Go synthetic — deprecated), camera-prod
-│                    (Go real — deprecated), camera-py (Python synthetic — used by compose),
-│                    camera-py-prod (Python real — used by Pi .deb).
+├── Dockerfile       Multi-stage: server, camera (Python synthetic — used by compose),
+│                    camera-prod (Python real — used by Pi .deb), legacy-camera /
+│                    legacy-camera-prod (Go synthetic/real — deprecated, removed in cutover).
 └── docker-compose.yml  Server + UI + MinIO + Stripe webhook listener + 3 Python test
                         cameras (--profile test; stripe-webhooks runs by default)
 ```
@@ -67,17 +70,17 @@ ghostcam/
 # Build server
 go build -o ghostcam-server ./server
 
-# Build the Python camera wheel (one-time install or via pip install -e ./ghostcam-py)
-cd ghostcam-py && python -m build --wheel
+# Build the Python camera wheel (one-time install or via pip install -e ./camera)
+cd camera && python -m build --wheel
 
 # Run tests (server + Python camera + UI)
 go test ./...
-cd ghostcam-py && pytest -q          # 71 unit + parity tests for the Python camera
+cd camera && pytest -q          # 71 unit + parity tests for the Python camera
 cd ui && bun run test                 # vitest unit tests
 cd ui && bun run test:browser         # playwright browser tests (frontend smoke; backend is mocked)
 
 # Lint + type-check the Python camera (mirrors the `python` CI job)
-cd ghostcam-py && ruff check . && mypy ghostcam
+cd camera && ruff check . && mypy ghostcam
 
 # Regenerate ALL wire-contract types (TypeScript + pydantic).
 # Run after changing any struct in common/ or server/apitypes/.
@@ -93,7 +96,7 @@ same Go source: `server/apitypes/apitypes.go` (viewer<->server) and
 
   * `tygo` → `ui/src/lib/api-types/` — TypeScript interfaces consumed by
     the UI and the `browser-tests/` fixtures.
-  * `tools/pydanticgen` → `ghostcam-py/ghostcam/wire/` — pydantic v2
+  * `tools/pydanticgen` → `camera/ghostcam/wire/` — pydantic v2
     models consumed by the Python camera (HTTP client, capture pipeline,
     parity tests).
 
@@ -106,7 +109,7 @@ To change a wire shape:
 1. Edit the Go struct in `server/apitypes/` or `common/`.
 2. Run `go generate ./...`.
 3. Commit the Go change AND the regenerated `ui/src/lib/api-types/` AND
-   `ghostcam-py/ghostcam/wire/` files.
+   `camera/ghostcam/wire/` files.
 
 CI's `go generate ./... (drift check)` (in the `go` job) fails the build
 when either output is stale.
@@ -118,13 +121,13 @@ when either output is stale.
 - `server/auth/`: Password hashing round-trip, salt uniqueness, malformed-hash safety, HMAC token determinism, JWT sign/verify including the privilege-escalation invariant (tampered payload rejected)
 - `server/integration_test.go`: Testcontainers-based integration tests that spin up real Postgres + Redis containers and exercise the HTTP server through its chi router. Covers JWT cookie auth, login flows, tampered token rejection. Requires Docker; skips gracefully without it.
 - `server/billing/`: `GetTier()` tier resolution, `StorageLimitBytes()` computation
-- `camera/`: motion detector (file-size fallback, rolling window), MPEG-TS sync byte validation, pending confirms persistence, config helpers (`coalesceStr`, `resolveVideoProfile`, `trimString`), H.264 NAL parser (start code detection, IDR identification, ring buffer overflow). Deprecated — being replaced by `ghostcam-py/`; once the cutover commit lands these tests go away.
+- `legacy_camera/`: motion detector (file-size fallback, rolling window), MPEG-TS sync byte validation, pending confirms persistence, config helpers (`coalesceStr`, `resolveVideoProfile`, `trimString`), H.264 NAL parser (start code detection, IDR identification, ring buffer overflow). Deprecated — replaced by the Python `camera/` package; once the cutover commit lands these tests go away.
 
-**Python camera** (`cd ghostcam-py && pytest -q`): 71 tests under `ghostcam-py/tests/`:
+**Python camera** (`cd camera && pytest -q`): 71 tests under `camera/tests/`:
 - `test_wire_format.py` + `test_signing_roundtrip.py`: every must-not-drift wire item has a fixture; signing parity is enforced by signing in Python and verifying in Go via `tools/sigverify` (and vice versa) — byte-identical signatures across the language boundary.
 - `test_live_relay.py`: H.264 Annex B 3-byte and 4-byte start codes, IDR detection, drop-oldest ring buffer.
 - `test_ogg_reader.py`: OGG page reassembly, OpusHead/OpusTags skipping, sync and async callbacks.
-- `test_motion.py`: file-size fallback + rolling-window threshold (mirrors `camera/motion_test.go`).
+- `test_motion.py`: file-size fallback + rolling-window threshold (mirrors `legacy_camera/motion_test.go`).
 - `test_config.py`: defaults → TOML → env → CLI precedence, video-profile expansion, stored-recording-mode override.
 - `test_upload.py`: pending-confirm atomic persistence, storage-cap behaviour, 4xx-clears-URL-cache + retry, resume-on-startup. Uses a `FakeClient` so no real HTTP.
 - `test_watcher.py`: sync-byte validation, mtime quiescence, oldest-first eviction at the local cap, pending-confirm seeding.
