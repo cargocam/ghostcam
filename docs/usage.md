@@ -79,30 +79,35 @@ Set `GHOSTCAM_VIDEO_PROFILE` to match your hardware: `zero2w` (480p), `pi4` (720
 
 Provision the camera the same way as Option 1 (write a provision token, or use `pi.sh setup` for full automated provisioning).
 
-## Option 3: Deploy the Raw Binary (any Linux/arm64 or amd64)
+## Option 3: Install via pip (any Linux with Python 3.11+)
 
-Download the standalone binary from the [latest release](../../../releases/latest). This is useful for non-Pi Linux systems or custom setups:
+Useful for non-Pi Linux systems, custom setups, or hacking on the
+camera. The camera ships as a standard Python wheel:
 
 ```bash
-curl -LO https://github.com/<owner>/ghostcam/releases/latest/download/ghostcam-camera-aarch64
-chmod +x ghostcam-camera-aarch64
-sudo mv ghostcam-camera-aarch64 /usr/local/bin/ghostcam-camera
+# Install (system-wide; alternatively use a venv).
+python3 -m pip install ghostcam
 
-# Requires ffmpeg on PATH
+# Real-Pi extras (pyzbar QR scanning) require libzbar0:
+sudo apt install -y libzbar0
+python3 -m pip install 'ghostcam[real]'
+
+# Required runtime: ffmpeg.
 sudo apt install -y ffmpeg
 
-# Create data directory
+# Data directory
 sudo mkdir -p /var/ghostcam
 sudo chown $USER:$USER /var/ghostcam
 
-# Run with environment variables
+# Run
 GHOSTCAM_SERVER_URL=https://your-server.example.com \
 GHOSTCAM_DATA_DIR=/var/ghostcam \
 GHOSTCAM_VIDEO_PROFILE=pi4 \
   ghostcam-camera
 ```
 
-For production use, set up a systemd service (see `pi/systemd/ghostcam-camera.service` as a template).
+For production use, set up a systemd service (see
+`pi/systemd/ghostcam-camera.service` as a template).
 
 ## Pi Developer Workflow
 

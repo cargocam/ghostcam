@@ -132,7 +132,12 @@ def _load_config_file(cli_path: str) -> dict[str, Any]:
 
 
 def load_config(argv: list[str] | None = None) -> CameraConfig:
+    from ghostcam import __version__
+
     parser = argparse.ArgumentParser(prog="ghostcam-camera", add_help=True)
+    parser.add_argument(
+        "--version", action="version", version=f"ghostcam-camera {__version__}",
+    )
     parser.add_argument("--config", default="", help="path to TOML config file")
     parser.add_argument("--server-url", default="", help="server HTTPS URL")
     parser.add_argument("--provision-token", default="", help="one-time provisioning token")
