@@ -16,9 +16,13 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ghostcam.motion import MotionDetector
 from ghostcam.upload import PendingConfirms
+
+if TYPE_CHECKING:
+    from ghostcam.segment_index import SegmentIndex
 
 SEGMENT_DURATION_SECS = 6
 SCAN_INTERVAL_SECS = 2.0
@@ -106,16 +110,37 @@ async def run_segment_watcher(
     data_dir: Path,
     local_storage_cap_bytes: int,
     out: asyncio.Queue[NewSegment],
+    *,
+    index: SegmentIndex | None = None,
 ) -> None:
-    """Poll-loop. Cancel via task cancellation."""
+    """Poll-loop. Cancel via task cancellation.
+
+    `index` (optional) is the SQLite-backed segment manifest. When
+    provided, seeds the known-set from there (covering both pending-
+    confirm and lazy-mode local-only segments) and prefers index-driven
+    eviction over the simpler mtime-based cap. Falls back to the
+    legacy `pending_confirms.json` path when None for tests / partial
+    setups.
+    """
     state = _WatcherState()
 
-    pending = PendingConfirms(data_dir)
-    confirms = pending.load()
-    for c in confirms:
-        state.known.add(f"{c.segment_id}.ts")
-    if confirms:
-        logger.info("segment watcher: seeded %d known from pending confirms", len(confirms))
+    if index is not None:
+        for name in index.known_filenames():
+            state.known.add(name)
+        if state.known:
+            logger.info(
+                "segment watcher: seeded %d known from index", len(state.known),
+            )
+    else:
+        pending = PendingConfirms(data_dir)
+        confirms = pending.load()
+        for c in confirms:
+            state.known.add(f"{c.segment_id}.ts")
+        if confirms:
+            logger.info(
+                "segment watcher: seeded %d known from pending confirms",
+                len(confirms),
+            )
 
     try:
         entries = list(segment_dir.iterdir())
@@ -129,9 +154,58 @@ async def run_segment_watcher(
         pass
 
     while True:
-        enforce_local_storage_cap(segment_dir, local_storage_cap_bytes)
+        if index is not None:
+            _enforce_cap_via_index(segment_dir, local_storage_cap_bytes, index)
+        else:
+            enforce_local_storage_cap(segment_dir, local_storage_cap_bytes)
         await _scan_once(segment_dir, state, out)
         await asyncio.sleep(SCAN_INTERVAL_SECS)
+
+
+def _enforce_cap_via_index(
+    directory: Path,
+    cap_bytes: int,
+    index: SegmentIndex,
+) -> None:
+    """Eviction that respects the SegmentIndex tier order:
+    uploaded+confirmed → uploaded → local-only no-motion → motion.
+
+    Walks `eviction_candidates()` until total on-disk size is under
+    cap. Mirrors the simpler `enforce_local_storage_cap` semantics
+    but with motion-friendly priority — losing motion footage is the
+    last resort, never the first.
+    """
+    if cap_bytes == 0:
+        return
+    try:
+        total = sum(
+            e.stat().st_size
+            for e in directory.iterdir()
+            if e.suffix == ".ts" and e.is_file()
+        )
+    except OSError:
+        return
+    if total <= cap_bytes:
+        return
+
+    for candidate in index.eviction_candidates():
+        if total <= cap_bytes:
+            break
+        path = Path(candidate.path)
+        if not path.exists():
+            index.mark_evicted(candidate.segment_id)
+            continue
+        try:
+            size = path.stat().st_size
+            path.unlink()
+        except OSError:
+            continue
+        total -= size
+        index.mark_evicted(candidate.segment_id)
+        logger.debug(
+            "evicted (tier-aware): %s (-%d bytes, motion=%s, uploaded=%s)",
+            path.name, size, candidate.has_motion, candidate.uploaded_to_s3,
+        )
 
 
 async def _scan_once(

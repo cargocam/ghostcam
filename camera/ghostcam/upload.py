@@ -1,13 +1,29 @@
 """S3 upload loop + pending-confirm persistence.
 
-Mirrors camera/upload.go. Drains the segment queue, requests presigned
-URLs in batches of 3, PUTs segments to S3, and queues confirmations to
-piggy-back on the next presign call.
+Drains the segment queue, requests presigned URLs in batches of 3,
+PUTs segments to S3, and queues confirmations to piggy-back on the
+next presign call.
 
-Pending confirmations are persisted atomically to
-{data_dir}/pending_confirms.json so a crash between the S3 PUT and the
-confirming presign request does NOT orphan an uploaded object — the
-next process startup re-confirms.
+Two persistence backends:
+
+  * `SegmentIndex` (preferred when wired in by main.py): SQLite store
+    that tracks every segment the camera has produced, including
+    local-only ones in lazy mode. Used for both pending-confirm
+    flushing AND the lazy-mode `upload_segments` priority path.
+  * `PendingConfirms` (legacy JSON fallback): in-place compatibility
+    for tests/setups that don't wire a SegmentIndex. Identical
+    persistence semantics to the original module — atomic write of
+    `pending_confirms.json` so a crash between PUT and confirm doesn't
+    orphan an uploaded S3 object.
+
+Power-mode integration (when `power` is wired in):
+  * `lazy` upload_mode: non-motion segments are NOT uploaded
+    proactively. They go into the SegmentIndex as local-only and
+    only upload when the server pushes an `upload_segments` command.
+    Motion-flagged segments still upload immediately.
+  * `priority` deque: command handler pushes segment IDs here when
+    `upload_segments` arrives. The loop drains it before the regular
+    queue.
 """
 
 from __future__ import annotations
@@ -23,6 +39,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ghostcam.client import Client, S3UploadError
+from ghostcam.power_mode import PowerModeState
+from ghostcam.segment_index import SegmentIndex
 from ghostcam.wire import PresignedUrl, UploadedSegment
 
 if TYPE_CHECKING:
@@ -36,22 +54,25 @@ PENDING_FILE = "pending_confirms.json"
 
 @dataclass
 class _SharedFlags:
-    """Globals from camera/upload.go expressed as instance state. The
-    capture pipeline reads server_unreachable to pause; the watcher
-    reads storage_capped to know not to push more segments.
-    """
+    """Globals expressed as instance state. Capture pipeline reads
+    server_unreachable to pause; the watcher reads storage_capped to
+    know not to push more segments."""
+
     server_unreachable: bool = False
     storage_capped: bool = False
     presign_fail_count: int = 0
 
 
-# Module-level singleton because main.py and capture.py both need to
-# observe these. Mirrors how the Go camera uses package-level atomics.
+# Module-level singleton — main.py and capture.py both observe these.
 flags = _SharedFlags()
 
 
 class PendingConfirms:
-    """Atomic JSON-backed store of pending UploadedSegment confirms."""
+    """Atomic JSON-backed store of pending UploadedSegment confirms.
+
+    Kept for the legacy path and as the test surface for upload retry
+    behaviour. New deployments thread a SegmentIndex through instead.
+    """
 
     def __init__(self, data_dir: Path) -> None:
         self._path = data_dir / PENDING_FILE
@@ -98,14 +119,27 @@ async def run_upload_loop(
     client: Client,
     data_dir: Path,
     segments: asyncio.Queue[NewSegment],
+    *,
+    index: SegmentIndex | None = None,
+    power: PowerModeState | None = None,
+    priority: deque[str] | None = None,
 ) -> None:
-    """Consume segments, upload via presigned URLs, persist confirms.
+    """Long-running upload loop.
 
-    Cancellation flushes any pending confirms with a 5 s budget.
+    Optional kwargs are wired in by main.py for power-mode-aware
+    behaviour. Tests / partial setups that pass only positional args
+    get the legacy JSON-backed proactive-upload behaviour for
+    backward compatibility with the original signature.
     """
     state = _UploadState()
-    pending = PendingConfirms(data_dir)
-    state.confirms = pending.load()
+    pending: PendingConfirms | None = None
+    if index is None:
+        pending = PendingConfirms(data_dir)
+        state.confirms = pending.load()
+    else:
+        # SegmentIndex is the source of truth: pending confirms are the
+        # uploaded-but-unconfirmed rows.
+        state.confirms = index.pending_confirms()
     if state.confirms:
         logger.info("resuming %d pending upload confirmations", len(state.confirms))
 
@@ -113,19 +147,68 @@ async def run_upload_loop(
 
     try:
         while True:
+            # 1. Priority: server-requested uploads (lazy-mode scrub
+            #    fulfilment). Drained before regular segments.
+            if priority and index is not None:
+                seg_id = priority.popleft()
+                row = index.get(seg_id)
+                if row is None:
+                    logger.warning("upload_segments: unknown id %s", seg_id)
+                    continue
+                if row.uploaded_to_s3 or row.evicted:
+                    continue
+                from ghostcam.watcher import NewSegment as _NewSegment
+                seg_obj = _NewSegment(
+                    filename=Path(row.path).name,
+                    path=Path(row.path),
+                    start_ts=row.start_ts,
+                    end_ts=row.end_ts,
+                    size_bytes=row.size_bytes,
+                    has_motion=row.has_motion,
+                )
+                if (failed := await _upload_with_retry(
+                    client, data_dir, seg_obj, state, pending, index,
+                )) is not None:
+                    retry.append(failed)
+                continue
+
+            # 2. Retry queue: failed uploads waiting on backoff.
             if retry:
                 seg = retry.popleft()
                 backoff = (1 << seg.retry_count) * 2  # 2, 4, 8 s
                 await asyncio.sleep(backoff)
                 if (failed := await _upload_with_retry(
-                    client, data_dir, seg, state, pending
+                    client, data_dir, seg, state, pending, index,
                 )) is not None:
                     retry.append(failed)
                 continue
 
+            # 3. Regular new-segment queue.
             seg = await segments.get()
+
+            # Index every segment regardless of upload decision so the
+            # server can later request it via `upload_segments`.
+            if index is not None:
+                index.record_local(
+                    segment_id=Path(seg.filename).stem,
+                    path=str(seg.path),
+                    start_ts=seg.start_ts,
+                    end_ts=seg.end_ts,
+                    size_bytes=seg.size_bytes,
+                    has_motion=seg.has_motion,
+                )
+
+            # Lazy mode: skip non-motion segments. They stay on disk
+            # and the SegmentIndex keeps a record so the server can
+            # pull them on demand.
+            if power is not None and not power.should_upload(seg.has_motion):
+                logger.debug(
+                    "lazy mode: skipping non-motion segment %s", seg.filename,
+                )
+                continue
+
             if (failed := await _upload_with_retry(
-                client, data_dir, seg, state, pending
+                client, data_dir, seg, state, pending, index,
             )) is not None:
                 retry.append(failed)
     except asyncio.CancelledError:
@@ -135,10 +218,17 @@ async def run_upload_loop(
                     client.request_presigned_urls(0, state.confirms),
                     5.0,
                 )
-                pending.save([])
-                logger.info("flushed %d pending confirms on shutdown", len(state.confirms))
+                if pending is not None:
+                    pending.save([])
+                if index is not None:
+                    index.mark_confirmed([c.segment_id for c in state.confirms])
+                logger.info(
+                    "flushed %d pending confirms on shutdown", len(state.confirms),
+                )
             except (TimeoutError, Exception) as e:
-                logger.warning("failed to flush pending confirms on shutdown: %s", e)
+                logger.warning(
+                    "failed to flush pending confirms on shutdown: %s", e,
+                )
         raise
 
 
@@ -147,9 +237,10 @@ async def _upload_with_retry(
     data_dir: Path,
     seg: NewSegment,
     state: _UploadState,
-    pending: PendingConfirms,
+    pending: PendingConfirms | None,
+    index: SegmentIndex | None,
 ) -> NewSegment | None:
-    ok = await _upload_segment(client, data_dir, seg, state, pending)
+    ok = await _upload_segment(client, data_dir, seg, state, pending, index)
     if ok:
         return None
     if seg.retry_count >= MAX_UPLOAD_RETRIES:
@@ -171,11 +262,12 @@ async def _upload_segment(
     data_dir: Path,
     seg: NewSegment,
     state: _UploadState,
-    pending: PendingConfirms,
+    pending: PendingConfirms | None,
+    index: SegmentIndex | None,
 ) -> bool:
     if not state.available_urls:
         try:
-            await _replenish_urls(client, data_dir, state, pending)
+            await _replenish_urls(client, data_dir, state, pending, index)
         except Exception as e:
             logger.warning("failed to get presigned URLs: %s", e)
             return False
@@ -201,8 +293,6 @@ async def _upload_segment(
     except S3UploadError as e:
         logger.warning("S3 upload failed: %s (%d)", seg.filename, e.status_code)
         if e.is_client_error:
-            # 4xx means URL is expired/invalid; discard cache so next call
-            # gets fresh URLs. Don't burn a retry.
             state.available_urls.clear()
         return False
     except Exception as e:
@@ -217,7 +307,10 @@ async def _upload_segment(
         size_bytes=seg.size_bytes,
         has_motion=seg.has_motion,
     ))
-    pending.save(state.confirms)
+    if index is not None:
+        index.mark_uploaded(presigned.segment_id)
+    if pending is not None:
+        pending.save(state.confirms)
 
     with contextlib.suppress(OSError):
         seg.path.unlink()
@@ -228,7 +321,8 @@ async def _replenish_urls(
     client: Client,
     data_dir: Path,
     state: _UploadState,
-    pending: PendingConfirms,
+    pending: PendingConfirms | None,
+    index: SegmentIndex | None,
 ) -> None:
     pending_confirms = state.confirms
     state.confirms = []
@@ -236,7 +330,6 @@ async def _replenish_urls(
     try:
         resp = await client.request_presigned_urls(3, pending_confirms)
     except Exception:
-        # Restore confirms (on-disk copy is intact) so they aren't lost.
         state.confirms = pending_confirms
         flags.presign_fail_count += 1
         if flags.presign_fail_count >= 3:
@@ -249,7 +342,10 @@ async def _replenish_urls(
         flags.server_unreachable = False
 
     if pending_confirms:
-        pending.save([])
+        if pending is not None:
+            pending.save([])
+        if index is not None:
+            index.mark_confirmed([c.segment_id for c in pending_confirms])
 
     if resp.storage_capped:
         if not flags.storage_capped:

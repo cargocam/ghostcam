@@ -101,12 +101,25 @@ class Client:
         return data
 
     async def post_telemetry(self, telemetry: TelemetryDatagram) -> list[CameraCommand]:
+        """Convenience wrapper returning just the commands list.
+
+        Most callers (including the integration tests) only care about
+        the commands. The telemetry-poll loop needs the full response
+        because of `wake_live`; it should call `post_telemetry_full`
+        instead.
+        """
+        return (await self.post_telemetry_full(telemetry)).commands or []
+
+    async def post_telemetry_full(
+        self, telemetry: TelemetryDatagram,
+    ) -> TelemetryPollResponse:
+        """Full telemetry response including `wake_live` for standby mode."""
         body = TelemetryPollRequest(telemetry=telemetry, fw_version=VERSION).model_dump(
             by_alias=True, exclude_none=True
         )
         path = f"/api/v1/cameras/{self.device_id}/telemetry"
         raw = await self._post_json(path, body)
-        return TelemetryPollResponse.model_validate(raw).commands or []
+        return TelemetryPollResponse.model_validate(raw)
 
     async def request_presigned_urls(
         self, count: int, uploaded: list[UploadedSegment] | None = None

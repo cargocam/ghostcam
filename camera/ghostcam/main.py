@@ -1,15 +1,28 @@
 """Camera entry point.
 
-Mirrors camera/main.go. Five concurrent goroutines map to five asyncio
-tasks under one TaskGroup:
+Five concurrent goroutines (originally) → asyncio tasks under one
+TaskGroup:
 
-  * live_ws.run_live_relay      — persistent WebSocket to the server
-  * capture.start_capture_pipeline — rpicam-vid + ffmpeg orchestration
-  * watcher.run_segment_watcher + upload.run_upload_loop (when recording)
-  * telemetry_poll.run_telemetry_poll
+  * live_ws         — persistent WebSocket to the server
+  * capture         — rpicam-vid + ffmpeg orchestration
+  * watcher         — picks up finished .ts segments
+  * upload          — drains segments to S3
+  * telemetry_poll  — sensor readings + command queue
 
-Provisioning runs as a one-shot before the TaskGroup. Graceful shutdown:
-SIGTERM/SIGINT cancels the group with a 15 s drain budget, then exits.
+Power-mode integration (this layer):
+
+  * `PowerModeState` is loaded once at boot and passed to every task
+    that cares (telemetry_poll for cadence + battery; live_ws via
+    `LiveWSDriver` for wake-on-demand; upload for lazy gating).
+  * `SegmentIndex` is the SQLite-backed manifest the watcher writes
+    to and the upload loop reads from. Replaces the legacy
+    `pending_confirms.json` for new deployments.
+  * Sleep-mode (capture off): the supervisor doesn't spawn the
+    pipeline; only telemetry_poll is active so commands and
+    schedule re-evaluations still flow.
+
+Provisioning runs as a one-shot before the TaskGroup. Graceful
+shutdown: SIGTERM/SIGINT cancels the group with a 15 s drain budget.
 """
 
 from __future__ import annotations
@@ -20,6 +33,7 @@ import logging
 import os
 import signal
 import sys
+from collections import deque
 from functools import partial
 
 from ghostcam.client import Client
@@ -29,13 +43,15 @@ from ghostcam.credentials import load_credentials
 from ghostcam.firmware import check_firmware_update
 from ghostcam.identity import load_or_create_identity
 from ghostcam.live_relay import LiveRelay
-from ghostcam.live_ws import run_live_relay
+from ghostcam.live_ws import LiveWSDriver
 from ghostcam.platform import (
     get_device_serial,
     set_gps_seed,
     wait_for_route,
 )
+from ghostcam.power_mode import load as load_power_mode
 from ghostcam.provisioning import run_provisioning
+from ghostcam.segment_index import SegmentIndex
 from ghostcam.telemetry_poll import run_telemetry_poll
 from ghostcam.upload import run_upload_loop
 from ghostcam.watcher import NewSegment, run_segment_watcher
@@ -92,13 +108,31 @@ async def _amain() -> int:
     )
 
     client = Client(server_url=cfg.server_url, device_id=creds.device_id, identity=identity)
+    index = SegmentIndex(cfg.data_dir)
+    power = load_power_mode(cfg.data_dir)
+    logger.info(
+        "power_mode at boot: %s/%s (%s)",
+        power.power_mode, power.upload_mode, power.effective.source,
+    )
+    # Server-pushed `upload_segments` commands push IDs onto this deque;
+    # the upload loop drains it before the regular new-segment queue.
+    priority_uploads: deque[str] = deque()
+
     try:
         if await check_firmware_update(client, cfg.data_dir):
             return 0  # systemd restarts; ExecStartPre installs
 
         relay = LiveRelay()
         segments: asyncio.Queue[NewSegment] = asyncio.Queue(maxsize=256)
-        cmd_handler = partial(handle_command, data_dir=cfg.data_dir, client=client)
+        live_driver = LiveWSDriver(client, relay, power)
+
+        cmd_handler = partial(
+            handle_command,
+            data_dir=cfg.data_dir,
+            client=client,
+            power=power,
+            prioritize_uploads=lambda ids: priority_uploads.extend(ids),
+        )
 
         async def _supervise_capture() -> None:
             from ghostcam.capture import start_capture_pipeline
@@ -109,6 +143,13 @@ async def _amain() -> int:
             crash_count = 0
 
             while True:
+                # Sleep mode: capture off entirely. Wait for a mode
+                # change before considering re-launching the pipeline.
+                if not power.should_capture():
+                    logger.info("capture suppressed: power_mode=%s", power.power_mode)
+                    await power.changed.wait()
+                    continue
+
                 while flags.server_unreachable:
                     logger.debug("capture paused, server unreachable")
                     await asyncio.sleep(10.0)
@@ -137,11 +178,27 @@ async def _amain() -> int:
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)
 
+        async def _schedule_ticker() -> None:
+            """Re-evaluate schedule + battery rules every minute so
+            time-of-day transitions take effect without waiting for the
+            next telemetry poll."""
+            while True:
+                await asyncio.sleep(60.0)
+                power.recompute()
+
         async with asyncio.TaskGroup() as tg:
-            tg.create_task(run_live_relay(client, relay), name="live-relay")
+            tg.create_task(live_driver.run(), name="live-ws")
             tg.create_task(_supervise_capture(), name="capture-supervisor")
+            tg.create_task(_schedule_ticker(), name="schedule-ticker")
             tg.create_task(
-                run_telemetry_poll(client, cfg.data_dir, cmd_handler),
+                run_telemetry_poll(
+                    client,
+                    cfg.data_dir,
+                    cmd_handler,
+                    power=power,
+                    wake_live_callback=live_driver.wake,
+                    battery_reader=None,  # see GH #73 — HAT driver landing later
+                ),
                 name="telemetry-poll",
             )
             if cfg.recording_mode != "never":
@@ -151,11 +208,17 @@ async def _amain() -> int:
                         cfg.data_dir,
                         cfg.local_storage_cap_bytes,
                         segments,
+                        index=index,
                     ),
                     name="segment-watcher",
                 )
                 tg.create_task(
-                    run_upload_loop(client, cfg.data_dir, segments),
+                    run_upload_loop(
+                        client, cfg.data_dir, segments,
+                        index=index,
+                        power=power,
+                        priority=priority_uploads,
+                    ),
                     name="upload-loop",
                 )
             else:
@@ -164,6 +227,7 @@ async def _amain() -> int:
     except asyncio.CancelledError:
         pass
     finally:
+        index.close()
         await client.aclose()
 
     logger.info("goodbye")
