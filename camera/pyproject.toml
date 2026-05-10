@@ -28,7 +28,8 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
     "mypy>=1.8",
-    "types-pyzbar; python_version >= '3.11'",
+    # pyzbar has no published type stubs; mypy's ignore_missing_imports
+    # below covers it.
 ]
 
 [project.scripts]

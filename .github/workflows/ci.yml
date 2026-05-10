@@ -38,11 +38,18 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -e ".[dev]"
-      - run: ruff check .
-      - run: mypy ghostcam
-      - run: pytest -q
-      - run: python -m build || pip install build && python -m build
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      # Lockfile-driven — uv.lock pins every transitive dep so a
+      # remote-resolution change can't drift the daemon between
+      # commits. Bumping a dep is `uv lock --upgrade-package <name>`
+      # and a follow-up commit.
+      - run: uv sync --frozen --extra dev --extra real
+      - run: uv run ruff check .
+      - run: uv run mypy ghostcam
+      - run: uv run pytest -q
+      - run: uv build --wheel
 
   ui:
     runs-on: self-hosted
