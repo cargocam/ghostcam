@@ -302,6 +302,7 @@ For detailed subsystem documentation see:
 - **[docs/configuration.md](docs/configuration.md)** — Environment variables, config files, billing tiers, retention & cleanup
 - **[docs/infrastructure.md](docs/infrastructure.md)** — Pulumi IaC: from-scratch setup, day-to-day ops, CI, adopting existing infra
 - **[docs/debugging.md](docs/debugging.md)** — Troubleshooting common issues
+- **[docs/pi-test-plan.md](docs/pi-test-plan.md)** — End-to-end Pi acceptance test plan: provisioning, recording, live, commands, network failover, GPS, soak, firmware self-update. Run this before every cutover and every release.
 
 ## Code Conventions
 

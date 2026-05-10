@@ -131,12 +131,19 @@ Run `ghostcam-camera --help` for the full CLI surface.
 ## Development
 
 ```bash
-pip install -e ".[dev]"
+# Lockfile-driven dev env (recommended):
+uv sync --frozen --extra dev --extra real
+uv run pytest -q          # unit + parity tests (no Docker)
+uv run ruff check .       # lint (CI gate)
+uv run mypy ghostcam      # type-check (CI gate)
+uv build --wheel          # produce a distributable .whl
 
-pytest -q                 # unit + parity tests (no Docker)
-ruff check .              # lint (CI gate)
-mypy ghostcam             # type-check (CI gate)
-python -m build --wheel   # produce a distributable .whl
+# Or via pip if you don't use uv:
+pip install -e ".[dev]"
+pytest -q
+ruff check .
+mypy ghostcam
+python -m build --wheel
 
 # Integration tests against the real Go server (needs Docker daemon)
 pip install testcontainers
@@ -147,6 +154,11 @@ The unit suite covers wire-format parity and the camera's core logic
 without touching the network. The integration suite spins up Postgres
 + Redis + MinIO via testcontainers, builds the Go server, and runs
 the Python camera against it through real sockets.
+
+For the on-real-Pi acceptance run (provisioning, recording, live
+WebRTC, commands, WiFi/cellular failover, GPS, 24-hour soak, firmware
+self-update + rollback), follow [docs/pi-test-plan.md](../docs/pi-test-plan.md).
+Run it before every cutover and every release.
 
 ### Wire-format invariants (must not drift)
 
