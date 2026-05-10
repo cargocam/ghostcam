@@ -6,6 +6,7 @@ build-backend = "hatchling.build"
 name = "ghostcam"
 version = "0.1.0"
 description = "Ghostcam camera daemon — captures H.264 video, uploads MPEG-TS segments, relays live frames to the server."
+readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Cargocam" }]
