@@ -41,6 +41,67 @@ as an admin). On a fresh data dir the camera generates an ed25519
 keypair, uses the token to register its public key, and you'll never
 need the token again — the keypair is permanent.
 
+## Public API
+
+The package is both a turn-key daemon AND a small library. If you just
+want to run a Ghostcam node, install the wheel and use the
+`ghostcam-camera` console script — none of the API below is required
+reading.
+
+If you want to build tooling (an alternative camera, an admin script,
+a stream analyser), import from this curated set. Anything listed here
+is contract: removing or renaming a symbol is a major-version bump.
+
+```python
+# Wire types — codegen'd from the Go server, drift-checked in CI.
+from ghostcam.wire import (
+    TelemetryDatagram, ProvisionRequest, ProvisionResponse,
+    PresignRequest, PresignResponse, PresignedUrl, UploadedSegment,
+    CameraCommand, TelemetryPollRequest, TelemetryPollResponse,
+    QRPayload,
+)
+
+# ed25519-signed HTTP client.
+from ghostcam import Client, provision, S3UploadError
+
+# Permanent ed25519 keypair management.
+from ghostcam import (
+    Identity,
+    load_or_create_identity,    # generate-on-first-boot, then read
+    load_identity_if_exists,    # read-only; None if not provisioned
+)
+
+# The exact Authorization header server/auth/verify.go expects.
+from ghostcam import build_signature_header
+
+# H.264 Annex B parser + bounded ring buffer.
+from ghostcam import (
+    LiveRelay,         # main entry point
+    LiveFrame,         # what comes out of the queue
+    LiveWriter,        # Protocol satisfied by LiveRelay + NullLiveRelay
+    NullLiveRelay,     # no-op writer for streaming-disabled paths
+    DEFAULT_RING_SIZE, # 120 — ~4 s at 30 fps
+)
+
+# Motion detection (ffprobe-based with file-size fallback).
+from ghostcam import MotionDetector
+
+# OGG/Opus packet extraction (async, for ffmpeg's pipe:N output).
+from ghostcam import read_ogg_opus_packets, OggError
+```
+
+Anything NOT in `ghostcam.__all__` is daemon assembly — `capture`,
+`watcher`, `upload`, `live_ws`, `telemetry_poll`, `commands`,
+`provisioning`, `firmware`, `main`, `config`, `credentials`,
+`platform/`. These modules are importable for power users who want
+to build a custom daemon shape, but their internals can move between
+minor releases. If you depend on something from one of those modules
+and want it stabilised, open an issue.
+
+`tests/test_public_api.py` locks the surface — the test fails loudly
+if a refactor changes `__all__`, which makes the SemVer decision
+visible in every PR.
+
 ## Configuration
 
 Resolution order (last wins): defaults → TOML file → env vars → CLI flags.
