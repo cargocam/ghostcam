@@ -56,6 +56,25 @@ export interface TelemetryDatagram {
    * GPS fix quality: 0=none, 1=2D, 2=3D.
    */
   gps_fix?: number /* uint8 */;
+  /**
+   * Currently effective power mode after schedule + battery rule
+   * resolution: "live" | "standby" | "sleep". Lets the server (and UI)
+   * see what the camera is actually doing right now, which can differ
+   * from the manually-set mode when a schedule or battery rule is
+   * overriding it.
+   */
+  power_mode?: string;
+  /**
+   * Currently effective upload mode: "proactive" | "lazy". Same
+   * reasoning as PowerMode.
+   */
+  upload_mode?: string;
+  /**
+   * Battery state-of-charge (0-100). Only set when a battery-sensing
+   * HAT (PiSugar / generic UPS) is wired up via
+   * platform/battery.py; absent on grid-powered cameras.
+   */
+  battery_pct?: number /* uint8 */;
 }
 
 //////////
@@ -101,13 +120,24 @@ export interface TelemetryPollRequest {
 }
 /**
  * TelemetryPollResponse contains any pending commands for the camera.
+ * WakeLive is set when a viewer is actively trying to watch a camera that
+ * is in standby mode (live WS not currently connected). The camera reads
+ * this flag and proactively opens its live WebSocket so WebRTC startup
+ * stays bounded by one telemetry-poll interval.
  */
 export interface TelemetryPollResponse {
   commands?: CameraCommand[];
+  wake_live?: boolean;
 }
 /**
  * CameraCommand is a tagged union of commands the server can send to a camera.
  * The Type field determines which other fields are populated.
+ * Power-mode commands:
+ *   - set_power_mode      → PowerMode field      (live | standby | sleep)
+ *   - set_upload_mode     → UploadMode field     (proactive | lazy)
+ *   - set_schedule        → Schedule field       (JSON-encoded windows)
+ *   - set_battery_rules   → BatteryRules field   (JSON-encoded thresholds)
+ *   - upload_segments     → SegmentIDs field     (lazy-mode on-demand fetch)
  */
 export interface CameraCommand {
   type: string;
@@ -115,6 +145,14 @@ export interface CameraCommand {
   resolution?: string; // set_resolution
   ssid?: string; // network_config, remove_network
   psk?: string; // network_config
+  /**
+   * Power-mode commands.
+   */
+  power_mode?: string; // set_power_mode: "live" | "standby" | "sleep"
+  upload_mode?: string; // set_upload_mode: "proactive" | "lazy"
+  schedule?: string; // set_schedule: JSON list of {window, power_mode, upload_mode}
+  battery_rules?: string; // set_battery_rules: JSON list of {threshold_pct, power_mode, upload_mode}
+  segment_ids?: string[]; // upload_segments: priority-fetch these segments now
 }
 /**
  * PresignRequest requests presigned PUT URLs and confirms previously uploaded segments.

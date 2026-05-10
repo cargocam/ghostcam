@@ -31,6 +31,17 @@ Public API (stable across minor versions):
   * OGG/Opus parsing — `read_ogg_opus_packets`, `OggError`. Async page
     reader for ffmpeg's `-f ogg -c:a libopus` output.
 
+  * Power-mode state — `PowerModeState`, `EffectiveMode`,
+    `ScheduleWindow`, `BatteryRule`. Two orthogonal axes
+    (live/standby/sleep × proactive/lazy) with schedule + battery-rule
+    overrides. Persisted to disk; reactive via `state.changed`
+    asyncio.Event.
+
+  * Segment index — `SegmentIndex`, `SegmentRow`. SQLite-backed
+    manifest covering every segment the camera has produced (uploaded,
+    local-only, evicted). Powers lazy-mode on-demand fetch, the
+    pending-confirm flush path, and tier-ordered eviction.
+
 Anything not re-exported here is daemon assembly (`capture`, `watcher`,
 `upload`, `live_ws`, `telemetry_poll`, `commands`, `provisioning`,
 `firmware`, `main`, `config`, `credentials`, `platform/`) — importable
@@ -56,13 +67,22 @@ from ghostcam.live_relay import (
 )
 from ghostcam.motion import MotionDetector
 from ghostcam.ogg_reader import OggError, read_ogg_opus_packets
+from ghostcam.power_mode import (
+    BatteryRule,
+    EffectiveMode,
+    PowerModeState,
+    ScheduleWindow,
+)
+from ghostcam.segment_index import SegmentIndex, SegmentRow
 from ghostcam.signing import build_signature_header
 
 __version__ = "0.1.0"
 
 __all__ = [
+    "BatteryRule",
     "Client",
     "DEFAULT_RING_SIZE",
+    "EffectiveMode",
     "Identity",
     "LiveFrame",
     "LiveRelay",
@@ -70,7 +90,11 @@ __all__ = [
     "MotionDetector",
     "NullLiveRelay",
     "OggError",
+    "PowerModeState",
     "S3UploadError",
+    "ScheduleWindow",
+    "SegmentIndex",
+    "SegmentRow",
     "__version__",
     "build_signature_header",
     "load_identity_if_exists",

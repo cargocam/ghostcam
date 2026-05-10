@@ -27,11 +27,25 @@ type TelemetryDatagram struct {
 	Alt *float32 `json:"alt,omitempty"`
 	// GPS fix quality: 0=none, 1=2D, 2=3D.
 	GPSFix *uint8 `json:"gps_fix,omitempty"`
+	// Currently effective power mode after schedule + battery rule
+	// resolution: "live" | "standby" | "sleep". Lets the server (and UI)
+	// see what the camera is actually doing right now, which can differ
+	// from the manually-set mode when a schedule or battery rule is
+	// overriding it.
+	PowerMode *string `json:"power_mode,omitempty"`
+	// Currently effective upload mode: "proactive" | "lazy". Same
+	// reasoning as PowerMode.
+	UploadMode *string `json:"upload_mode,omitempty"`
+	// Battery state-of-charge (0-100). Only set when a battery-sensing
+	// HAT (PiSugar / generic UPS) is wired up via
+	// platform/battery.py; absent on grid-powered cameras.
+	BatteryPct *uint8 `json:"battery_pct,omitempty"`
 }
 
 // Ptr helpers for building TelemetryDatagram literals.
-func PtrInt8(v int8) *int8       { return &v }
-func PtrUint8(v uint8) *uint8    { return &v }
-func PtrUint32(v uint32) *uint32 { return &v }
-func PtrFloat32(v float32) *float32 { return &v }
-func PtrFloat64(v float64) *float64 { return &v }
+func PtrStr(v string) *string         { return &v }
+func PtrInt8(v int8) *int8            { return &v }
+func PtrUint8(v uint8) *uint8         { return &v }
+func PtrUint32(v uint32) *uint32      { return &v }
+func PtrFloat32(v float32) *float32   { return &v }
+func PtrFloat64(v float64) *float64   { return &v }

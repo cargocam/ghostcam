@@ -21,8 +21,10 @@ import ghostcam
 
 # The contract. Sorted to make `git diff` reviewable.
 EXPECTED_API = {
+    "BatteryRule",
     "Client",
     "DEFAULT_RING_SIZE",
+    "EffectiveMode",
     "Identity",
     "LiveFrame",
     "LiveRelay",
@@ -30,7 +32,11 @@ EXPECTED_API = {
     "MotionDetector",
     "NullLiveRelay",
     "OggError",
+    "PowerModeState",
     "S3UploadError",
+    "ScheduleWindow",
+    "SegmentIndex",
+    "SegmentRow",
     "__version__",
     "build_signature_header",
     "load_identity_if_exists",

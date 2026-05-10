@@ -36,15 +36,28 @@ class TelemetryPollRequest(BaseModel):
     fw_version: str | None = Field(default=None)
 
 class TelemetryPollResponse(BaseModel):
-    """TelemetryPollResponse contains any pending commands for the camera."""
+    """TelemetryPollResponse contains any pending commands for the camera.
+
+WakeLive is set when a viewer is actively trying to watch a camera that
+is in standby mode (live WS not currently connected). The camera reads
+this flag and proactively opens its live WebSocket so WebRTC startup
+stays bounded by one telemetry-poll interval."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     commands: list[CameraCommand] | None = Field(default=None)
+    wake_live: bool | None = Field(default=None)
 
 class CameraCommand(BaseModel):
     """CameraCommand is a tagged union of commands the server can send to a camera.
-The Type field determines which other fields are populated."""
+The Type field determines which other fields are populated.
+
+Power-mode commands:
+  - set_power_mode      → PowerMode field      (live | standby | sleep)
+  - set_upload_mode     → UploadMode field     (proactive | lazy)
+  - set_schedule        → Schedule field       (JSON-encoded windows)
+  - set_battery_rules   → BatteryRules field   (JSON-encoded thresholds)
+  - upload_segments     → SegmentIDs field     (lazy-mode on-demand fetch)"""
 
     model_config = ConfigDict(populate_by_name=True)
 
@@ -53,6 +66,11 @@ The Type field determines which other fields are populated."""
     resolution: str | None = Field(default=None)
     ssid: str | None = Field(default=None)
     psk: str | None = Field(default=None)
+    power_mode: str | None = Field(default=None)
+    upload_mode: str | None = Field(default=None)
+    schedule: str | None = Field(default=None)
+    battery_rules: str | None = Field(default=None)
+    segment_ids: list[str] | None = Field(default=None)
 
 class PresignRequest(BaseModel):
     """PresignRequest requests presigned PUT URLs and confirms previously uploaded segments."""

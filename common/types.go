@@ -36,18 +36,38 @@ type TelemetryPollRequest struct {
 }
 
 // TelemetryPollResponse contains any pending commands for the camera.
+//
+// WakeLive is set when a viewer is actively trying to watch a camera that
+// is in standby mode (live WS not currently connected). The camera reads
+// this flag and proactively opens its live WebSocket so WebRTC startup
+// stays bounded by one telemetry-poll interval.
 type TelemetryPollResponse struct {
 	Commands []CameraCommand `json:"commands,omitempty"`
+	WakeLive bool            `json:"wake_live,omitempty"`
 }
 
 // CameraCommand is a tagged union of commands the server can send to a camera.
 // The Type field determines which other fields are populated.
+//
+// Power-mode commands:
+//   - set_power_mode      → PowerMode field      (live | standby | sleep)
+//   - set_upload_mode     → UploadMode field     (proactive | lazy)
+//   - set_schedule        → Schedule field       (JSON-encoded windows)
+//   - set_battery_rules   → BatteryRules field   (JSON-encoded thresholds)
+//   - upload_segments     → SegmentIDs field     (lazy-mode on-demand fetch)
 type CameraCommand struct {
 	Type       string `json:"type"`
 	Mode       string `json:"mode,omitempty"`       // set_recording_mode
 	Resolution string `json:"resolution,omitempty"` // set_resolution
 	SSID       string `json:"ssid,omitempty"`       // network_config, remove_network
 	PSK        string `json:"psk,omitempty"`        // network_config
+
+	// Power-mode commands.
+	PowerMode    string   `json:"power_mode,omitempty"`    // set_power_mode: "live" | "standby" | "sleep"
+	UploadMode   string   `json:"upload_mode,omitempty"`   // set_upload_mode: "proactive" | "lazy"
+	Schedule     string   `json:"schedule,omitempty"`      // set_schedule: JSON list of {window, power_mode, upload_mode}
+	BatteryRules string   `json:"battery_rules,omitempty"` // set_battery_rules: JSON list of {threshold_pct, power_mode, upload_mode}
+	SegmentIDs   []string `json:"segment_ids,omitempty"`   // upload_segments: priority-fetch these segments now
 }
 
 // PresignRequest requests presigned PUT URLs and confirms previously uploaded segments.
