@@ -418,6 +418,13 @@
 				{saving ? 'Saving...' : 'Save Settings'}
 			</Button>
 
+			{#if camera?.fw_version}
+				<div class="flex items-baseline justify-between text-xs text-muted-foreground border-t pt-3">
+					<span>Firmware</span>
+					<span class="font-mono">{camera.fw_version}</span>
+				</div>
+			{/if}
+
 			<div class="border-t pt-4 space-y-3">
 				{#if confirmingPurge}
 					<div>
