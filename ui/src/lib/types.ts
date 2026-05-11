@@ -22,6 +22,11 @@ export interface TelemetryData {
 	memory_mb?: number;
 	uptime_secs?: number;
 	gps?: GpsData;
+	/** Currently-effective power mode after schedule + battery rules. */
+	power_mode?: string;
+	upload_mode?: string;
+	/** 0–100. Only set when a battery-sensing HAT (GH #73) is wired up. */
+	battery_pct?: number;
 }
 
 /**

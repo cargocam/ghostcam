@@ -296,13 +296,25 @@
 		return mergeSpans(all);
 	});
 
-	// Selected camera only
+	// Selected camera only. We expose two sets of bars: ones backed by
+	// S3 ("uploaded") and ones the camera is holding locally
+	// ("local-only", lazy-mode). The render layers them with different
+	// styles so the user can see at a glance whether scrubbing to a
+	// region requires the camera to fetch.
 	let selectedBars = $derived.by(() => {
 		const id = cameraStore.selectedId;
 		if (!id) return [];
 		const coverage = scrubberStore.cameraCoverage.get(id);
 		if (!coverage) return [];
-		return mergeSpans(coverage);
+		return mergeSpans(coverage.filter((s) => s.uploaded ?? true));
+	});
+
+	let selectedLocalBars = $derived.by(() => {
+		const id = cameraStore.selectedId;
+		if (!id) return [];
+		const coverage = scrubberStore.cameraCoverage.get(id);
+		if (!coverage) return [];
+		return mergeSpans(coverage.filter((s) => !(s.uploaded ?? true)));
 	});
 
 	let hasSelection = $derived(cameraStore.selectedId != null && selectedBars.length > 0);
@@ -450,6 +462,16 @@
 				<div
 					class="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-primary"
 					style="left: {bar.left}%; width: {bar.width}%"
+				></div>
+			{/each}
+			<!-- Lazy-mode local-only bars: diagonal-stripe fill so the user
+				 sees "footage exists but a scrub here will need a fetch
+				 round-trip" before clicking. -->
+			{#each selectedLocalBars as bar}
+				<div
+					class="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-primary/40"
+					style="left: {bar.left}%; width: {bar.width}%; background-image: repeating-linear-gradient(45deg, transparent 0 3px, rgba(255,255,255,0.35) 3px 6px);"
+					title="Local-only: scrubbing here triggers the camera to upload on demand"
 				></div>
 			{/each}
 		{/if}

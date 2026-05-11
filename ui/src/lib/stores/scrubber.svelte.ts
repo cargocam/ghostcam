@@ -3,7 +3,12 @@ class ScrubberStore {
 	isLive = $state<boolean>(true);
 	/** Committed seek time (epoch seconds). Null = live. */
 	seekTarget = $state<number | null>(null);
-	cameraCoverage = $state<Map<string, { start: number; end: number; hasMotion?: boolean }[]>>(new Map());
+	cameraCoverage = $state<
+		Map<
+			string,
+			{ start: number; end: number; hasMotion?: boolean; uploaded?: boolean }[]
+		>
+	>(new Map());
 	/** Timestamps (epoch seconds) of motion events per camera, for timeline dots. */
 	motionTimestamps = $state<Map<string, number[]>>(new Map());
 	availableWindow = $state<{ start: number; end: number } | null>(null);
@@ -40,17 +45,40 @@ class ScrubberStore {
 		this.availableWindow = window;
 	}
 
-	setCameraCoverage(deviceId: string, segments: { start: number; end: number; hasMotion?: boolean }[]) {
+	setCameraCoverage(
+		deviceId: string,
+		segments: { start: number; end: number; hasMotion?: boolean; uploaded?: boolean }[],
+	) {
 		const GAP_THRESHOLD_SEC = 30;
 		const sorted = [...segments].sort((a, b) => a.start - b.start);
-		const merged: { start: number; end: number; hasMotion: boolean }[] = [];
+		// We track lazy-mode runs separately from uploaded runs so the
+		// timeline can render them with a different visual treatment.
+		// A run that mixes uploaded + local-only is rendered as
+		// uploaded=false so the user knows "scrub here will need a fetch
+		// round-trip."
+		const merged: {
+			start: number;
+			end: number;
+			hasMotion: boolean;
+			uploaded: boolean;
+		}[] = [];
 		for (const seg of sorted) {
 			const last = merged[merged.length - 1];
-			if (last && seg.start - last.end <= GAP_THRESHOLD_SEC) {
+			const segUploaded = seg.uploaded ?? true;
+			if (
+				last &&
+				seg.start - last.end <= GAP_THRESHOLD_SEC &&
+				last.uploaded === segUploaded
+			) {
 				last.end = Math.max(last.end, seg.end);
 				if (seg.hasMotion) last.hasMotion = true;
 			} else {
-				merged.push({ start: seg.start, end: seg.end, hasMotion: seg.hasMotion ?? false });
+				merged.push({
+					start: seg.start,
+					end: seg.end,
+					hasMotion: seg.hasMotion ?? false,
+					uploaded: segUploaded,
+				});
 			}
 		}
 		this.cameraCoverage = new Map(this.cameraCoverage).set(deviceId, merged);
