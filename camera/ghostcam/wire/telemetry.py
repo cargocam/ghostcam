@@ -26,6 +26,8 @@ Pointer fields implement omitempty — only non-nil fields are serialized."""
     power_mode: str | None = Field(default=None)
     upload_mode: str | None = Field(default=None)
     battery_pct: int | None = Field(default=None)
+    motion_segments_uploaded: int | None = Field(default=None)
+    motion_segments_skipped: int | None = Field(default=None)
 
 
 TelemetryDatagram.model_rebuild()

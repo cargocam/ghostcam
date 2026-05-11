@@ -40,6 +40,13 @@ type TelemetryDatagram struct {
 	// HAT (PiSugar / generic UPS) is wired up via
 	// platform/battery.py; absent on grid-powered cameras.
 	BatteryPct *uint8 `json:"battery_pct,omitempty"`
+	// Motion-gated upload counters since boot. Lets the field measure
+	// bandwidth savings on cameras running recording_mode='motion':
+	// uploaded counts segments that went to S3, skipped counts segments
+	// that were posted to local-manifest instead. Absent on cameras
+	// running recording_mode='constant' (always zero, no signal).
+	MotionSegmentsUploaded *uint32 `json:"motion_segments_uploaded,omitempty"`
+	MotionSegmentsSkipped  *uint32 `json:"motion_segments_skipped,omitempty"`
 }
 
 // Ptr helpers for building TelemetryDatagram literals.

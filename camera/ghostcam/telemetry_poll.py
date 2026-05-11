@@ -35,6 +35,7 @@ from pathlib import Path
 from ghostcam.client import Client
 from ghostcam.platform import read_telemetry
 from ghostcam.power_mode import PowerModeState
+from ghostcam.upload import flags as upload_flags
 from ghostcam.wire import CameraCommand
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,13 @@ async def run_telemetry_poll(
                 telemetry.battery_pct = pct
                 if power is not None:
                     power.set_battery_pct(pct)
+
+        # Motion-gated upload counters — only surface when the camera has
+        # actually skipped something, so the absence of the field on
+        # constant-mode cameras carries no signal.
+        if upload_flags.motion_segments_uploaded or upload_flags.motion_segments_skipped:
+            telemetry.motion_segments_uploaded = upload_flags.motion_segments_uploaded
+            telemetry.motion_segments_skipped = upload_flags.motion_segments_skipped
 
         try:
             response = await client.post_telemetry_full(telemetry)

@@ -75,6 +75,15 @@ export interface TelemetryDatagram {
    * platform/battery.py; absent on grid-powered cameras.
    */
   battery_pct?: number /* uint8 */;
+  /**
+   * Motion-gated upload counters since boot. Lets the field measure
+   * bandwidth savings on cameras running recording_mode='motion':
+   * uploaded counts segments that went to S3, skipped counts segments
+   * that were posted to local-manifest instead. Absent on cameras
+   * running recording_mode='constant' (always zero, no signal).
+   */
+  motion_segments_uploaded?: number /* uint32 */;
+  motion_segments_skipped?: number /* uint32 */;
 }
 
 //////////
