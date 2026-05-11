@@ -46,7 +46,7 @@ ENTRYPOINT ["camera-entrypoint.sh"]
 # --- Python camera builder ---
 FROM python:3.11-slim AS python-camera-builder
 WORKDIR /build
-COPY camera/pyproject.toml ./
+COPY camera/pyproject.toml camera/README.md ./
 COPY camera/ghostcam ./ghostcam
 RUN pip install --no-cache-dir build \
     && python -m build --wheel --outdir /wheels
