@@ -18,14 +18,38 @@ jobs:
           go-version-file: go.mod
       - run: go vet ./...
       - run: go build -o /tmp/ghostcam-server ./server
-      - run: go build -o /tmp/ghostcam-camera ./camera
+      - run: go build -o /tmp/ghostcam-camera ./legacy_camera
       - run: go test ./...
-      - name: Check api-types are in sync with Go source
+      - name: Check generated types are in sync with Go source
         run: |
           go generate ./...
-          git add --intent-to-add ui/src/lib/api-types/ 2>/dev/null || true
-          git diff --exit-code -- ui/src/lib/api-types/ \
-            || (echo "ui/src/lib/api-types/ is stale. Run 'go generate ./...' and commit." && exit 1)
+          git add --intent-to-add ui/src/lib/api-types/ camera/ghostcam/wire/ 2>/dev/null || true
+          git diff --exit-code -- ui/src/lib/api-types/ camera/ghostcam/wire/ \
+            || (echo "Generated wire types are stale. Run 'go generate ./...' and commit." && exit 1)
+
+  python:
+    runs-on: self-hosted
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: camera
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+      # Lockfile-driven — uv.lock pins every transitive dep so a
+      # remote-resolution change can't drift the daemon between
+      # commits. Bumping a dep is `uv lock --upgrade-package <name>`
+      # and a follow-up commit.
+      - run: uv sync --frozen --extra dev --extra real
+      - run: uv run ruff check .
+      - run: uv run mypy ghostcam
+      - run: uv run pytest -q
+      - run: uv build --wheel
 
   ui:
     runs-on: self-hosted

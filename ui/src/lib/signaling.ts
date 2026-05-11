@@ -363,7 +363,19 @@ export async function createCheckout(
 
 export async function updateCameraSettings(
 	deviceId: string,
-	update: { display_name?: string; notes?: string; resolution?: string; recording_mode?: string },
+	update: {
+		display_name?: string;
+		notes?: string;
+		resolution?: string;
+		recording_mode?: string;
+		power_mode?: string;
+		upload_mode?: string;
+		// schedule / battery_rules are JSON values; pass the parsed
+		// objects (or empty list to clear). Stringified by JSON.stringify
+		// on the whole body.
+		schedule?: unknown;
+		battery_rules?: unknown;
+	},
 ): Promise<void> {
 	const res = await fetch(`${API_BASE}/cameras/${encodeURIComponent(deviceId)}`, {
 		method: 'PATCH',

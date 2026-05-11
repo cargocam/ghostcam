@@ -40,6 +40,10 @@ func (a *App) ListCameras(w http.ResponseWriter, r *http.Request) {
 			Resolution:    c.Resolution,
 			RecordingMode: c.RecordingMode,
 			FwVersion:     derefStr(c.FwVersion),
+			PowerMode:     c.PowerMode,
+			UploadMode:    c.UploadMode,
+			Schedule:      c.Schedule,
+			BatteryRules:  c.BatteryRules,
 		}
 		if a.Redis != nil {
 			entry, _ := redis.QueryTelemetryLatest(ctx, a.Redis, c.DeviceID)
@@ -130,6 +134,10 @@ func (a *App) GetCamera(w http.ResponseWriter, r *http.Request) {
 		Resolution:    camera.Resolution,
 		RecordingMode: camera.RecordingMode,
 		FwVersion:     derefStr(camera.FwVersion),
+		PowerMode:     camera.PowerMode,
+		UploadMode:    camera.UploadMode,
+		Schedule:      camera.Schedule,
+		BatteryRules:  camera.BatteryRules,
 	})
 }
 
@@ -172,21 +180,57 @@ func (a *App) UpdateCamera(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if body.PowerMode != nil {
+		switch *body.PowerMode {
+		case "live", "standby", "sleep":
+		default:
+			writeError(w, http.StatusBadRequest, "power_mode must be live, standby, or sleep")
+			return
+		}
+	}
+	if body.UploadMode != nil {
+		switch *body.UploadMode {
+		case "proactive", "lazy":
+		default:
+			writeError(w, http.StatusBadRequest, "upload_mode must be proactive or lazy")
+			return
+		}
+	}
+
 	ctx := r.Context()
+
+	// schedule / battery_rules: convert json.RawMessage to *[]byte so the
+	// CameraUpdate carrier can distinguish "leave alone" (nil) from
+	// "clear" (empty bytes).
+	var schedPtr, batteryPtr *[]byte
+	if body.Schedule != nil {
+		sb := []byte(body.Schedule)
+		schedPtr = &sb
+	}
+	if body.BatteryRules != nil {
+		bb := []byte(body.BatteryRules)
+		batteryPtr = &bb
+	}
 
 	if err := a.DB.UpdateCamera(ctx, deviceID, &db.CameraUpdate{
 		DisplayName:   body.DisplayName,
 		Notes:         body.Notes,
 		Resolution:    body.Resolution,
 		RecordingMode: body.RecordingMode,
+		PowerMode:     body.PowerMode,
+		UploadMode:    body.UploadMode,
+		Schedule:      schedPtr,
+		BatteryRules:  batteryPtr,
 	}); err != nil {
 		slog.Error("update camera failed", "error", err)
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
 
-	// Enqueue commands for settings that require camera restart. These use
-	// the camera-server command contract in common.CameraCommand.
+	// Enqueue commands for settings that require camera-side state
+	// changes. Power-mode commands DON'T restart the daemon — the
+	// camera applies them in-process — so they're cheap to issue on
+	// every change.
 	if body.Resolution != nil && *body.Resolution != camera.Resolution {
 		cmd, _ := json.Marshal(common.CameraCommand{Type: "set_resolution", Resolution: *body.Resolution})
 		if err := a.DB.EnqueueCommand(ctx, deviceID, cmd); err != nil {
@@ -197,6 +241,30 @@ func (a *App) UpdateCamera(w http.ResponseWriter, r *http.Request) {
 		cmd, _ := json.Marshal(common.CameraCommand{Type: "set_recording_mode", Mode: *body.RecordingMode})
 		if err := a.DB.EnqueueCommand(ctx, deviceID, cmd); err != nil {
 			slog.Error("enqueue set_recording_mode failed", "error", err)
+		}
+	}
+	if body.PowerMode != nil && *body.PowerMode != camera.PowerMode {
+		cmd, _ := json.Marshal(common.CameraCommand{Type: "set_power_mode", PowerMode: *body.PowerMode})
+		if err := a.DB.EnqueueCommand(ctx, deviceID, cmd); err != nil {
+			slog.Error("enqueue set_power_mode failed", "error", err)
+		}
+	}
+	if body.UploadMode != nil && *body.UploadMode != camera.UploadMode {
+		cmd, _ := json.Marshal(common.CameraCommand{Type: "set_upload_mode", UploadMode: *body.UploadMode})
+		if err := a.DB.EnqueueCommand(ctx, deviceID, cmd); err != nil {
+			slog.Error("enqueue set_upload_mode failed", "error", err)
+		}
+	}
+	if body.Schedule != nil {
+		cmd, _ := json.Marshal(common.CameraCommand{Type: "set_schedule", Schedule: string(body.Schedule)})
+		if err := a.DB.EnqueueCommand(ctx, deviceID, cmd); err != nil {
+			slog.Error("enqueue set_schedule failed", "error", err)
+		}
+	}
+	if body.BatteryRules != nil {
+		cmd, _ := json.Marshal(common.CameraCommand{Type: "set_battery_rules", BatteryRules: string(body.BatteryRules)})
+		if err := a.DB.EnqueueCommand(ctx, deviceID, cmd); err != nil {
+			slog.Error("enqueue set_battery_rules failed", "error", err)
 		}
 	}
 

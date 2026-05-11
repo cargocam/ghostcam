@@ -18,6 +18,23 @@ export interface CameraState {
 	resolution: string;
 	recording_mode: string;
 	fw_version: string;
+	/** Manually-set power mode (live | standby | sleep). The currently
+	 * effective mode may differ if a schedule or battery rule overrides;
+	 * effectivePowerMode below carries that. */
+	power_mode: string;
+	upload_mode: string;
+	/** JSON-encoded list of {start, end, days, power_mode, upload_mode}.
+	 * undefined = no schedule set. */
+	schedule: string | undefined;
+	/** JSON-encoded list of {threshold_pct, power_mode, upload_mode}. */
+	battery_rules: string | undefined;
+	/** Currently-effective values from the latest telemetry datagram.
+	 * Distinct from power_mode/upload_mode so the UI can show
+	 * "manually live, schedule overriding to sleep right now." */
+	effectivePowerMode: string | undefined;
+	effectiveUploadMode: string | undefined;
+	/** 0–100, only set when a battery-sensing HAT is reporting (GH #73). */
+	battery_pct: number | undefined;
 }
 
 class CameraStore {
@@ -55,6 +72,14 @@ class CameraStore {
 				resolution: c.resolution ?? '720p',
 				recording_mode: c.recording_mode ?? 'never',
 				fw_version: c.fw_version ?? '',
+				power_mode: c.power_mode ?? 'live',
+				upload_mode: c.upload_mode ?? 'proactive',
+				schedule: c.schedule != null ? JSON.stringify(c.schedule) : undefined,
+				battery_rules:
+					c.battery_rules != null ? JSON.stringify(c.battery_rules) : undefined,
+				effectivePowerMode: t?.power_mode ?? undefined,
+				effectiveUploadMode: t?.upload_mode ?? undefined,
+				battery_pct: t?.battery_pct ?? undefined,
 			};
 		});
 	}
@@ -69,6 +94,9 @@ class CameraStore {
 		cam.telemetry = data;
 		cam.lastServerTs = serverTs;
 		cam.online = Date.now() - serverTs < ONLINE_STALE_MS;
+		if (data.power_mode != null) cam.effectivePowerMode = data.power_mode;
+		if (data.upload_mode != null) cam.effectiveUploadMode = data.upload_mode;
+		if (data.battery_pct != null) cam.battery_pct = data.battery_pct;
 	}
 
 	/**

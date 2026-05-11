@@ -63,6 +63,12 @@ type ServerConfig struct {
 	// Linear team UUID that support tickets should be created in.
 	// Required when LinearAPIKey is set.
 	LinearTeamID string
+	// pprof listener address. Empty = disabled. When set (e.g.
+	// "127.0.0.1:6060"), the server spawns a second HTTP listener that
+	// serves net/http/pprof. Bind to loopback only — the handlers expose
+	// stack traces, allocations, and goroutine state with no auth. Reach
+	// it via SSH + curl or `fly proxy 6060:127.0.0.1:6060`.
+	PprofAddr string
 }
 
 // secureCookies returns true when the PublicURL is served over HTTPS.
@@ -136,6 +142,8 @@ func LoadConfig() (*ServerConfig, error) {
 	cfg.AnthropicAPIKey = os.Getenv("ANTHROPIC_API_KEY")
 	cfg.LinearAPIKey = os.Getenv("LINEAR_API_KEY")
 	cfg.LinearTeamID = os.Getenv("LINEAR_TEAM_ID")
+
+	cfg.PprofAddr = os.Getenv("GHOSTCAM_PPROF_ADDR")
 
 	return cfg, nil
 }

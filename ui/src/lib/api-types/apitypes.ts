@@ -102,6 +102,16 @@ export interface CameraResponse {
   recording_mode: string;
   fw_version?: string;
   telemetry?: TelemetryEntry;
+  /**
+   * PowerMode / UploadMode are the manually-set values from the
+   * cameras row. The camera's actual effective mode (which may differ
+   * when a schedule or battery rule is overriding) is reported back
+   * via the telemetry datagram (TelemetryEntry.PowerMode etc).
+   */
+  power_mode: string;
+  upload_mode: string;
+  schedule?: any /* json.RawMessage */;
+  battery_rules?: any /* json.RawMessage */;
 }
 /**
  * EnrollResponse is the body of POST /api/v1/cameras — a one-time
@@ -113,12 +123,24 @@ export interface EnrollResponse {
 }
 /**
  * UpdateCameraRequest is the body of PATCH /api/v1/cameras/{id}.
+ * Power-mode fields:
+ *   - PowerMode   — "live" | "standby" | "sleep"
+ *   - UploadMode  — "proactive" | "lazy"
+ *   - Schedule    — list of {start, end, days, power_mode, upload_mode}.
+ *                   Send an empty list to clear an existing schedule.
+ *   - BatteryRules — list of {threshold_pct, power_mode, upload_mode}.
+ *                    Send an empty list to clear.
+ * All four are optional; sending `null` leaves the existing value alone.
  */
 export interface UpdateCameraRequest {
   display_name?: string;
   notes?: string;
   resolution?: string;
   recording_mode?: string;
+  power_mode?: string;
+  upload_mode?: string;
+  schedule?: any /* json.RawMessage */;
+  battery_rules?: any /* json.RawMessage */;
 }
 /**
  * DeleteFootageResponse is the body of DELETE
@@ -152,6 +174,19 @@ export interface TelemetryEntry {
   lon?: number /* float64 */;
   alt?: number /* float32 */;
   gps_fix?: number /* uint8 */;
+  /**
+   * PowerMode / UploadMode are what the camera is CURRENTLY effective
+   * at (after schedule + battery-rule resolution), which can differ
+   * from the manually-set values on the cameras row. UI shows both
+   * so the operator sees what their schedule is doing.
+   */
+  power_mode?: string;
+  upload_mode?: string;
+  /**
+   * BatteryPct is 0–100 only when a battery-sensing HAT is wired up
+   * (see GH issue #73). nil on grid-powered cameras.
+   */
+  battery_pct?: number /* uint8 */;
 }
 /**
  * TelemetryRangeResponse is the body of GET /api/v1/telemetry/{id}?from=&to=.
@@ -194,6 +229,12 @@ export interface CoverageSegment {
   start_ms: number /* uint64 */;
   end_ms: number /* uint64 */;
   has_motion: boolean;
+  /**
+   * UploadedToS3 distinguishes uploaded vs lazy-mode local-only
+   * segments so the UI can render them differently (hatched fill,
+   * "fetching…" state on scrub).
+   */
+  uploaded_to_s3: boolean;
 }
 /**
  * CoverageResponse is the body of GET /hls/{id}/coverage.

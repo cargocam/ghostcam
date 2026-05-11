@@ -59,6 +59,7 @@ Config is loaded once at startup — there is no runtime reload endpoint. To app
 | `ANTHROPIC_API_KEY` | _(none)_ | Claude API key for support-email triage classification. When empty, the raw email subject + body is posted to Linear as-is. |
 | `LINEAR_API_KEY` | _(none)_ | Linear personal API key for creating support tickets. When empty, the Linear step is a logging no-op. |
 | `LINEAR_TEAM_ID` | _(none)_ | Linear team UUID that support tickets are created in. Required when `LINEAR_API_KEY` is set. |
+| `GHOSTCAM_PPROF_ADDR` | _(none)_ | Address for the optional `net/http/pprof` listener (e.g. `127.0.0.1:6060`). Off by default. **Bind to loopback only** — the handlers are unauthenticated. See `docs/debugging.md` § "Server memory / RSS investigation". |
 
 ### Camera
 
@@ -77,7 +78,7 @@ Config is loaded once at startup — there is no runtime reload endpoint. To app
 | `GHOSTCAM_VIDEO_BITRATE` | _(from profile)_ | Bitrate in bps |
 | `GHOSTCAM_VIDEO_KEYFRAME_INTERVAL` | _(from profile)_ | Keyframe interval in frames |
 | `GHOSTCAM_PROVISION_TOKEN` | _(none)_ | Provision token for headless provisioning |
-| `GHOSTCAM_RECORDING_MODE` | `never` | Default recording mode when `{dataDir}/recording_mode` is absent: `constant`, `motion`, or `never`. Overridden by the server's `set_recording_mode` command once issued. Used by the test stack to opt new cameras into continuous recording without a round-trip. |
+| `GHOSTCAM_RECORDING_MODE` | `never` | Default recording mode when `{dataDir}/recording_mode` is absent. Three values: `constant` uploads every segment to S3 immediately. `motion` records every segment but only uploads motion-tagged ones to S3 — non-motion segments stay on the camera and the server learns of them via the local-manifest endpoint, so the timeline shows their gap and a viewer scrub triggers on-demand upload via the `upload_segments` command (closes #75). `motion` is the cellular-friendly mode; per-camera data usage drops by 1–2 orders of magnitude on quiet scenes. `never` disables recording entirely (live viewing still works). Overridden by the server's `set_recording_mode` command once issued. |
 
 ## Billing Tiers
 

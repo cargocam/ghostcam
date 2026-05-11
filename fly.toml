@@ -9,6 +9,14 @@ primary_region = "sjc"
   source = "ghostcam_data"
   destination = "/var/ghostcam"
 
+[env]
+  # Soft cap that nudges Go's GC to return pages to the OS more
+  # aggressively as RSS approaches the limit. Sized to leave headroom
+  # for ~40 MiB steady-state + bounded argon2 spikes (2 × 64 MiB via
+  # the auth-package semaphore) inside a 256 MiB Fly machine. See
+  # GH #56.
+  GOMEMLIMIT = "200MiB"
+
 [http_service]
   internal_port = 3000
   force_https = true

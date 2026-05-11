@@ -19,6 +19,8 @@
 //     viewer-server surface. The two do not overlap by design.
 package apitypes
 
+import "encoding/json"
+
 // ====================================================================
 // Auth
 // ====================================================================
@@ -95,6 +97,14 @@ type CameraResponse struct {
 	RecordingMode string          `json:"recording_mode"`
 	FwVersion     string          `json:"fw_version,omitempty"`
 	Telemetry     *TelemetryEntry `json:"telemetry,omitempty"`
+	// PowerMode / UploadMode are the manually-set values from the
+	// cameras row. The camera's actual effective mode (which may differ
+	// when a schedule or battery rule is overriding) is reported back
+	// via the telemetry datagram (TelemetryEntry.PowerMode etc).
+	PowerMode    string          `json:"power_mode"`
+	UploadMode   string          `json:"upload_mode"`
+	Schedule     json.RawMessage `json:"schedule,omitempty"`
+	BatteryRules json.RawMessage `json:"battery_rules,omitempty"`
 }
 
 // EnrollResponse is the body of POST /api/v1/cameras — a one-time
@@ -105,11 +115,26 @@ type EnrollResponse struct {
 }
 
 // UpdateCameraRequest is the body of PATCH /api/v1/cameras/{id}.
+//
+// Power-mode fields:
+//
+//   - PowerMode   — "live" | "standby" | "sleep"
+//   - UploadMode  — "proactive" | "lazy"
+//   - Schedule    — list of {start, end, days, power_mode, upload_mode}.
+//                   Send an empty list to clear an existing schedule.
+//   - BatteryRules — list of {threshold_pct, power_mode, upload_mode}.
+//                    Send an empty list to clear.
+//
+// All four are optional; sending `null` leaves the existing value alone.
 type UpdateCameraRequest struct {
-	DisplayName   *string `json:"display_name,omitempty"`
-	Notes         *string `json:"notes,omitempty"`
-	Resolution    *string `json:"resolution,omitempty"`
-	RecordingMode *string `json:"recording_mode,omitempty"`
+	DisplayName   *string         `json:"display_name,omitempty"`
+	Notes         *string         `json:"notes,omitempty"`
+	Resolution    *string         `json:"resolution,omitempty"`
+	RecordingMode *string         `json:"recording_mode,omitempty"`
+	PowerMode     *string         `json:"power_mode,omitempty"`
+	UploadMode    *string         `json:"upload_mode,omitempty"`
+	Schedule      json.RawMessage `json:"schedule,omitempty"`
+	BatteryRules  json.RawMessage `json:"battery_rules,omitempty"`
 }
 
 // DeleteFootageResponse is the body of DELETE
@@ -145,6 +170,15 @@ type TelemetryEntry struct {
 	Lon      *float64 `json:"lon,omitempty"`
 	Alt      *float32 `json:"alt,omitempty"`
 	GPSFix   *uint8   `json:"gps_fix,omitempty"`
+	// PowerMode / UploadMode are what the camera is CURRENTLY effective
+	// at (after schedule + battery-rule resolution), which can differ
+	// from the manually-set values on the cameras row. UI shows both
+	// so the operator sees what their schedule is doing.
+	PowerMode  *string `json:"power_mode,omitempty"`
+	UploadMode *string `json:"upload_mode,omitempty"`
+	// BatteryPct is 0–100 only when a battery-sensing HAT is wired up
+	// (see GH issue #73). nil on grid-powered cameras.
+	BatteryPct *uint8 `json:"battery_pct,omitempty"`
 }
 
 // TelemetryRangeResponse is the body of GET /api/v1/telemetry/{id}?from=&to=.
@@ -190,6 +224,10 @@ type CoverageSegment struct {
 	StartMs   uint64 `json:"start_ms"`
 	EndMs     uint64 `json:"end_ms"`
 	HasMotion bool   `json:"has_motion"`
+	// UploadedToS3 distinguishes uploaded vs lazy-mode local-only
+	// segments so the UI can render them differently (hatched fill,
+	// "fetching…" state on scrub).
+	UploadedToS3 bool `json:"uploaded_to_s3"`
 }
 
 // CoverageResponse is the body of GET /hls/{id}/coverage.

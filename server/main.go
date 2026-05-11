@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	_ "net/http/pprof" // registers /debug/pprof/* on http.DefaultServeMux; served only on PprofAddr.
 	"os"
 	"os/signal"
 	"strings"
@@ -171,6 +172,25 @@ func run() error {
 		}
 	}()
 
+	// Optional pprof listener on a SEPARATE port. Off by default; enable
+	// by setting GHOSTCAM_PPROF_ADDR=127.0.0.1:6060 (loopback only — the
+	// handlers are unauthenticated). Reach it via `fly ssh console` +
+	// curl, or `fly proxy 6060:127.0.0.1:6060`. Used to investigate
+	// per-camera RSS — see docs/debugging.md.
+	if cfg.PprofAddr != "" {
+		go func() {
+			slog.Info("pprof listening", "addr", cfg.PprofAddr)
+			pprofSrv := &http.Server{
+				Addr:              cfg.PprofAddr,
+				Handler:           http.DefaultServeMux,
+				ReadHeaderTimeout: 5 * time.Second,
+			}
+			if err := pprofSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				slog.Warn("pprof server exited", "error", err)
+			}
+		}()
+	}
+
 	select {
 	case err := <-errCh:
 		return fmt.Errorf("HTTP server: %w", err)
@@ -230,6 +250,7 @@ func (a *App) router() http.Handler {
 		r.Use(a.cameraAuth)
 		r.Post("/api/v1/cameras/{deviceID}/presign", a.Presign)
 		r.Post("/api/v1/cameras/{deviceID}/telemetry", a.PostTelemetry)
+		r.Post("/api/v1/cameras/{deviceID}/local-manifest", a.PostLocalManifest)
 		r.Get("/api/v1/cameras/{deviceID}/live", a.CameraLiveWS)
 	})
 

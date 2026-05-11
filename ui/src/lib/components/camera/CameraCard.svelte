@@ -244,6 +244,23 @@
 					<span>CPU {(camera.telemetry.cpu_percent ?? 0).toFixed(0)}%</span>
 					<span>{(camera.telemetry.memory_mb ?? 0).toFixed(0)}MB</span>
 					<span>{(camera.telemetry.temp_celsius ?? 0).toFixed(0)}&deg;C</span>
+					{#if camera.battery_pct != null}
+						<span
+							class:text-red-400={camera.battery_pct < 20}
+							class:text-amber-300={camera.battery_pct >= 20 && camera.battery_pct < 50}
+							title="Battery"
+						>
+							🔋{camera.battery_pct}%
+						</span>
+					{/if}
+					{#if camera.effectivePowerMode && camera.effectivePowerMode !== 'live'}
+						<span
+							class="rounded px-1 bg-white/15"
+							title="Effective power mode (schedule or battery rule may be overriding the manual setting)"
+						>
+							{camera.effectivePowerMode}
+						</span>
+					{/if}
 				</div>
 			{/if}
 		</div>

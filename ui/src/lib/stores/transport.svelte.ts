@@ -88,6 +88,9 @@ class TransportStore {
 						lon?: number;
 						alt?: number;
 						gps_fix?: number;
+						power_mode?: string;
+						upload_mode?: string;
+						battery_pct?: number;
 					};
 				};
 				const t = data.telemetry;
@@ -99,6 +102,9 @@ class TransportStore {
 					gps: t.lat != null && t.lon != null
 						? { latitude: t.lat, longitude: t.lon, alt: t.alt }
 						: undefined,
+					power_mode: t.power_mode,
+					upload_mode: t.upload_mode,
+					battery_pct: t.battery_pct,
 				}, t.server_ts);
 			} catch {
 				// Ignore malformed events
@@ -174,6 +180,10 @@ class TransportStore {
 				start: s.start_ms / 1000,
 				end: s.end_ms / 1000,
 				hasMotion: s.has_motion ?? false,
+				// Server omits `uploaded_to_s3` for historical rows that
+				// default TRUE; explicit undefined → true via the store's
+				// fallback. Lazy-mode rows explicitly carry false.
+				uploaded: s.uploaded_to_s3 ?? true,
 			}));
 			scrubberStore.setCameraCoverage(deviceId, segments);
 			this.updateAvailableWindow();

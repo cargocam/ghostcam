@@ -7,6 +7,10 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// InsertSegments inserts a batch of segment metadata records. Segments
+// inserted here are assumed UPLOADED to S3 (`uploaded_to_s3 = TRUE`) —
+// the presign confirm path uses this. For lazy-mode local-only segments
+// see `InsertLocalSegments`.
 func (db *DB) InsertSegments(ctx context.Context, segments []SegmentRecord) error {
 	if len(segments) == 0 {
 		return nil
@@ -15,10 +19,13 @@ func (db *DB) InsertSegments(ctx context.Context, segments []SegmentRecord) erro
 	batch := &pgx.Batch{}
 	for _, s := range segments {
 		batch.Queue(
-			`INSERT INTO segments (segment_id, device_id, s3_key, start_ts, end_ts, size_bytes, resolution, created_at, has_motion)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-			 ON CONFLICT (segment_id) DO NOTHING`,
-			s.SegmentID, s.DeviceID, s.S3Key, int64(s.StartTS), int64(s.EndTS), int64(s.SizeBytes), s.Resolution, int64(s.CreatedAt), s.HasMotion)
+			`INSERT INTO segments (segment_id, device_id, s3_key, start_ts, end_ts,
+			                       size_bytes, resolution, created_at, has_motion, uploaded_to_s3)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE)
+			 ON CONFLICT (segment_id) DO UPDATE SET uploaded_to_s3 = TRUE`,
+			s.SegmentID, s.DeviceID, s.S3Key, int64(s.StartTS), int64(s.EndTS),
+			int64(s.SizeBytes), s.Resolution, int64(s.CreatedAt), s.HasMotion,
+		)
 	}
 
 	br := db.pool.SendBatch(ctx, batch)
@@ -30,6 +37,80 @@ func (db *DB) InsertSegments(ctx context.Context, segments []SegmentRecord) erro
 		}
 	}
 	return nil
+}
+
+// InsertLocalSegments records lazy-mode segments the camera produced
+// locally but has NOT yet uploaded to S3 (`uploaded_to_s3 = FALSE`).
+// The viewer's timeline still shows them so the user knows footage
+// exists; on scrub the server queues an `upload_segments` command for
+// the camera so the actual bytes land in S3 on demand.
+//
+// ON CONFLICT preserves a row's uploaded_to_s3 state: if a segment is
+// re-reported as local after it's already been uploaded (unusual but
+// possible after a re-provision), we keep the uploaded_to_s3 = TRUE
+// state.
+func (db *DB) InsertLocalSegments(ctx context.Context, segments []SegmentRecord) error {
+	if len(segments) == 0 {
+		return nil
+	}
+
+	batch := &pgx.Batch{}
+	for _, s := range segments {
+		batch.Queue(
+			`INSERT INTO segments (segment_id, device_id, s3_key, start_ts, end_ts,
+			                       size_bytes, resolution, created_at, has_motion, uploaded_to_s3)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, FALSE)
+			 ON CONFLICT (segment_id) DO NOTHING`,
+			s.SegmentID, s.DeviceID, s.S3Key, int64(s.StartTS), int64(s.EndTS),
+			int64(s.SizeBytes), s.Resolution, int64(s.CreatedAt), s.HasMotion,
+		)
+	}
+
+	br := db.pool.SendBatch(ctx, batch)
+	defer br.Close()
+
+	for range segments {
+		if _, err := br.Exec(); err != nil {
+			return fmt.Errorf("insert local segment: %w", err)
+		}
+	}
+	return nil
+}
+
+// ListLocalOnlySegmentIDs returns segment IDs that overlap the
+// [fromTS, toTS] range and are still local-only (not yet at S3).
+// Used by the scrub-driven `upload_segments` command path.
+func (db *DB) ListLocalOnlySegmentIDs(
+	ctx context.Context, deviceID string, fromTS, toTS uint64, limit int,
+) ([]string, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := db.pool.Query(ctx,
+		`SELECT segment_id
+		 FROM segments
+		 WHERE device_id = $1
+		   AND uploaded_to_s3 = FALSE
+		   AND start_ts < $3
+		   AND end_ts > $2
+		 ORDER BY start_ts
+		 LIMIT $4`,
+		deviceID, int64(fromTS), int64(toTS), limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list local-only segments: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scanning local-only segment id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
 }
 
 // ListSegments returns segments for the given device in the [fromTS, toTS] window.
@@ -83,7 +164,7 @@ func (db *DB) ListSegmentCoverage(ctx context.Context, deviceID string, fromTS, 
 		}
 	}
 	rows, err := db.pool.Query(ctx,
-		`SELECT segment_id, start_ts, end_ts, has_motion
+		`SELECT segment_id, start_ts, end_ts, has_motion, uploaded_to_s3
 		 FROM segments
 		 WHERE device_id = $1 AND start_ts >= $2 AND start_ts <= $3
 		 ORDER BY start_ts
@@ -98,7 +179,7 @@ func (db *DB) ListSegmentCoverage(ctx context.Context, deviceID string, fromTS, 
 	for rows.Next() {
 		var r CoverageRecord
 		var startTS, endTS int64
-		if err := rows.Scan(&r.SegmentID, &startTS, &endTS, &r.HasMotion); err != nil {
+		if err := rows.Scan(&r.SegmentID, &startTS, &endTS, &r.HasMotion, &r.UploadedToS3); err != nil {
 			return nil, fmt.Errorf("scanning coverage: %w", err)
 		}
 		r.StartTS = uint64(startTS)

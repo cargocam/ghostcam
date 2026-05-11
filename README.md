@@ -77,16 +77,20 @@ Both `camera/` and `server/` are top-level `package main` — no `cmd/` wrapper.
 
 ```bash
 go build -o ghostcam-server ./server
-go build -o ghostcam-camera ./camera
 
-# Cross-compile camera for Pi (no CGO, no sysroot)
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./camera
+# Build the Python camera wheel
+cd camera && python -m build --wheel    # output: dist/ghostcam-*.whl
 
-# Regenerate TypeScript types after editing common/ or server/apitypes/
+# Legacy Go camera (deprecated; removed by the cutover commit)
+go build -o ghostcam-camera ./legacy_camera
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./legacy_camera
+
+# Regenerate TypeScript + pydantic types after editing common/ or server/apitypes/
 go generate ./...
 
 # Tests
 go test ./...
+cd camera && pytest -q           # 71 unit + parity tests for the Python camera
 cd ui && bun run test            # vitest unit tests
 cd ui && bun run test:browser    # playwright smoke (backend mocked)
 cd e2e && bun run test           # real end-to-end against compose stack

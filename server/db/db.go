@@ -150,6 +150,20 @@ type CameraRecord struct {
 	Resolution    string
 	RecordingMode string
 	FwVersion     *string
+	// PowerMode is one of "live" | "standby" | "sleep". See
+	// camera/ghostcam/power_mode.py for the camera-side state machine.
+	PowerMode string
+	// UploadMode is one of "proactive" | "lazy". Motion segments still
+	// upload immediately under lazy; non-motion wait for an
+	// `upload_segments` command piggy-backed on the next telemetry poll.
+	UploadMode string
+	// Schedule is the JSON-encoded list of {window, power_mode, upload_mode}
+	// objects. nil = no schedule. See power_mode.ScheduleWindow.
+	Schedule []byte
+	// BatteryRules is the JSON-encoded list of {threshold_pct, power_mode,
+	// upload_mode} objects. nil = no battery-driven overrides. Requires a
+	// battery-sensing HAT to be useful (see GH issue #73).
+	BatteryRules []byte
 }
 
 // CameraUpdate holds optional fields for updating a camera.
@@ -158,6 +172,13 @@ type CameraUpdate struct {
 	Notes         *string
 	Resolution    *string
 	RecordingMode *string
+	PowerMode     *string
+	UploadMode    *string
+	// Schedule / BatteryRules are pointers so the caller can distinguish
+	// "don't touch" (nil pointer) from "clear it" (non-nil pointer with
+	// empty `[]byte`). The latter wipes the column to NULL.
+	Schedule     *[]byte
+	BatteryRules *[]byte
 }
 
 // UserRecord is a user from the database.
@@ -205,10 +226,11 @@ type SegmentRecord struct {
 
 // CoverageRecord is a lightweight segment record for timeline coverage.
 type CoverageRecord struct {
-	SegmentID string
-	StartTS   uint64
-	EndTS     uint64
-	HasMotion bool
+	SegmentID    string
+	StartTS      uint64
+	EndTS        uint64
+	HasMotion    bool
+	UploadedToS3 bool
 }
 
 // SubscriptionRecord is a subscription from the database.

@@ -56,12 +56,50 @@ export interface TelemetryDatagram {
    * GPS fix quality: 0=none, 1=2D, 2=3D.
    */
   gps_fix?: number /* uint8 */;
+  /**
+   * Currently effective power mode after schedule + battery rule
+   * resolution: "live" | "standby" | "sleep". Lets the server (and UI)
+   * see what the camera is actually doing right now, which can differ
+   * from the manually-set mode when a schedule or battery rule is
+   * overriding it.
+   */
+  power_mode?: string;
+  /**
+   * Currently effective upload mode: "proactive" | "lazy". Same
+   * reasoning as PowerMode.
+   */
+  upload_mode?: string;
+  /**
+   * Battery state-of-charge (0-100). Only set when a battery-sensing
+   * HAT (PiSugar / generic UPS) is wired up via
+   * platform/battery.py; absent on grid-powered cameras.
+   */
+  battery_pct?: number /* uint8 */;
+  /**
+   * Motion-gated upload counters since boot. Lets the field measure
+   * bandwidth savings on cameras running recording_mode='motion':
+   * uploaded counts segments that went to S3, skipped counts segments
+   * that were posted to local-manifest instead. Absent on cameras
+   * running recording_mode='constant' (always zero, no signal).
+   */
+  motion_segments_uploaded?: number /* uint32 */;
+  motion_segments_skipped?: number /* uint32 */;
 }
 
 //////////
 // source: types.go
 /*
 Package common defines shared request/response types for the camera-server HTTP API.
+
+Both consumers of this package (the Go server and the Python camera) get
+their types via codegen from these struct definitions:
+  - tygo emits TypeScript to ui/src/lib/api-types/ (driven by the
+    directive in server/apitypes/apitypes.go).
+  - tools/pydanticgen emits pydantic v2 models to
+    camera/ghostcam/wire/ (driven by the directive below).
+
+Both run together as part of `go generate ./...`. CI fails if either
+generated tree is stale.
 */
 
 /**
@@ -91,13 +129,24 @@ export interface TelemetryPollRequest {
 }
 /**
  * TelemetryPollResponse contains any pending commands for the camera.
+ * WakeLive is set when a viewer is actively trying to watch a camera that
+ * is in standby mode (live WS not currently connected). The camera reads
+ * this flag and proactively opens its live WebSocket so WebRTC startup
+ * stays bounded by one telemetry-poll interval.
  */
 export interface TelemetryPollResponse {
   commands?: CameraCommand[];
+  wake_live?: boolean;
 }
 /**
  * CameraCommand is a tagged union of commands the server can send to a camera.
  * The Type field determines which other fields are populated.
+ * Power-mode commands:
+ *   - set_power_mode      → PowerMode field      (live | standby | sleep)
+ *   - set_upload_mode     → UploadMode field     (proactive | lazy)
+ *   - set_schedule        → Schedule field       (JSON-encoded windows)
+ *   - set_battery_rules   → BatteryRules field   (JSON-encoded thresholds)
+ *   - upload_segments     → SegmentIDs field     (lazy-mode on-demand fetch)
  */
 export interface CameraCommand {
   type: string;
@@ -105,6 +154,14 @@ export interface CameraCommand {
   resolution?: string; // set_resolution
   ssid?: string; // network_config, remove_network
   psk?: string; // network_config
+  /**
+   * Power-mode commands.
+   */
+  power_mode?: string; // set_power_mode: "live" | "standby" | "sleep"
+  upload_mode?: string; // set_upload_mode: "proactive" | "lazy"
+  schedule?: string; // set_schedule: JSON list of {window, power_mode, upload_mode}
+  battery_rules?: string; // set_battery_rules: JSON list of {threshold_pct, power_mode, upload_mode}
+  segment_ids?: string[]; // upload_segments: priority-fetch these segments now
 }
 /**
  * PresignRequest requests presigned PUT URLs and confirms previously uploaded segments.
@@ -139,6 +196,21 @@ export interface PresignResponse {
   urls: PresignedUrl[];
   init_url?: PresignedUrl;
   storage_capped?: boolean;
+}
+/**
+ * LocalManifestRequest is the body of
+ * POST /api/v1/cameras/{deviceID}/local-manifest. A lazy-mode camera
+ * posts a manifest of segments it has on disk but has NOT yet uploaded
+ * to S3, so the server's timeline / coverage bar can show the user
+ * that footage exists even if it's not fetchable until they scrub to
+ * it. On scrub, the server queues an `upload_segments` command which
+ * pulls the bytes on demand.
+ * Manifest entries are inserted with `uploaded_to_s3 = FALSE`. When
+ * the camera later uploads a segment (because of a scrub-triggered
+ * command), the presign-confirm path flips it to TRUE.
+ */
+export interface LocalManifestRequest {
+  segments: UploadedSegment[];
 }
 /**
  * QRPayload is the JSON shape encoded inside a provisioning QR code. The

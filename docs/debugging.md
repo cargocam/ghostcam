@@ -3,8 +3,8 @@
 - **Telemetry API 503**: `GHOSTCAM_REDIS_URL` is unset or empty -- Redis is required for telemetry history and SSE events.
 - **Camera not provisioning**: Check the provision token is valid and not expired. Camera POSTs to `POST /api/v1/cameras/provision`. Rate limited to 10/min per IP. Provisioning resolves inputs in order: CLI/env → flat files → QR scan (5-min timeout).
 - **Camera unclaimed**: Provision via QR code in the web UI (`GET /api/v1/cameras/enroll/qr`) or API (`POST /api/v1/cameras` to get a provision token). Pre-provision by writing `api_key`, `device_id`, `server_url` files to the camera's data dir.
-- **QR scan not starting**: QR scanning requires `rpicam-still` on PATH and only runs on real Pi hardware (`linux && !synthetic` build). Check logs for "scanning for provisioning QR code" — if absent, `rpicam-still` wasn't found (returns graceful no-op). The scan captures 640x480 YUV420 frames at 2 fps for up to 5 minutes.
-- **QR scan not decoding**: Ensure adequate lighting and hold the QR code 15–30 cm from the lens. The decoder (gozxing) works on the luminance (Y) plane only — high contrast helps. If the QR contains non-JSON or is missing the `s` (server) or `t` (token) fields, the camera logs "QR decoded but not valid JSON" or "QR payload missing server or token" at debug level.
+- **QR scan not starting**: QR scanning requires `rpicam-still` on PATH AND `libzbar0` system library + `pyzbar`/`Pillow` Python bindings (the `[real]` install extra). Synthetic platforms (Docker, dev machines, `GHOSTCAM_SYNTHETIC=1`) skip the QR path entirely. Check logs for "scanning for provisioning QR code" — if absent, the camera logged "rpicam-still not on PATH, skipping QR scan" or "pyzbar/Pillow not installed; install ghostcam[real] for QR support". The scan captures 640x480 YUV420 frames at 2 fps for up to 5 minutes.
+- **QR scan not decoding**: Ensure adequate lighting and hold the QR code 15–30 cm from the lens. The decoder (pyzbar / libzbar0) works on the luminance (Y) plane only — high contrast helps. If the QR contains non-JSON or is missing the `s` (server) or `t` (token) fields, the camera silently keeps scanning. Tail the camera with `GHOSTCAM_LOG_LEVEL=DEBUG` to see per-frame decode failures.
 - **Capture pipeline crashing**: Pipeline auto-restarts with exponential backoff (1s to 30s cap). Crash counter with 5-minute stability threshold. Check for ffmpeg availability and rpicam-vid on real hardware.
 - **Segment filename collisions**: ffmpeg uses `-segment_start_number` based on existing `.ts` file count to avoid overwriting segments on camera restart.
 - **GPS not working**: On Linux, the camera connects to gpsd on `localhost:2947`. Ensure gpsd is running and the SIM7600G-H modem is connected. Falls back to synthetic GPS in Docker/dev (deterministic from device serial hash).
@@ -22,3 +22,20 @@
 - **Firmware OTA**: Admin uploads firmware via `POST /api/v1/admin/firmware` (stored in Tigris, version published via Redis). Cameras check `GET /api/v1/firmware/latest` on startup and auto-update via staged binary + systemd `ExecStartPre` swap. Firmware SHA256 verification (server stores hash, camera verifies).
 - **Pre-encoded test loop**: Place `test-loop.mp4` in the camera's data dir for low-CPU test mode (~5% vs 49% with testsrc2 encoding). The camera uses `ffmpeg -stream_loop` to segment it continuously.
 - **Unenroll script**: `pi.sh unenroll` clears credential files (`api_key`, `device_id`, `server_url`) from the camera's data dir.
+- **Server memory / RSS investigation** (`GH #56`): The server can expose Go's `net/http/pprof` handlers on a separate loopback-only listener. Off by default. Set `GHOSTCAM_PPROF_ADDR=127.0.0.1:6060` on the Fly app (`fly secrets set GHOSTCAM_PPROF_ADDR=127.0.0.1:6060`) and the server starts a second listener that serves `/debug/pprof/*`. **Loopback-only by design** — the handlers are unauthenticated and dump goroutine state, allocations, and live memory. Reach the endpoint with:
+  ```bash
+  fly ssh console -a ghostcam
+  curl -s http://127.0.0.1:6060/debug/pprof/heap > /tmp/heap.pprof
+  # then on your laptop:
+  fly ssh sftp shell -a ghostcam   # `get /tmp/heap.pprof`
+  go tool pprof -http=:8080 heap.pprof
+  ```
+  Useful profiles: `heap` (live allocations), `goroutine` (stuck goroutines / leaks), `allocs` (cumulative — pair with `?seconds=30`), `profile` (30s CPU sample). To grab everything in one shot:
+  ```bash
+  curl -s http://127.0.0.1:6060/debug/pprof/heap > heap.pprof
+  curl -s http://127.0.0.1:6060/debug/pprof/goroutine > goroutine.pprof
+  curl -s "http://127.0.0.1:6060/debug/pprof/profile?seconds=30" > cpu.pprof
+  ```
+  Locally: bring the test stack up (`docker compose --profile test up -d`), `docker compose exec ghostcam-server sh`, then curl as above. Unset the env var (or `fly secrets unset GHOSTCAM_PPROF_ADDR`) to disable.
+
+  Measured baselines (Go server, no viewers, no live WebRTC traffic): boot+idle ~104 MB RSS; 3 cameras streaming in steady state **~39 MB RSS / 2.5 MB heap / 15 goroutines** — almost all the per-camera state lives off the server because the camera PUTs segments directly to S3 via presigned URL. The big transient cost is `argon2.IDKey` (~64 MiB per call at our params); a small semaphore in `server/auth/auth.go` caps peak transient allocation at ~128 MiB regardless of concurrent login volume, and `GOMEMLIMIT=200MiB` (set in `fly.toml`) nudges Go to return pages to the OS as RSS approaches the cap. Together those let the server live inside a 256 MiB Fly machine.

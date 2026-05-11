@@ -13,7 +13,9 @@
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { billingStore } from '$lib/stores/billing.svelte.js';
-	import { AlertTriangle, HelpCircle, Check, X } from 'lucide-svelte';
+	import { AlertTriangle, HelpCircle, Check, X, Calendar, Battery } from 'lucide-svelte';
+	import ScheduleEditorDialog from './ScheduleEditorDialog.svelte';
+	import BatteryRulesEditorDialog from './BatteryRulesEditorDialog.svelte';
 
 	let {
 		open = $bindable(false),
@@ -29,6 +31,8 @@
 	let displayName = $state('');
 	let resolution = $state('720p');
 	let recordingMode = $state('never');
+	let powerMode = $state('live');
+	let uploadMode = $state('proactive');
 	let saving = $state(false);
 	let error = $state('');
 	let success = $state(false);
@@ -38,6 +42,48 @@
 	let purging = $state(false);
 	let purgeProgress = $state<PurgeProgress | null>(null);
 	let modeHelpOpen = $state(false);
+	let powerHelpOpen = $state(false);
+	let scheduleEditorOpen = $state(false);
+	let batteryRulesEditorOpen = $state(false);
+
+	function scheduleRuleCount(): number {
+		if (!camera?.schedule) return 0;
+		try {
+			const parsed = JSON.parse(camera.schedule);
+			return Array.isArray(parsed) ? parsed.length : 0;
+		} catch {
+			return 0;
+		}
+	}
+	function batteryRuleCount(): number {
+		if (!camera?.battery_rules) return 0;
+		try {
+			const parsed = JSON.parse(camera.battery_rules);
+			return Array.isArray(parsed) ? parsed.length : 0;
+		} catch {
+			return 0;
+		}
+	}
+
+	async function saveSchedule(json: string) {
+		// Patch only the schedule field. Empty array clears it server-side.
+		try {
+			const parsed = JSON.parse(json);
+			await updateCameraSettings(deviceId, { schedule: parsed });
+			if (camera) camera.schedule = parsed.length === 0 ? undefined : json;
+		} catch (e) {
+			throw e instanceof Error ? e : new Error('save failed');
+		}
+	}
+	async function saveBatteryRules(json: string) {
+		try {
+			const parsed = JSON.parse(json);
+			await updateCameraSettings(deviceId, { battery_rules: parsed });
+			if (camera) camera.battery_rules = parsed.length === 0 ? undefined : json;
+		} catch (e) {
+			throw e instanceof Error ? e : new Error('save failed');
+		}
+	}
 
 	// Sync local state when dialog opens
 	$effect(() => {
@@ -45,6 +91,8 @@
 			displayName = camera.device_name || '';
 			resolution = camera.resolution || '720p';
 			recordingMode = camera.recording_mode || 'never';
+			powerMode = camera.power_mode || 'live';
+			uploadMode = camera.upload_mode || 'proactive';
 			error = '';
 			success = false;
 			confirmingDelete = false;
@@ -64,8 +112,21 @@
 		camera != null &&
 			(displayName !== camera.device_name ||
 				resolution !== camera.resolution ||
-				recordingMode !== camera.recording_mode)
+				recordingMode !== camera.recording_mode ||
+				powerMode !== camera.power_mode ||
+				uploadMode !== camera.upload_mode)
 	);
+
+	// Show "currently effective" hint only when a schedule or battery rule
+	// is overriding the manually-set mode (effective ≠ manual).
+	let effectiveOverride = $derived.by(() => {
+		if (!camera) return null;
+		const eff = camera.effectivePowerMode;
+		const upEff = camera.effectiveUploadMode;
+		if (eff && eff !== camera.power_mode) return `power: ${eff}`;
+		if (upEff && upEff !== camera.upload_mode) return `upload: ${upEff}`;
+		return null;
+	});
 
 	async function save() {
 		if (!camera || !hasChanges) return;
@@ -77,10 +138,14 @@
 			if (displayName !== camera.device_name) update.display_name = displayName;
 			if (resolution !== camera.resolution) update.resolution = resolution;
 			if (recordingMode !== camera.recording_mode) update.recording_mode = recordingMode;
+			if (powerMode !== camera.power_mode) update.power_mode = powerMode;
+			if (uploadMode !== camera.upload_mode) update.upload_mode = uploadMode;
 			await updateCameraSettings(deviceId, update);
 			if (update.display_name) camera.device_name = displayName;
 			camera.resolution = resolution;
 			camera.recording_mode = recordingMode;
+			camera.power_mode = powerMode;
+			camera.upload_mode = uploadMode;
 			success = true;
 		} catch (e) {
 			error = e instanceof Error ? e.message : 'Failed to update settings';
@@ -224,6 +289,123 @@
 				<label for="motion-alerts" class="text-sm font-medium">Motion alerts</label>
 			</div>
 
+			<div class="border-t pt-4">
+				<div class="flex items-center gap-1.5 mb-2">
+					<span class="text-sm font-medium">Power &amp; data</span>
+					<button
+						type="button"
+						class="text-muted-foreground hover:text-foreground"
+						aria-label="Power-mode help"
+						onclick={() => (powerHelpOpen = true)}
+					>
+						<HelpCircle class="h-3.5 w-3.5" />
+					</button>
+					{#if effectiveOverride}
+						<span class="ml-auto text-xs text-amber-700 dark:text-amber-400">
+							currently overridden — {effectiveOverride}
+						</span>
+					{/if}
+				</div>
+
+				<div class="grid grid-cols-2 gap-3">
+					<div>
+						<label for="power-mode" class="text-xs text-muted-foreground">Power mode</label>
+						<select
+							id="power-mode"
+							bind:value={powerMode}
+							class="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+						>
+							<option value="live" title="Always on. Live tile is instant, telemetry every 10s, every segment uploads ASAP. Highest battery cost.">Live</option>
+							<option value="standby" title="Live WS opens on demand (~5–12s viewer wait). Telemetry every 10s, recording continues. Saves ~50% on cellular at idle.">Standby</option>
+							<option value="sleep" title="Capture and GPS off. Telemetry every 5 min. Live and recording unavailable until mode changes.">Sleep</option>
+						</select>
+					</div>
+
+					<div>
+						<label for="upload-mode" class="text-xs text-muted-foreground">Upload</label>
+						<select
+							id="upload-mode"
+							bind:value={uploadMode}
+							class="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+						>
+							<option value="proactive" title="Every recorded segment uploads to S3 as soon as it's finished.">Proactive</option>
+							<option value="lazy" title="Motion-flagged segments upload immediately. Non-motion stays on the camera until you scrub to that time on the timeline.">Lazy (motion-exempt)</option>
+						</select>
+					</div>
+				</div>
+
+				{#if powerMode === 'sleep'}
+					<div class="mt-2 flex items-start gap-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-xs text-amber-700 dark:text-amber-400">
+						<AlertTriangle class="h-3.5 w-3.5 shrink-0 mt-0.5" />
+						<span>
+							Capture stops in sleep mode. Live viewing won't work until you
+							switch back. Telemetry polls every 5 minutes so commands take
+							up to that long to apply.
+						</span>
+					</div>
+				{:else if powerMode === 'standby'}
+					<p class="mt-2 text-xs text-muted-foreground">
+						Live tile takes 5–12 s to start the first time after the camera
+						has gone idle. After a viewer disconnects the live WS closes
+						again ~30 s later.
+					</p>
+				{/if}
+
+				{#if uploadMode === 'lazy' && recordingMode !== 'never'}
+					<p class="mt-2 text-xs text-muted-foreground">
+						Non-motion segments stay on the camera. Scrubbing to a time on the
+						timeline triggers the camera to upload that range on the next
+						telemetry cycle (≤ 10 s in live/standby, ≤ 5 min in sleep). Motion
+						segments still upload immediately.
+					</p>
+				{/if}
+
+				{#if camera?.battery_pct != null}
+					<div class="mt-3 flex items-center gap-2 text-xs">
+						<span class="text-muted-foreground">Battery</span>
+						<div class="flex-1 h-1.5 rounded-full bg-muted overflow-hidden">
+							<div
+								class="h-full rounded-full transition-all duration-300"
+								class:bg-destructive={camera.battery_pct < 20}
+								class:bg-amber-500={camera.battery_pct >= 20 && camera.battery_pct < 50}
+								class:bg-primary={camera.battery_pct >= 50}
+								style="width: {camera.battery_pct}%"
+							></div>
+						</div>
+						<span class="font-mono tabular-nums">{camera.battery_pct}%</span>
+					</div>
+				{/if}
+
+				<div class="mt-3 grid grid-cols-2 gap-2">
+					<Button
+						variant="outline"
+						class="justify-start"
+						onclick={() => (scheduleEditorOpen = true)}
+					>
+						<Calendar class="h-3.5 w-3.5 mr-2" />
+						<span class="text-xs">
+							Schedule
+							{#if scheduleRuleCount() > 0}
+								<span class="text-muted-foreground">· {scheduleRuleCount()}</span>
+							{/if}
+						</span>
+					</Button>
+					<Button
+						variant="outline"
+						class="justify-start"
+						onclick={() => (batteryRulesEditorOpen = true)}
+					>
+						<Battery class="h-3.5 w-3.5 mr-2" />
+						<span class="text-xs">
+							Battery rules
+							{#if batteryRuleCount() > 0}
+								<span class="text-muted-foreground">· {batteryRuleCount()}</span>
+							{/if}
+						</span>
+					</Button>
+				</div>
+			</div>
+
 			{#if error}
 				<p class="text-sm text-destructive">{error}</p>
 			{/if}
@@ -235,6 +417,13 @@
 			<Button onclick={save} disabled={saving || !hasChanges} class="w-full">
 				{saving ? 'Saving...' : 'Save Settings'}
 			</Button>
+
+			{#if camera?.fw_version}
+				<div class="flex items-baseline justify-between text-xs text-muted-foreground border-t pt-3">
+					<span>Firmware</span>
+					<span class="font-mono">{camera.fw_version}</span>
+				</div>
+			{/if}
 
 			<div class="border-t pt-4 space-y-3">
 				{#if confirmingPurge}
@@ -391,3 +580,102 @@
 		</Button>
 	</DialogContent>
 </Dialog>
+
+<!-- Power-mode comparison -->
+<Dialog bind:open={powerHelpOpen}>
+	<DialogContent>
+		<DialogHeader>
+			<DialogTitle>Power &amp; data modes</DialogTitle>
+			<DialogDescription>
+				Trade battery and bandwidth for responsiveness. Two orthogonal
+				knobs: when the camera maintains a live link, and how it pushes
+				recorded footage.
+			</DialogDescription>
+		</DialogHeader>
+
+		<div class="mt-4 space-y-4 text-xs">
+			<div>
+				<p class="font-medium mb-1">Power mode</p>
+				<table class="w-full">
+					<thead>
+						<tr class="border-b text-left text-muted-foreground">
+							<th class="py-2 pr-2 font-medium"></th>
+							<th class="py-2 px-2 font-medium">Live</th>
+							<th class="py-2 px-2 font-medium">Standby</th>
+							<th class="py-2 pl-2 font-medium">Sleep</th>
+						</tr>
+					</thead>
+					<tbody class="[&>tr]:border-b [&>tr:last-child]:border-0">
+						<tr>
+							<td class="py-2 pr-2 font-medium">Live tile</td>
+							<td class="py-2 px-2">instant</td>
+							<td class="py-2 px-2">5–12 s wake</td>
+							<td class="py-2 pl-2">unavailable</td>
+						</tr>
+						<tr>
+							<td class="py-2 pr-2 font-medium">Capture</td>
+							<td class="py-2 px-2">always</td>
+							<td class="py-2 px-2">always</td>
+							<td class="py-2 pl-2">off</td>
+						</tr>
+						<tr>
+							<td class="py-2 pr-2 font-medium">Telemetry</td>
+							<td class="py-2 px-2">10 s</td>
+							<td class="py-2 px-2">10 s</td>
+							<td class="py-2 pl-2">5 min</td>
+						</tr>
+						<tr>
+							<td class="py-2 pr-2 font-medium">Battery (est.)</td>
+							<td class="py-2 px-2">baseline</td>
+							<td class="py-2 px-2">~50% saved</td>
+							<td class="py-2 pl-2">~80% saved</td>
+						</tr>
+					</tbody>
+				</table>
+			</div>
+
+			<div>
+				<p class="font-medium mb-1">Upload mode</p>
+				<p class="mb-1">
+					<span class="font-medium">Proactive</span> — every recorded
+					segment uploads as soon as it's finished. Timeline scrubbing
+					is instant.
+				</p>
+				<p>
+					<span class="font-medium">Lazy</span> — motion-flagged
+					segments always upload, so real-time motion alerts still
+					work. Non-motion segments stay on the camera until you
+					scrub to that time on the timeline, at which point the
+					server pulls them on demand. Saves substantial upload
+					bandwidth on cellular for "watched but rarely viewed"
+					cameras.
+				</p>
+			</div>
+
+			<p class="text-muted-foreground">
+				A schedule (e.g. "standby + lazy between 22:00 and 06:00") and
+				battery-driven rules ("force sleep when battery &lt; 20%") will
+				eventually override the manual selection. Those editors are
+				coming in a follow-up — until then, the manual choice above is
+				the source of truth.
+			</p>
+		</div>
+
+		<Button variant="outline" class="mt-4 w-full" onclick={() => (powerHelpOpen = false)}>
+			Close
+		</Button>
+	</DialogContent>
+</Dialog>
+
+<ScheduleEditorDialog
+	bind:open={scheduleEditorOpen}
+	initial={camera?.schedule ?? ''}
+	onsave={saveSchedule}
+/>
+
+<BatteryRulesEditorDialog
+	bind:open={batteryRulesEditorOpen}
+	initial={camera?.battery_rules ?? ''}
+	batteryPctReporting={camera?.battery_pct != null}
+	onsave={saveBatteryRules}
+/>
