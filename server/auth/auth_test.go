@@ -2,6 +2,7 @@ package auth
 
 import (
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -47,6 +48,47 @@ func TestHashPassword_UniqueSalt(t *testing.T) {
 	}
 	if a == b {
 		t.Error("HashPassword produced identical hashes for the same input — salt is not unique")
+	}
+}
+
+// TestVerifyPassword_ConcurrentDoesNotDeadlock pins that the argon2
+// semaphore guarding peak transient allocation doesn't introduce a
+// deadlock when verifications outnumber slots. The semaphore is sized
+// at 2 (see auth.go); we run 8 verifications and expect all of them to
+// complete and return correct results.
+func TestVerifyPassword_ConcurrentDoesNotDeadlock(t *testing.T) {
+	encoded, err := HashPassword("correct-horse-battery-staple")
+	if err != nil {
+		t.Fatalf("HashPassword: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	results := make([]bool, 8)
+	for i := range results {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			ok, err := VerifyPassword("correct-horse-battery-staple", encoded)
+			if err != nil {
+				t.Errorf("VerifyPassword (goroutine %d): %v", idx, err)
+				return
+			}
+			results[idx] = ok
+		}(i)
+	}
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("VerifyPassword goroutines did not complete in 30s — semaphore likely deadlocked")
+	}
+
+	for i, ok := range results {
+		if !ok {
+			t.Errorf("VerifyPassword goroutine %d returned false", i)
+		}
 	}
 }
 

@@ -37,3 +37,5 @@
   curl -s "http://127.0.0.1:6060/debug/pprof/profile?seconds=30" > cpu.pprof
   ```
   Locally: bring the test stack up (`docker compose --profile test up -d`), `docker compose exec ghostcam-server sh`, then curl as above. Unset the env var (or `fly secrets unset GHOSTCAM_PPROF_ADDR`) to disable.
+
+  Measured baselines (Go server, no viewers, no live WebRTC traffic): boot+idle ~104 MB RSS; 3 cameras streaming in steady state **~39 MB RSS / 2.5 MB heap / 15 goroutines** — almost all the per-camera state lives off the server because the camera PUTs segments directly to S3 via presigned URL. The big transient cost is `argon2.IDKey` (~64 MiB per call at our params); a small semaphore in `server/auth/auth.go` caps peak transient allocation at ~128 MiB regardless of concurrent login volume, and `GOMEMLIMIT=200MiB` (set in `fly.toml`) nudges Go to return pages to the OS as RSS approaches the cap. Together those let the server live inside a 256 MiB Fly machine.

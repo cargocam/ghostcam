@@ -25,6 +25,29 @@ const (
 	saltLen       = 16
 )
 
+// argon2Sem caps the number of concurrent argon2id evaluations. Each
+// call to argon2.IDKey allocates ~`argon2Memory` KiB (64 MiB by default)
+// of working memory, so an unbounded login storm on a small Fly machine
+// can transiently push RSS past the cgroup limit and OOM the server.
+// A semaphore of 2 keeps peak transient cost to ~128 MiB regardless of
+// concurrent login volume. The chi rate-limiter (10/min/IP on /login)
+// is a separate, complementary defence — the semaphore guards against
+// bursts within the rate-limit window AND against authenticated paths
+// (password change, admin reset) that aren't rate-limited.
+//
+// Size 2 was picked empirically: argon2id at our params runs in ~50 ms
+// on Fly's shared-cpu-1x, so the worst-case queueing delay under load
+// is small (~milliseconds), and 2 × 64 MiB sits comfortably below the
+// 256 MiB Fly tier's headroom after subtracting the ~40 MiB steady
+// state. See GH #56.
+var argon2Sem = make(chan struct{}, 2)
+
+func lockedIDKey(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte {
+	argon2Sem <- struct{}{}
+	defer func() { <-argon2Sem }()
+	return argon2.IDKey(password, salt, time, memory, threads, keyLen)
+}
+
 // HashPassword hashes a password with Argon2id. Returns a PHC-formatted string.
 func HashPassword(password string) (string, error) {
 	salt := make([]byte, saltLen)
@@ -32,7 +55,7 @@ func HashPassword(password string) (string, error) {
 		return "", fmt.Errorf("generating salt: %w", err)
 	}
 
-	hash := argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+	hash := lockedIDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
 
 	return fmt.Sprintf("$argon2id$v=%d$m=%d,t=%d,p=%d$%s$%s",
 		argon2.Version,
@@ -73,7 +96,7 @@ func VerifyPassword(password, encoded string) (bool, error) {
 		return false, fmt.Errorf("decoding hash: %w", err)
 	}
 
-	computedHash := argon2.IDKey([]byte(password), salt, time, memory, threads, uint32(len(expectedHash)))
+	computedHash := lockedIDKey([]byte(password), salt, time, memory, threads, uint32(len(expectedHash)))
 
 	return subtle.ConstantTimeCompare(computedHash, expectedHash) == 1, nil
 }
@@ -83,7 +106,7 @@ func VerifyPassword(password, encoded string) (bool, error) {
 // preventing user enumeration via response latency.
 func DummyVerify(password string) {
 	salt := make([]byte, saltLen)
-	argon2.IDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
+	lockedIDKey([]byte(password), salt, argon2Time, argon2Memory, argon2Threads, argon2KeyLen)
 }
 
 func splitDollar(s string) []string {
