@@ -56,11 +56,20 @@ PENDING_FILE = "pending_confirms.json"
 class _SharedFlags:
     """Globals expressed as instance state. Capture pipeline reads
     server_unreachable to pause; the watcher reads storage_capped to
-    know not to push more segments."""
+    know not to push more segments.
+
+    Bandwidth-savings counters track motion-gated upload effectiveness
+    in the field. Camera reports them in telemetry; admin UI surfaces
+    them as "N segments skipped this cycle, M uploaded". Resets are
+    soft — process restart re-zeros them since they're observability,
+    not contract.
+    """
 
     server_unreachable: bool = False
     storage_capped: bool = False
     presign_fail_count: int = 0
+    motion_segments_uploaded: int = 0
+    motion_segments_skipped: int = 0
 
 
 # Module-level singleton — main.py and capture.py both observe these.
@@ -123,6 +132,7 @@ async def run_upload_loop(
     index: SegmentIndex | None = None,
     power: PowerModeState | None = None,
     priority: deque[str] | None = None,
+    recording_mode: str = "constant",
 ) -> None:
     """Long-running upload loop.
 
@@ -130,6 +140,15 @@ async def run_upload_loop(
     behaviour. Tests / partial setups that pass only positional args
     get the legacy JSON-backed proactive-upload behaviour for
     backward compatibility with the original signature.
+
+    `recording_mode` defaults to `"constant"` to preserve legacy
+    behaviour. When set to `"motion"`, non-motion segments are
+    deferred to the local-manifest path just like lazy upload mode —
+    closes GH #75. The two ways to skip a non-motion segment
+    (recording_mode=motion OR upload_mode=lazy) are equivalent at the
+    upload-decision boundary; recording_mode is the higher-level user
+    intent ("only record motion"), upload_mode is the lower-level
+    bandwidth knob ("defer non-motion until scrubbed-to").
     """
     state = _UploadState()
     pending: PendingConfirms | None = None
@@ -198,15 +217,28 @@ async def run_upload_loop(
                     has_motion=seg.has_motion,
                 )
 
-            # Lazy mode: skip non-motion segments. They stay on disk
-            # and the SegmentIndex keeps a record so the server can
-            # pull them on demand. We DO tell the server about them
-            # via the local-manifest endpoint so the timeline shows
-            # the user that footage exists.
-            if power is not None and not power.should_upload(seg.has_motion):
+            # Two reasons to defer a non-motion segment to the local-
+            # manifest path rather than upload it now:
+            #   1. upload_mode = lazy (the lower-level bandwidth knob)
+            #   2. recording_mode = motion (the higher-level user intent;
+            #      see GH #75 — what "motion mode" was always supposed to
+            #      mean for the upload path)
+            # Either gate produces the same wire behaviour: segment
+            # registered with uploaded_to_s3=FALSE; viewer scrub → camera
+            # uploads on demand.
+            lazy_skip = (
+                power is not None and not power.should_upload(seg.has_motion)
+            )
+            motion_mode_skip = (
+                recording_mode == "motion" and not seg.has_motion
+            )
+            if lazy_skip or motion_mode_skip:
+                reason = "lazy" if lazy_skip else "motion-only"
                 logger.debug(
-                    "lazy mode: registering local-only segment %s", seg.filename,
+                    "%s mode: registering local-only segment %s",
+                    reason, seg.filename,
                 )
+                flags.motion_segments_skipped += 1
                 try:
                     await client.post_local_manifest([UploadedSegment(
                         segment_id=Path(seg.filename).stem,
@@ -218,6 +250,8 @@ async def run_upload_loop(
                 except Exception as e:  # noqa: BLE001
                     logger.debug("local-manifest post failed: %s", e)
                 continue
+            if seg.has_motion:
+                flags.motion_segments_uploaded += 1
 
             if (failed := await _upload_with_retry(
                 client, data_dir, seg, state, pending, index,

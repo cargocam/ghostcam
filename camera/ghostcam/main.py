@@ -218,6 +218,7 @@ async def _amain() -> int:
                         index=index,
                         power=power,
                         priority=priority_uploads,
+                        recording_mode=cfg.recording_mode,
                     ),
                     name="upload-loop",
                 )
