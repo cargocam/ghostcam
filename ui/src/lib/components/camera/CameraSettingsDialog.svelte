@@ -13,7 +13,9 @@
 	import { cameraStore } from '$lib/stores/cameras.svelte.js';
 	import { settingsStore } from '$lib/stores/settings.svelte.js';
 	import { billingStore } from '$lib/stores/billing.svelte.js';
-	import { AlertTriangle, HelpCircle, Check, X } from 'lucide-svelte';
+	import { AlertTriangle, HelpCircle, Check, X, Calendar, Battery } from 'lucide-svelte';
+	import ScheduleEditorDialog from './ScheduleEditorDialog.svelte';
+	import BatteryRulesEditorDialog from './BatteryRulesEditorDialog.svelte';
 
 	let {
 		open = $bindable(false),
@@ -41,6 +43,47 @@
 	let purgeProgress = $state<PurgeProgress | null>(null);
 	let modeHelpOpen = $state(false);
 	let powerHelpOpen = $state(false);
+	let scheduleEditorOpen = $state(false);
+	let batteryRulesEditorOpen = $state(false);
+
+	function scheduleRuleCount(): number {
+		if (!camera?.schedule) return 0;
+		try {
+			const parsed = JSON.parse(camera.schedule);
+			return Array.isArray(parsed) ? parsed.length : 0;
+		} catch {
+			return 0;
+		}
+	}
+	function batteryRuleCount(): number {
+		if (!camera?.battery_rules) return 0;
+		try {
+			const parsed = JSON.parse(camera.battery_rules);
+			return Array.isArray(parsed) ? parsed.length : 0;
+		} catch {
+			return 0;
+		}
+	}
+
+	async function saveSchedule(json: string) {
+		// Patch only the schedule field. Empty array clears it server-side.
+		try {
+			const parsed = JSON.parse(json);
+			await updateCameraSettings(deviceId, { schedule: parsed });
+			if (camera) camera.schedule = parsed.length === 0 ? undefined : json;
+		} catch (e) {
+			throw e instanceof Error ? e : new Error('save failed');
+		}
+	}
+	async function saveBatteryRules(json: string) {
+		try {
+			const parsed = JSON.parse(json);
+			await updateCameraSettings(deviceId, { battery_rules: parsed });
+			if (camera) camera.battery_rules = parsed.length === 0 ? undefined : json;
+		} catch (e) {
+			throw e instanceof Error ? e : new Error('save failed');
+		}
+	}
 
 	// Sync local state when dialog opens
 	$effect(() => {
@@ -332,6 +375,35 @@
 						<span class="font-mono tabular-nums">{camera.battery_pct}%</span>
 					</div>
 				{/if}
+
+				<div class="mt-3 grid grid-cols-2 gap-2">
+					<Button
+						variant="outline"
+						class="justify-start"
+						onclick={() => (scheduleEditorOpen = true)}
+					>
+						<Calendar class="h-3.5 w-3.5 mr-2" />
+						<span class="text-xs">
+							Schedule
+							{#if scheduleRuleCount() > 0}
+								<span class="text-muted-foreground">· {scheduleRuleCount()}</span>
+							{/if}
+						</span>
+					</Button>
+					<Button
+						variant="outline"
+						class="justify-start"
+						onclick={() => (batteryRulesEditorOpen = true)}
+					>
+						<Battery class="h-3.5 w-3.5 mr-2" />
+						<span class="text-xs">
+							Battery rules
+							{#if batteryRuleCount() > 0}
+								<span class="text-muted-foreground">· {batteryRuleCount()}</span>
+							{/if}
+						</span>
+					</Button>
+				</div>
 			</div>
 
 			{#if error}
@@ -587,3 +659,16 @@
 		</Button>
 	</DialogContent>
 </Dialog>
+
+<ScheduleEditorDialog
+	bind:open={scheduleEditorOpen}
+	initial={camera?.schedule ?? ''}
+	onsave={saveSchedule}
+/>
+
+<BatteryRulesEditorDialog
+	bind:open={batteryRulesEditorOpen}
+	initial={camera?.battery_rules ?? ''}
+	batteryPctReporting={camera?.battery_pct != null}
+	onsave={saveBatteryRules}
+/>

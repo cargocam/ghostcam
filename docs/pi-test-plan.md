@@ -479,6 +479,224 @@ on a cellular-failover Pi.
 
 ---
 
+## Phase 9.5 — Power modes
+
+Goal: every combination on the (power, upload) matrix produces the
+expected runtime behaviour AND the radio actually drops to
+`RRC_IDLE` between events in standby/sleep modes (the whole point of
+the feature).
+
+This phase exercises the wire end-to-end: server PATCH → command
+queue → camera state mutation → runtime task reaction → telemetry
+echo. UI is in the loop for the schedule + battery editors, but most
+tests can also be driven by direct PATCH against the API.
+
+The "radio state" check uses `mmcli -m 0 --signal-get` on the Pi over
+SSH (read-only; cheap to poll every second). RRC state shows up in
+`access-tech` and `signal-quality`; the practical signal that the
+modem is *idle* is `mmcli -m 0` showing `state: registered` rather
+than `state: connected`. On some carrier networks the modem stays
+connected longer than the data session — note that in the result
+write-up if it doesn't drop within ~30 s of the expected window.
+
+### Setup
+
+- [ ] **9.5.0 Open two SSH sessions**
+      One to `journalctl -u ghostcam-camera -f`, the other to
+      `watch -n1 'mmcli -m 0 --signal-get; date'`. Sanity-check both
+      are streaming before changing modes.
+
+### Live + proactive (today's behaviour, regression check)
+
+- [ ] **9.5.1 Live tile latency**
+      Steps:    From UI, set power_mode=live + upload_mode=proactive.
+                Wait one telemetry cycle (≤10 s). Open the live tile.
+      Expect:   Frame visible within 2 s. Camera logs
+                `live relay connected` *before* the viewer connects
+                — the WS is held open continuously in live mode.
+      On fail:  Check LiveWSDriver.run() is in its live-mode branch.
+
+- [ ] **9.5.2 Continuous upload**
+      Steps:    With recording_mode=constant, watch the segment dir.
+      Expect:   Segments upload within ~10 s of being closed. No
+                pending_upload Redis key for this device.
+
+### Live + lazy (motion-exempt lazy)
+
+- [ ] **9.5.3 Switch to lazy + verify non-motion stays local**
+      Steps:    Set upload_mode=lazy via UI. Cover the lens (no
+                motion) for 60 s.
+      Expect:   Within 30 s the camera logs
+                `lazy mode: registering local-only segment …` per
+                segment. Server timeline scrubber shows hatched
+                bars over those 60 s. No S3 PUTs for those segments.
+
+- [ ] **9.5.4 Motion still uploads immediately in lazy mode**
+      Steps:    Wave a hand for ~6 s.
+      Expect:   The motion-flagged segment uploads to S3 within
+                10–15 s and renders as a solid (un-hatched) bar.
+
+- [ ] **9.5.5 Scrub-driven fetch**
+      Steps:    Scrub the timeline to a hatched (local-only) region.
+      Expect:   Camera logs an `upload_segments` command in the next
+                telemetry response (≤10 s) and uploads the named
+                segments. The timeline bar transitions from hatched
+                to solid within another telemetry cycle.
+
+### Standby + proactive
+
+- [ ] **9.5.6 WS sleeps between viewers**
+      Steps:    Set power_mode=standby. Close any open viewer. Wait
+                40 s.
+      Expect:   Camera logs
+                `standby live WS idle for 30s, closing`. `mmcli`
+                shows the modem dropping out of CONNECTED within the
+                next ~10 s (carrier-dependent tail).
+
+- [ ] **9.5.7 Viewer arrival re-opens WS**
+      Steps:    Open the live tile. Watch the camera's logs.
+      Expect:   The browser sees "DELAYED" or "connecting…" for up
+                to one telemetry cycle (≤10 s). Camera logs:
+                `live relay: viewer connected, starting stream`.
+                Frame visible by ~12 s after the click.
+      On fail:  Check that PostTelemetry sets WakeLive on the
+                response and that LiveWSDriver.wake() actually
+                clears _wake_event.
+
+- [ ] **9.5.8 Capture still runs in standby**
+      Steps:    With recording_mode=constant + standby + proactive,
+                no viewer, watch for 60 s.
+      Expect:   Segments produced + uploaded as usual. Standby
+                affects only the LIVE path; capture and upload
+                continue as in live mode.
+
+### Standby + lazy (the "off-grid security camera" combo)
+
+- [ ] **9.5.9 Headline test: 30-min idle scene**
+      Steps:    standby + lazy + recording_mode=motion. Cover the
+                lens. Let the camera run for 30 minutes with no
+                viewer.
+      Expect:   The modem is in CONNECTED state only during the
+                10 s telemetry polls — six brief windows per minute
+                instead of one continuous CONNECTED session. No S3
+                PUTs unless motion fires. Cellular data usage
+                (`mmcli -m 0 --signal` over time) should sum to
+                <10 % of the live+proactive baseline.
+
+### Sleep mode
+
+- [ ] **9.5.10 Capture stops entirely**
+      Steps:    Set power_mode=sleep. Watch `pidof rpicam-vid` over
+                30 s.
+      Expect:   `pidof rpicam-vid` returns empty (no running
+                process). Camera logs
+                `capture suppressed: power_mode=sleep`. The capture
+                supervisor is parked on `power.changed`.
+
+- [ ] **9.5.11 5-min telemetry cadence**
+      Steps:    With camera in sleep, watch journalctl for two
+                cycles.
+      Expect:   `telemetry POST` lines exactly ~300 s apart, not
+                10 s. mmcli shows the modem in IDLE state between
+                polls (this is the headline battery win for sleep).
+
+- [ ] **9.5.12 Live unavailable**
+      Steps:    Try to open the live tile from the UI.
+      Expect:   UI shows "camera in sleep" hint (or HLS-fallback
+                404). Camera does NOT spawn rpicam-vid. No
+                `wake_live` round-trip would help here because the
+                capture pipeline is off.
+
+- [ ] **9.5.13 Mode change wakes capture**
+      Steps:    With camera in sleep, PATCH power_mode=live.
+                Camera receives the command on the next 5-min poll
+                — but you can shorten the test by sending a
+                synthetic poll trigger if needed.
+      Expect:   Within one cycle of receiving the command,
+                `capture supervisor` log line shows the pipeline
+                starting. rpicam-vid + ffmpeg pids appear.
+
+### Schedule overrides
+
+- [ ] **9.5.14 Single-window schedule applies in-window**
+      Steps:    Open the Schedule editor (settings dialog → Power &
+                data → Schedule). Add one rule: `now+1min` to
+                `now+3min`, power_mode=standby, upload_mode=lazy,
+                all days. Save.
+      Expect:   At `now+1min` (within ±60 s — the schedule ticker
+                runs every minute), camera logs
+                `power_mode transition: live/proactive (default) ->
+                standby/lazy (schedule)`. At `now+3min` it
+                transitions back to `live/proactive (default)`.
+
+- [ ] **9.5.15 Wraps-midnight window**
+      Steps:    Edit the schedule to `22:00 → 06:00`. Test by
+                temporarily setting the Pi's clock (or, easier,
+                manually trigger `power.recompute()` with a faked
+                `now`). Both `02:00` and `23:00` should match;
+                `12:00` should not.
+
+- [ ] **9.5.16 Weekday filter**
+      Steps:    Add a Mon-Fri-only rule. On Saturday: rule should
+                NOT fire even within the time window.
+
+- [ ] **9.5.17 Effective-mode echo in UI**
+      Steps:    While a schedule is overriding the manual mode,
+                check the camera card and the settings dialog.
+      Expect:   Camera card shows a small badge with the effective
+                mode (`standby` or `sleep`). Settings dialog shows
+                "currently overridden — power: standby" near the
+                Power & data section header.
+
+### Battery rules (when a HAT is wired — see GH #73)
+
+- [ ] **9.5.18 Threshold fires the rule**
+      Setup:    Battery HAT reporting telemetry. Set up a rule:
+                threshold_pct=30, power_mode=standby, upload_mode=lazy.
+      Steps:    Let the battery drain (or stub `battery_reader` to
+                return 25 in a test build).
+      Expect:   On the first telemetry post reporting <=30 %, the
+                camera transitions to standby+lazy. Logs:
+                `power_mode transition: …/… (manual) ->
+                standby/lazy (battery)`.
+
+- [ ] **9.5.19 Lowest-threshold-wins**
+      Steps:    Two rules: 30%→standby and 10%→sleep. Drain past
+                30%, then past 10%.
+      Expect:   At 25%: standby. At 5%: sleep. When charge climbs
+                back past 30%: back to manual.
+
+- [ ] **9.5.20 No-sensor inert state**
+      Steps:    On a camera with NO battery HAT, save a battery rule
+                and observe.
+      Expect:   Rule is stored on the server and visible in the
+                editor, but does NOT fire (battery_pct is never
+                reported in telemetry). The Battery rules editor
+                shows the "No battery sensor detected" banner. This
+                is the no-op-until-HAT path documented in GH #73.
+
+### Resilience
+
+- [ ] **9.5.21 Mode survives camera restart**
+      Steps:    Set power_mode=standby + upload_mode=lazy. Wait for
+                the telemetry round-trip that delivers the
+                set_power_mode command. SSH in and
+                `sudo systemctl restart ghostcam-camera`.
+      Expect:   On restart, `power_mode at boot: standby/lazy
+                (manual)` log line. State is read from
+                `/var/ghostcam/{power_mode,upload_mode,schedule.json,battery_rules.json}`.
+
+- [ ] **9.5.22 Server unreachable in sleep mode doesn't accelerate poll**
+      Steps:    In sleep mode, block the server URL
+                (`sudo iptables -A OUTPUT -d <ip> -j DROP`). Wait
+                15 min.
+      Expect:   Poll cadence remains ~5 min throughout (the failure
+                backoff curve is floor-clamped against the natural
+                interval). When the route returns, next poll
+                succeeds and resumes normally.
+
+---
+
 ## Phase 10 — Stability soak
 
 - [ ] **10.1 Pi 4 — 1 hour soak**
