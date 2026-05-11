@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -118,6 +119,15 @@ func (a *App) GetVodManifest(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "", http.StatusInternalServerError)
 		return
 	}
+
+	// Lazy-mode scrub fulfilment: any local-only segments in the
+	// requested range get queued onto pending_upload so the next
+	// telemetry poll converts them to an `upload_segments` command.
+	// Doesn't block this response — the viewer's first scrub will
+	// see a gap, the second (after the camera uploads) will see the
+	// segments.
+	a.markLazyScrubPending(r.Context(), deviceID, fromMs, toMs)
+
 	if len(segments) == 0 {
 		http.Error(w, "", http.StatusNotFound)
 		return
@@ -220,14 +230,47 @@ func (a *App) GetCoverage(w http.ResponseWriter, r *http.Request) {
 	coverage := make([]apitypes.CoverageSegment, 0, len(segments))
 	for _, s := range segments {
 		coverage = append(coverage, apitypes.CoverageSegment{
-			ID:        s.SegmentID,
-			StartMs:   s.StartTS,
-			EndMs:     s.EndTS,
-			HasMotion: s.HasMotion,
+			ID:           s.SegmentID,
+			StartMs:      s.StartTS,
+			EndMs:        s.EndTS,
+			HasMotion:    s.HasMotion,
+			UploadedToS3: s.UploadedToS3,
 		})
 	}
 
 	writeJSON(w, http.StatusOK, apitypes.CoverageResponse{Segments: coverage})
+}
+
+// markLazyScrubPending queues every local-only segment in the
+// [fromMs, toMs] window for fetch on the camera's next telemetry
+// poll. No-op when Redis isn't configured (single-instance dev /
+// integration test).
+func (a *App) markLazyScrubPending(ctx context.Context, deviceID string, fromMs, toMs uint64) {
+	if a.Redis == nil {
+		return
+	}
+	ids, err := a.DB.ListLocalOnlySegmentIDs(ctx, deviceID, fromMs, toMs, 100)
+	if err != nil {
+		slog.Debug("lazy scrub: list local-only failed", "device_id", deviceID, "error", err)
+		return
+	}
+	if len(ids) == 0 {
+		return
+	}
+	key := pendingUploadKey(deviceID)
+	// SAdd is idempotent — concurrent scrubs naturally de-dupe.
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		args[i] = id
+	}
+	if err := a.Redis.SAdd(ctx, key, args...).Err(); err != nil {
+		slog.Debug("lazy scrub: redis SAdd failed", "device_id", deviceID, "error", err)
+		return
+	}
+	// 30 s TTL — well above the telemetry-poll cadence so the next
+	// poll picks them up, and bounded so a permanently-offline camera
+	// doesn't leak the key.
+	a.Redis.Expire(ctx, key, 30*time.Second)
 }
 
 func parseQueryUint64(r *http.Request, key string, def uint64) uint64 {

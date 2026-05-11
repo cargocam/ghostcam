@@ -230,6 +230,7 @@ func (a *App) router() http.Handler {
 		r.Use(a.cameraAuth)
 		r.Post("/api/v1/cameras/{deviceID}/presign", a.Presign)
 		r.Post("/api/v1/cameras/{deviceID}/telemetry", a.PostTelemetry)
+		r.Post("/api/v1/cameras/{deviceID}/local-manifest", a.PostLocalManifest)
 		r.Get("/api/v1/cameras/{deviceID}/live", a.CameraLiveWS)
 	})
 

@@ -200,11 +200,23 @@ async def run_upload_loop(
 
             # Lazy mode: skip non-motion segments. They stay on disk
             # and the SegmentIndex keeps a record so the server can
-            # pull them on demand.
+            # pull them on demand. We DO tell the server about them
+            # via the local-manifest endpoint so the timeline shows
+            # the user that footage exists.
             if power is not None and not power.should_upload(seg.has_motion):
                 logger.debug(
-                    "lazy mode: skipping non-motion segment %s", seg.filename,
+                    "lazy mode: registering local-only segment %s", seg.filename,
                 )
+                try:
+                    await client.post_local_manifest([UploadedSegment(
+                        segment_id=Path(seg.filename).stem,
+                        start_ts=seg.start_ts,
+                        end_ts=seg.end_ts,
+                        size_bytes=seg.size_bytes,
+                        has_motion=seg.has_motion,
+                    )])
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("local-manifest post failed: %s", e)
                 continue
 
             if (failed := await _upload_with_retry(

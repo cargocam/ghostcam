@@ -189,6 +189,21 @@ export interface PresignResponse {
   storage_capped?: boolean;
 }
 /**
+ * LocalManifestRequest is the body of
+ * POST /api/v1/cameras/{deviceID}/local-manifest. A lazy-mode camera
+ * posts a manifest of segments it has on disk but has NOT yet uploaded
+ * to S3, so the server's timeline / coverage bar can show the user
+ * that footage exists even if it's not fetchable until they scrub to
+ * it. On scrub, the server queues an `upload_segments` command which
+ * pulls the bytes on demand.
+ * Manifest entries are inserted with `uploaded_to_s3 = FALSE`. When
+ * the camera later uploads a segment (because of a scrub-triggered
+ * command), the presign-confirm path flips it to TRUE.
+ */
+export interface LocalManifestRequest {
+  segments: UploadedSegment[];
+}
+/**
  * QRPayload is the JSON shape encoded inside a provisioning QR code. The
  * viewer UI builds it (via the server's EnrollmentQR handler), displays
  * it as a QR image, and the camera parses it on first boot after scan.

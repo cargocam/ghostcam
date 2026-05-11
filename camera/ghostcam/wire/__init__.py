@@ -6,6 +6,7 @@ Do not edit. Regenerate with `go generate ./...`.
 from ghostcam.wire.telemetry import TelemetryDatagram
 from ghostcam.wire.types import (
     CameraCommand,
+    LocalManifestRequest,
     PresignedUrl,
     PresignRequest,
     PresignResponse,
@@ -19,6 +20,7 @@ from ghostcam.wire.types import (
 
 __all__ = [
     "CameraCommand",
+    "LocalManifestRequest",
     "PresignedUrl",
     "PresignRequest",
     "PresignResponse",

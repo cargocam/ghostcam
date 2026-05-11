@@ -9,11 +9,17 @@ import (
 
 func (db *DB) GetCamera(ctx context.Context, deviceID string) (*CameraRecord, error) {
 	row := db.pool.QueryRow(ctx,
-		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes, resolution, recording_mode, fw_version
+		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes,
+		        resolution, recording_mode, fw_version,
+		        power_mode, upload_mode, schedule, battery_rules
 		 FROM cameras WHERE device_id = $1`, deviceID)
 
 	var c CameraRecord
-	err := row.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes, &c.Resolution, &c.RecordingMode, &c.FwVersion)
+	err := row.Scan(
+		&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt,
+		&c.Notes, &c.Resolution, &c.RecordingMode, &c.FwVersion,
+		&c.PowerMode, &c.UploadMode, &c.Schedule, &c.BatteryRules,
+	)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
@@ -25,7 +31,9 @@ func (db *DB) GetCamera(ctx context.Context, deviceID string) (*CameraRecord, er
 
 func (db *DB) ListCameras(ctx context.Context, userID string) ([]CameraRecord, error) {
 	rows, err := db.pool.Query(ctx,
-		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes, resolution, recording_mode, fw_version
+		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes,
+		        resolution, recording_mode, fw_version,
+		        power_mode, upload_mode, schedule, battery_rules
 		 FROM cameras WHERE user_id = $1 ORDER BY enrolled_at`, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list cameras: %w", err)
@@ -35,7 +43,11 @@ func (db *DB) ListCameras(ctx context.Context, userID string) ([]CameraRecord, e
 	var cameras []CameraRecord
 	for rows.Next() {
 		var c CameraRecord
-		if err := rows.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes, &c.Resolution, &c.RecordingMode, &c.FwVersion); err != nil {
+		if err := rows.Scan(
+			&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt,
+			&c.Notes, &c.Resolution, &c.RecordingMode, &c.FwVersion,
+			&c.PowerMode, &c.UploadMode, &c.Schedule, &c.BatteryRules,
+		); err != nil {
 			return nil, fmt.Errorf("scanning camera: %w", err)
 		}
 		cameras = append(cameras, c)
@@ -44,17 +56,57 @@ func (db *DB) ListCameras(ctx context.Context, userID string) ([]CameraRecord, e
 }
 
 func (db *DB) UpdateCamera(ctx context.Context, deviceID string, update *CameraUpdate) error {
-	if update.DisplayName == nil && update.Notes == nil && update.Resolution == nil && update.RecordingMode == nil {
+	if update.DisplayName == nil && update.Notes == nil &&
+		update.Resolution == nil && update.RecordingMode == nil &&
+		update.PowerMode == nil && update.UploadMode == nil &&
+		update.Schedule == nil && update.BatteryRules == nil {
 		return nil
 	}
+
+	// schedule / battery_rules are jsonb and distinct from the simple
+	// COALESCE columns: a non-nil pointer to an empty byte slice means
+	// "clear this column to NULL" (the UI uses an empty schedule to
+	// remove the schedule). nil pointer means "leave as-is".
+	var (
+		schedulePtr     interface{}
+		schedSet        bool
+		batteryRulesPtr interface{}
+		batterySet      bool
+	)
+	if update.Schedule != nil {
+		schedSet = true
+		if len(*update.Schedule) == 0 {
+			schedulePtr = nil
+		} else {
+			schedulePtr = []byte(*update.Schedule)
+		}
+	}
+	if update.BatteryRules != nil {
+		batterySet = true
+		if len(*update.BatteryRules) == 0 {
+			batteryRulesPtr = nil
+		} else {
+			batteryRulesPtr = []byte(*update.BatteryRules)
+		}
+	}
+
 	_, err := db.pool.Exec(ctx,
 		`UPDATE cameras SET
-		 display_name = COALESCE($1, display_name),
-		 notes = COALESCE($2, notes),
-		 resolution = COALESCE($3, resolution),
-		 recording_mode = COALESCE($4, recording_mode)
-		 WHERE device_id = $5`,
-		update.DisplayName, update.Notes, update.Resolution, update.RecordingMode, deviceID)
+		 display_name   = COALESCE($1, display_name),
+		 notes          = COALESCE($2, notes),
+		 resolution     = COALESCE($3, resolution),
+		 recording_mode = COALESCE($4, recording_mode),
+		 power_mode     = COALESCE($5, power_mode),
+		 upload_mode    = COALESCE($6, upload_mode),
+		 schedule       = CASE WHEN $7::boolean THEN $8::jsonb ELSE schedule END,
+		 battery_rules  = CASE WHEN $9::boolean THEN $10::jsonb ELSE battery_rules END
+		 WHERE device_id = $11`,
+		update.DisplayName, update.Notes, update.Resolution, update.RecordingMode,
+		update.PowerMode, update.UploadMode,
+		schedSet, schedulePtr,
+		batterySet, batteryRulesPtr,
+		deviceID,
+	)
 	if err != nil {
 		return fmt.Errorf("update camera: %w", err)
 	}
@@ -104,11 +156,17 @@ func (db *DB) CreateProvisionedCamera(ctx context.Context, deviceID, userID, dev
 
 func (db *DB) GetCameraBySerial(ctx context.Context, deviceSerial string) (*CameraRecord, error) {
 	row := db.pool.QueryRow(ctx,
-		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes, resolution, recording_mode, fw_version
+		`SELECT device_id, user_id, display_name, enrolled_at, last_seen_at, notes,
+		        resolution, recording_mode, fw_version,
+		        power_mode, upload_mode, schedule, battery_rules
 		 FROM cameras WHERE device_serial = $1`, deviceSerial)
 
 	var c CameraRecord
-	err := row.Scan(&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt, &c.Notes, &c.Resolution, &c.RecordingMode, &c.FwVersion)
+	err := row.Scan(
+		&c.DeviceID, &c.UserID, &c.DisplayName, &c.EnrolledAt, &c.LastSeenAt,
+		&c.Notes, &c.Resolution, &c.RecordingMode, &c.FwVersion,
+		&c.PowerMode, &c.UploadMode, &c.Schedule, &c.BatteryRules,
+	)
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}

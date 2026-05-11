@@ -110,6 +110,23 @@ class PresignResponse(BaseModel):
     init_url: PresignedUrl | None = Field(default=None)
     storage_capped: bool | None = Field(default=None)
 
+class LocalManifestRequest(BaseModel):
+    """LocalManifestRequest is the body of
+POST /api/v1/cameras/{deviceID}/local-manifest. A lazy-mode camera
+posts a manifest of segments it has on disk but has NOT yet uploaded
+to S3, so the server's timeline / coverage bar can show the user
+that footage exists even if it's not fetchable until they scrub to
+it. On scrub, the server queues an `upload_segments` command which
+pulls the bytes on demand.
+
+Manifest entries are inserted with `uploaded_to_s3 = FALSE`. When
+the camera later uploads a segment (because of a scrub-triggered
+command), the presign-confirm path flips it to TRUE."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    segments: list[UploadedSegment]
+
 class QRPayload(BaseModel):
     """QRPayload is the JSON shape encoded inside a provisioning QR code. The
 viewer UI builds it (via the server's EnrollmentQR handler), displays
@@ -133,4 +150,5 @@ PresignRequest.model_rebuild()
 UploadedSegment.model_rebuild()
 PresignedUrl.model_rebuild()
 PresignResponse.model_rebuild()
+LocalManifestRequest.model_rebuild()
 QRPayload.model_rebuild()

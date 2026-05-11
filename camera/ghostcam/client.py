@@ -23,6 +23,7 @@ from ghostcam.identity import Identity
 from ghostcam.signing import build_signature_header
 from ghostcam.wire import (
     CameraCommand,
+    LocalManifestRequest,
     PresignRequest,
     PresignResponse,
     ProvisionRequest,
@@ -138,6 +139,24 @@ class Client:
         )
         if resp.status_code // 100 != 2:
             raise S3UploadError(resp.status_code)
+
+    async def post_local_manifest(
+        self, segments: list[UploadedSegment],
+    ) -> None:
+        """Lazy-mode camera tells the server about segments it's
+        holding locally. Server records them with uploaded_to_s3=FALSE
+        so the timeline shows them; scrub triggers an upload_segments
+        command to fetch the bytes on demand.
+
+        No-op when segments is empty.
+        """
+        if not segments:
+            return
+        body = LocalManifestRequest(segments=segments).model_dump(
+            by_alias=True, exclude_none=True,
+        )
+        path = f"/api/v1/cameras/{self.device_id}/local-manifest"
+        await self._post_json(path, body)
 
 
 async def provision(

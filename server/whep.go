@@ -52,6 +52,12 @@ func (a *App) WHEPOffer(w http.ResponseWriter, r *http.Request) {
 
 	session := a.Live.GetSession(deviceID)
 	if session == nil {
+		// Standby-mode wake: park a 60 s flag in Redis. The camera's
+		// next telemetry poll reads it and opens the live WS, then a
+		// follow-up WHEP request will find the session ready.
+		if a.Redis != nil {
+			a.Redis.Set(r.Context(), wakeLiveKey(deviceID), "1", 60*time.Second)
+		}
 		http.Error(w, "camera not streaming", http.StatusNotFound)
 		return
 	}

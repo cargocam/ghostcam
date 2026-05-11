@@ -66,6 +66,7 @@ def test_wire_subpackage_is_curated() -> None:
     __all__ should expose every codegen'd type."""
     expected_wire = {
         "CameraCommand",
+        "LocalManifestRequest",
         "PresignedUrl",
         "PresignRequest",
         "PresignResponse",
