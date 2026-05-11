@@ -59,6 +59,7 @@ Config is loaded once at startup — there is no runtime reload endpoint. To app
 | `ANTHROPIC_API_KEY` | _(none)_ | Claude API key for support-email triage classification. When empty, the raw email subject + body is posted to Linear as-is. |
 | `LINEAR_API_KEY` | _(none)_ | Linear personal API key for creating support tickets. When empty, the Linear step is a logging no-op. |
 | `LINEAR_TEAM_ID` | _(none)_ | Linear team UUID that support tickets are created in. Required when `LINEAR_API_KEY` is set. |
+| `GHOSTCAM_PPROF_ADDR` | _(none)_ | Address for the optional `net/http/pprof` listener (e.g. `127.0.0.1:6060`). Off by default. **Bind to loopback only** — the handlers are unauthenticated. See `docs/debugging.md` § "Server memory / RSS investigation". |
 
 ### Camera
 

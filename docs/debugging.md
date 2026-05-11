@@ -22,3 +22,18 @@
 - **Firmware OTA**: Admin uploads firmware via `POST /api/v1/admin/firmware` (stored in Tigris, version published via Redis). Cameras check `GET /api/v1/firmware/latest` on startup and auto-update via staged binary + systemd `ExecStartPre` swap. Firmware SHA256 verification (server stores hash, camera verifies).
 - **Pre-encoded test loop**: Place `test-loop.mp4` in the camera's data dir for low-CPU test mode (~5% vs 49% with testsrc2 encoding). The camera uses `ffmpeg -stream_loop` to segment it continuously.
 - **Unenroll script**: `pi.sh unenroll` clears credential files (`api_key`, `device_id`, `server_url`) from the camera's data dir.
+- **Server memory / RSS investigation** (`GH #56`): The server can expose Go's `net/http/pprof` handlers on a separate loopback-only listener. Off by default. Set `GHOSTCAM_PPROF_ADDR=127.0.0.1:6060` on the Fly app (`fly secrets set GHOSTCAM_PPROF_ADDR=127.0.0.1:6060`) and the server starts a second listener that serves `/debug/pprof/*`. **Loopback-only by design** — the handlers are unauthenticated and dump goroutine state, allocations, and live memory. Reach the endpoint with:
+  ```bash
+  fly ssh console -a ghostcam
+  curl -s http://127.0.0.1:6060/debug/pprof/heap > /tmp/heap.pprof
+  # then on your laptop:
+  fly ssh sftp shell -a ghostcam   # `get /tmp/heap.pprof`
+  go tool pprof -http=:8080 heap.pprof
+  ```
+  Useful profiles: `heap` (live allocations), `goroutine` (stuck goroutines / leaks), `allocs` (cumulative — pair with `?seconds=30`), `profile` (30s CPU sample). To grab everything in one shot:
+  ```bash
+  curl -s http://127.0.0.1:6060/debug/pprof/heap > heap.pprof
+  curl -s http://127.0.0.1:6060/debug/pprof/goroutine > goroutine.pprof
+  curl -s "http://127.0.0.1:6060/debug/pprof/profile?seconds=30" > cpu.pprof
+  ```
+  Locally: bring the test stack up (`docker compose --profile test up -d`), `docker compose exec ghostcam-server sh`, then curl as above. Unset the env var (or `fly secrets unset GHOSTCAM_PPROF_ADDR`) to disable.
