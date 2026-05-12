@@ -81,6 +81,66 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	})
 }
 
+// GlobalRateLimiter is a single shared token bucket — no per-IP keying.
+// Used in front of argon2-heavy endpoints to bound the *total* rate of
+// expensive password verifications across all clients, defending against
+// distributed credential stuffing where each individual IP stays under
+// the per-IP cap but the aggregate would still saturate the server.
+//
+// The argon2 semaphore in `server/auth` bounds peak memory; this bounds
+// the queue length feeding into it. Without the global cap, a botnet
+// large enough to evade the per-IP limit could park thousands of
+// goroutines at the semaphore — small per-request cost, but a real
+// availability hit for legitimate users.
+type GlobalRateLimiter struct {
+	mu        sync.Mutex
+	tokens    float64
+	lastCheck time.Time
+	rate      float64
+	maxBurst  float64
+}
+
+// NewGlobalRateLimiter caps total requests at reqsPerMin across all
+// clients. Burst size equals reqsPerMin (one minute's worth).
+func NewGlobalRateLimiter(reqsPerMin int) *GlobalRateLimiter {
+	return &GlobalRateLimiter{
+		tokens:    float64(reqsPerMin),
+		lastCheck: time.Now(),
+		rate:      float64(reqsPerMin) / 60.0,
+		maxBurst:  float64(reqsPerMin),
+	}
+}
+
+// Allow returns true if a token is available and consumes it.
+func (g *GlobalRateLimiter) Allow() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	now := time.Now()
+	g.tokens += now.Sub(g.lastCheck).Seconds() * g.rate
+	if g.tokens > g.maxBurst {
+		g.tokens = g.maxBurst
+	}
+	g.lastCheck = now
+
+	if g.tokens < 1 {
+		return false
+	}
+	g.tokens--
+	return true
+}
+
+// Middleware rate-limits the wrapped handler at the global rate.
+func (g *GlobalRateLimiter) Middleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !g.Allow() {
+			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // clientIP extracts the client IP from the request. Prefers Fly-Client-IP
 // (trusted, set by Fly.io proxy and cannot be spoofed) over X-Forwarded-For.
 func clientIP(r *http.Request) string {
