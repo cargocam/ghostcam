@@ -27,11 +27,12 @@ jobs:
       # wheel and the .deb (which wraps a Pi-side venv install of that
       # wheel) so cameras with auto-update can apt-install the .deb on
       # firmware check.
+      #
+      # `uv build` has its own wheel builder so we don't need the
+      # standalone `build` package — keeps the dev-extras lean.
       - name: Build wheel
         working-directory: camera
-        run: |
-          uv sync --frozen --extra dev
-          uv run python -m build --wheel --outdir ../dist
+        run: uv build --wheel --out-dir ../dist
 
       - name: Package .deb (wraps wheel install into /opt/ghostcam venv)
         run: |
