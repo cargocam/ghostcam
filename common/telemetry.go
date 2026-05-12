@@ -89,6 +89,15 @@ type TelemetryDatagram struct {
 	// "5G_NSA", "WCDMA"). Pairs with the existing Sig dBm so the UI
 	// can show "−95 dBm LTE" vs "−95 dBm 3G". Absent when wired.
 	ModemRAT *string `json:"modem_rat,omitempty"`
+	// NetworkRecoveryAttempts: cumulative count of times the daemon
+	// detected an extended telemetry-POST silence (consecutive failures
+	// past a threshold) and forced a network re-association via nmcli
+	// or mmcli. Non-zero means the camera *did* lose its uplink at
+	// some point and recovered itself; pair with the older
+	// `presign_fail_count` style counters to distinguish "flaky network
+	// but daemon kept up" from "uplink went black-hole and got
+	// reset". See GH #82.
+	NetworkRecoveryAttempts *uint32 `json:"network_recovery_attempts,omitempty"`
 }
 
 // Ptr helpers for building TelemetryDatagram literals.

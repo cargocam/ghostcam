@@ -79,6 +79,12 @@ class _SharedFlags:
     # Sliding window of recent (close → PUT 200) latencies in ms, capped
     # at WINDOW. telemetry_poll computes p95 over this.
     upload_latency_ms_window: list[int] = field(default_factory=list)
+    # Cumulative count of times the daemon detected uplink silence past
+    # the recovery threshold and called platform.recover_network() to
+    # cycle the network stack. Non-zero in steady state = something is
+    # going wrong with the link (intermittent WiFi, cellular black-hole,
+    # etc.). Surfaced via telemetry.network_recovery_attempts. See GH #82.
+    network_recovery_attempts: int = 0
 
 
 # Width of the upload-latency sliding window. Chosen to cover ~5 minutes

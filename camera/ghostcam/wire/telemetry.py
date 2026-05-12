@@ -37,6 +37,7 @@ Pointer fields implement omitempty — only non-nil fields are serialized."""
     event_loop_lag_ms: int | None = Field(default=None)
     disk_used_pct: int | None = Field(default=None)
     modem_rat: str | None = Field(default=None)
+    network_recovery_attempts: int | None = Field(default=None)
 
 
 TelemetryDatagram.model_rebuild()

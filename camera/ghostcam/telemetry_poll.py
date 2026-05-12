@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ghostcam.client import Client
-from ghostcam.platform import read_telemetry
+from ghostcam.platform import read_telemetry, recover_network
 from ghostcam.power_mode import PowerModeState
 from ghostcam.upload import flags as upload_flags
 from ghostcam.wire import CameraCommand
@@ -47,6 +47,18 @@ logger = logging.getLogger(__name__)
 
 BASE_INTERVAL = 10.0
 MAX_INTERVAL = 60.0
+
+# After this many consecutive telemetry-POST failures we call
+# platform.recover_network() to cycle the network stack. Picked so that
+# a normal 30 s glitch (server bounce, momentary congestion) doesn't
+# trigger a recovery — we only act on what looks like a sustained
+# black-hole. With BASE_INTERVAL = 10 s the trigger fires after ~1 min
+# of silence; with sleep-mode's 300 s cadence it fires after ~6 min.
+NETWORK_RECOVERY_THRESHOLD = 6
+
+# Cooldown between recovery attempts. Prevents back-to-back recoveries
+# from masking the underlying issue and from spamming logs.
+NETWORK_RECOVERY_COOLDOWN_S = 60.0
 
 
 # Type alias for the optional battery reader. Returns 0–100 or None.
@@ -80,6 +92,7 @@ async def run_telemetry_poll(
     consecutive_failures = 0
     health_marked = False
     last_tick_at = asyncio.get_event_loop().time()
+    last_recovery_at: float | None = None
 
     while True:
         # Measure how long the sleep over-ran its scheduled deadline.
@@ -139,6 +152,8 @@ async def run_telemetry_poll(
                 telemetry.live_ws_bytes_per_sec = int(bytes_in_window / tick_interval_s)
             if live_relay.dropped_frames_total:
                 telemetry.live_ws_dropped_frames = live_relay.dropped_frames_total
+        if upload_flags.network_recovery_attempts:
+            telemetry.network_recovery_attempts = upload_flags.network_recovery_attempts
 
         try:
             response = await client.post_telemetry_full(telemetry)
@@ -148,6 +163,35 @@ async def run_telemetry_poll(
                 "telemetry POST failed (%d consecutive): %s",
                 consecutive_failures, e,
             )
+            # The 2026-05-12 incident (GH #82) was the daemon happily
+            # backing off forever while the AP had silently dropped the
+            # association. After NETWORK_RECOVERY_THRESHOLD consecutive
+            # failures we kick the network stack via the platform hook,
+            # bounded by a cooldown so we don't loop on a server that's
+            # genuinely down.
+            if consecutive_failures >= NETWORK_RECOVERY_THRESHOLD:
+                now = asyncio.get_event_loop().time()
+                if (
+                    last_recovery_at is None
+                    or now - last_recovery_at >= NETWORK_RECOVERY_COOLDOWN_S
+                ):
+                    last_recovery_at = now
+                    upload_flags.network_recovery_attempts += 1
+                    logger.warning(
+                        "%d consecutive telemetry failures, attempting network recovery (attempt #%d)",
+                        consecutive_failures,
+                        upload_flags.network_recovery_attempts,
+                    )
+                    try:
+                        ok = await recover_network()
+                    except Exception as rec_e:  # noqa: BLE001
+                        logger.warning("recover_network raised: %s", rec_e)
+                        ok = False
+                    if ok:
+                        # Reset the failure counter — we don't want to
+                        # immediately re-trigger on the next failure;
+                        # give the new transport a chance.
+                        consecutive_failures = 0
             interval = _compute_failure_interval(consecutive_failures, power)
             continue
 

@@ -206,6 +206,12 @@ export interface TelemetryEntry {
   event_loop_lag_ms?: number /* uint16 */;
   disk_used_pct?: number /* uint8 */;
   modem_rat?: string;
+  /**
+   * NetworkRecoveryAttempts is the cumulative count of times the
+   * camera detected uplink silence and forced a network re-association.
+   * See GH #82.
+   */
+  network_recovery_attempts?: number /* uint32 */;
 }
 /**
  * TelemetryRangeResponse is the body of GET /api/v1/telemetry/{id}?from=&to=.

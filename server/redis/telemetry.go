@@ -123,6 +123,9 @@ func datagramToFields(d *common.TelemetryDatagram, serverTS uint64) map[string]i
 	if d.ModemRAT != nil {
 		fields["modem_rat"] = *d.ModemRAT
 	}
+	if d.NetworkRecoveryAttempts != nil {
+		fields["network_recovery_attempts"] = strconv.FormatUint(uint64(*d.NetworkRecoveryAttempts), 10)
+	}
 	return fields
 }
 
@@ -236,6 +239,10 @@ func FieldsToEntry(fields map[string]interface{}) (*apitypes.TelemetryEntry, err
 		case "modem_rat":
 			v := s
 			e.ModemRAT = &v
+		case "network_recovery_attempts":
+			n, _ := strconv.ParseUint(s, 10, 32)
+			v := uint32(n)
+			e.NetworkRecoveryAttempts = &v
 		}
 	}
 	return e, nil
