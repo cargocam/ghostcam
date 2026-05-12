@@ -194,6 +194,10 @@ type TelemetryEntry struct {
 	EventLoopLagMs         *uint16 `json:"event_loop_lag_ms,omitempty"`
 	DiskUsedPct            *uint8  `json:"disk_used_pct,omitempty"`
 	ModemRAT               *string `json:"modem_rat,omitempty"`
+	// NetworkRecoveryAttempts is the cumulative count of times the
+	// camera detected uplink silence and forced a network re-association.
+	// See GH #82.
+	NetworkRecoveryAttempts *uint32 `json:"network_recovery_attempts,omitempty"`
 }
 
 // TelemetryRangeResponse is the body of GET /api/v1/telemetry/{id}?from=&to=.

@@ -132,6 +132,26 @@ async def ensure_wifi(ssid: str, psk: str | None) -> None:
         await _impl.ensure_wifi(ssid, psk)
 
 
+async def recover_network() -> bool:
+    """Attempt to bring the uplink back when the camera goes silent.
+
+    Called by telemetry_poll after N consecutive POST failures —
+    the signal that we *think* we have a route but packets aren't
+    flowing (the same shape that bit us on 2026-05-12, see GH #82).
+
+    Returns True if any recovery step ran successfully; False if every
+    fallback failed. The caller should still continue retrying telemetry
+    after each attempt — recovery isn't itself a transport guarantee,
+    just a kick to try to *get* one.
+
+    No-op + returns True on synthetic platforms (no real network to
+    recover, but tests should still see the "happy path").
+    """
+    if hasattr(_impl, "recover_network"):
+        return bool(await _impl.recover_network())
+    return True
+
+
 async def scan_qr(timeout: float = 300.0) -> "QRPayload | None":  # noqa: UP037
     """Scan the camera sensor for a provisioning QR. Returns QRPayload or None."""
     if hasattr(_impl, "scan_qr"):
@@ -146,6 +166,7 @@ __all__ = [
     "get_gps_seed",
     "now_ms",
     "read_telemetry",
+    "recover_network",
     "scan_qr",
     "set_gps_seed",
     "wait_for_route",

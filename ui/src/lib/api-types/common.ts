@@ -143,6 +143,17 @@ export interface TelemetryDatagram {
    * can show "−95 dBm LTE" vs "−95 dBm 3G". Absent when wired.
    */
   modem_rat?: string;
+  /**
+   * NetworkRecoveryAttempts: cumulative count of times the daemon
+   * detected an extended telemetry-POST silence (consecutive failures
+   * past a threshold) and forced a network re-association via nmcli
+   * or mmcli. Non-zero means the camera *did* lose its uplink at
+   * some point and recovered itself; pair with the older
+   * `presign_fail_count` style counters to distinguish "flaky network
+   * but daemon kept up" from "uplink went black-hole and got
+   * reset". See GH #82.
+   */
+  network_recovery_attempts?: number /* uint32 */;
 }
 
 //////////

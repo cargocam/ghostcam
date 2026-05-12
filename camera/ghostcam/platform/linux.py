@@ -294,6 +294,109 @@ def _has_default_route() -> bool:
     return False
 
 
+async def recover_network() -> bool:
+    """Attempt to bring the uplink back when the daemon has been silent
+    for long enough that we suspect a black-hole. See GH #82.
+
+    Escalation order (each step waits and verifies before falling through):
+      1. `nmcli connection down + up` on every active connection
+         (cheapest — re-runs DHCP, re-associates with the AP).
+      2. `nmcli radio wifi off + on` (full radio cycle — heavier-weight,
+         clears state in the kernel/wpa_supplicant).
+      3. `mmcli -m any --reset` for the cellular modem if one is
+         present. Empty on WiFi-only Pis.
+
+    Returns True if any step succeeded — i.e. we returned to having a
+    default route within a short timeout. Returns False if every step
+    failed; the caller should re-attempt after another grace window
+    rather than spam recoveries (telemetry_poll's job).
+    """
+    logger.warning("recover_network: attempting to restore uplink")
+
+    if await _try_cycle_nmcli_connection():
+        return True
+    if await _try_cycle_wifi_radio():
+        return True
+    if await _try_reset_modem():
+        return True
+
+    logger.error("recover_network: all recovery steps failed")
+    return False
+
+
+async def _try_cycle_nmcli_connection() -> bool:
+    """Down + up every active nmcli connection. Cheapest recovery."""
+    if shutil.which("nmcli") is None:
+        return False
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "nmcli", "-t", "-f", "NAME", "connection", "show", "--active",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await proc.communicate()
+    except OSError:
+        return False
+    names = [n.strip() for n in out.decode("utf-8", "replace").splitlines() if n.strip()]
+    if not names:
+        return False
+    logger.info("recover_network: cycling nmcli connections: %s", names)
+    for name in names:
+        await _run("nmcli", "connection", "down", name)
+        await _run("nmcli", "connection", "up", name)
+    # Verify with a short wait.
+    return await wait_for_route(timeout=15.0)
+
+
+async def _try_cycle_wifi_radio() -> bool:
+    """`nmcli radio wifi off + on` — heavier than cycling a connection."""
+    if shutil.which("nmcli") is None:
+        return False
+    logger.info("recover_network: cycling wifi radio")
+    rc1 = await _run("nmcli", "radio", "wifi", "off")
+    await asyncio.sleep(2.0)
+    rc2 = await _run("nmcli", "radio", "wifi", "on")
+    if rc1 != 0 or rc2 != 0:
+        return False
+    return await wait_for_route(timeout=20.0)
+
+
+async def _try_reset_modem() -> bool:
+    """Reset the cellular modem via ModemManager. Returns False on
+    machines without a modem (mmcli reports no modems)."""
+    if shutil.which("mmcli") is None:
+        return False
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "mmcli", "-L",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        out, _ = await proc.communicate()
+        if b"/Modem/" not in out:
+            # No modem present — not a failure, just no-op.
+            return False
+    except OSError:
+        return False
+    logger.info("recover_network: resetting cellular modem")
+    if await _run("mmcli", "-m", "any", "--reset") != 0:
+        return False
+    return await wait_for_route(timeout=30.0)
+
+
+async def _run(*args: str) -> int:
+    """Subprocess helper: run, return rc, swallow OSError."""
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        return await proc.wait()
+    except OSError:
+        return -1
+
+
 async def wait_for_route(timeout: float | None = None) -> bool:
     """Poll /proc/net/route every 500ms until a default route appears or
     `timeout` elapses. None timeout = block forever.
