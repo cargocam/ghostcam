@@ -51,11 +51,29 @@ class LiveRelay:
         self._buf = bytearray()
         self._queue: asyncio.Queue[LiveFrame] = asyncio.Queue(maxsize=ring_size)
         self._closed = False
+        # Telemetry counters. `bytes_sent_window` is the byte tally since
+        # the last `pop_byte_tally()`; the telemetry poll reads + resets
+        # it to derive a bytes-per-second figure for the current tick.
+        # `dropped_frames_total` is cumulative since boot — non-zero
+        # means the WS consumer (server) is slower than the local
+        # encode rate.
+        self._bytes_sent_window = 0
+        self._dropped_frames_total = 0
 
     @property
     def queue(self) -> asyncio.Queue[LiveFrame]:
         """Consumer reads from this queue. The WebSocket relay loops on it."""
         return self._queue
+
+    @property
+    def dropped_frames_total(self) -> int:
+        return self._dropped_frames_total
+
+    def pop_byte_tally(self) -> int:
+        """Return the bytes pushed into the queue since the last call,
+        then reset to zero. Called from the telemetry poll loop."""
+        n, self._bytes_sent_window = self._bytes_sent_window, 0
+        return n
 
     def write(self, chunk: bytes) -> None:
         """Called from the capture-pipeline tee. Sync because the tee is
@@ -115,6 +133,7 @@ class LiveRelay:
     def _enqueue(self, frame: LiveFrame) -> None:
         # Drop-oldest semantics. Matches Go's two-step nonblocking
         # enqueue: try put, if full drop one and try put again.
+        self._bytes_sent_window += len(frame.data)
         try:
             self._queue.put_nowait(frame)
             return
@@ -122,6 +141,7 @@ class LiveRelay:
             pass
         with contextlib.suppress(asyncio.QueueEmpty):
             self._queue.get_nowait()
+            self._dropped_frames_total += 1
         with contextlib.suppress(asyncio.QueueFull):
             self._queue.put_nowait(frame)
 

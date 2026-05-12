@@ -41,6 +41,9 @@ def read_device_serial(data_dir: Path) -> str:
 
 
 def read_telemetry() -> TelemetryDatagram:
+    """Snapshot all platform sensors. Synchronous; the asyncio caller in
+    telemetry_poll wraps the whole thing in `asyncio.to_thread` so a
+    slow gpsd or nmcli can't block the event loop."""
     lat, lon, alt, fix = _gpsd_query()
     return TelemetryDatagram(
         ts=int(__import__("time").time() * 1000),
@@ -53,7 +56,58 @@ def read_telemetry() -> TelemetryDatagram:
         lon=lon,
         alt=alt,
         gps_fix=fix,
+        gpsd_query_ms=last_gpsd_query_ms or None,
+        disk_used_pct=_read_disk_used_pct(),
+        modem_rat=_read_modem_rat(),
     )
+
+
+def _read_disk_used_pct() -> int | None:
+    """Percent disk used at the segment dir's filesystem. Falls back to
+    the daemon's CWD if segment_dir isn't readable from here (we don't
+    take it as a parameter to keep the platform sensor interface
+    stable)."""
+    import shutil
+
+    for candidate in ("/var/ghostcam/segments", "/var/ghostcam"):
+        try:
+            usage = shutil.disk_usage(candidate)
+        except OSError:
+            continue
+        return int(100 * (usage.total - usage.free) // usage.total)
+    return None
+
+
+def _read_modem_rat() -> str | None:
+    """Radio Access Technology in use. Reads `nmcli -t -f
+    GENERAL.STATE,GENERAL.CONNECTION,...` for the cellular device — but
+    nmcli's exit code and field set vary by version, so we treat any
+    failure as "no modem, no signal" and return None.
+
+    Output is one of: LTE, 5G_NSA, 5G_SA, WCDMA, GSM, CDMA, EVDO. We
+    extract from ModemManager's RM (registration) text rather than
+    NetworkManager, because the latter only reports "gsm" generically.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ["mmcli", "-m", "any", "--output-keyvalue"],
+            capture_output=True,
+            text=True,
+            timeout=2.0,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if out.returncode != 0:
+        return None
+    for line in out.stdout.splitlines():
+        # `modem.generic.access-technologies.value[1]: lte` etc.
+        if "access-technologies.value[1]" in line:
+            _, _, val = line.partition(":")
+            val = val.strip().upper().replace("-", "_")
+            return val or None
+    return None
 
 
 # --- /proc + /sys readers ---
@@ -146,49 +200,78 @@ def _read_wifi_signal() -> int | None:
 # --- gpsd ---
 
 
+# Last gpsd query duration in milliseconds, set by `_gpsd_query`. Read
+# by the telemetry poll and surfaced as TelemetryDatagram.gpsd_query_ms.
+last_gpsd_query_ms: int = 0
+
+
 def _gpsd_query(
     *, host: str = "127.0.0.1", port: int = 2947, timeout: float = 5.0
 ) -> tuple[float | None, float | None, float | None, int | None]:
-    """Synchronous gpsd query (sensor reader runs in the asyncio thread but
-    is fast enough — total round-trip is <100ms for a fix)."""
-    import socket
+    """One-shot gpsd query via ?POLL.
 
+    The original implementation opened a socket, sent ?WATCH (the
+    *streaming* subscription), then sat in a recv loop parsing every
+    newline-delimited JSON message until a TPV arrived — pure waste for
+    a single-fix poll. py-spy traces during the 2026-05-12 perf run
+    showed 100 % of non-idle Python CPU here. `?POLL` is gpsd's reply-
+    with-one-cached-snapshot command (per gpsd_json(5)) and returns
+    immediately with the latest fix, so we skip both the recv-loop and
+    most of the JSON-parsing cost.
+
+    Still synchronous on a fresh socket: the caller (telemetry_poll)
+    wraps it in `asyncio.to_thread` so a slow gpsd doesn't stall the
+    asyncio event loop.
+    """
+    global last_gpsd_query_ms
+    import socket
+    import time as _time
+
+    started = _time.monotonic()
     try:
         sock = socket.create_connection((host, port), timeout=timeout)
     except OSError:
+        last_gpsd_query_ms = int((_time.monotonic() - started) * 1000)
         return None, None, None, None
 
     try:
         sock.settimeout(timeout)
-        sock.recv(4096)  # gpsd version banner
-        sock.sendall(b'?WATCH={"enable":true,"json":true}\n')
-        deadline = asyncio.get_event_loop().time() + timeout if False else None  # noqa: F841
-        # Read up to 16 KB total or until we see a TPV with mode>=2.
+        # Drain the version banner gpsd sends on connect. One recv is
+        # enough — the banner is well under 4 KB.
+        sock.recv(4096)
+        sock.sendall(b"?POLL;\n")
+        # The POLL response is a single JSON object containing `tpv` and
+        # `sky` arrays. Read until we see a newline (gpsd terminates
+        # responses with \r\n).
         buf = b""
-        while len(buf) < 16384:
+        while b"\n" not in buf and len(buf) < 16384:
             chunk = sock.recv(4096)
             if not chunk:
                 break
             buf += chunk
-            for line in buf.split(b"\n"):
-                if not line.strip():
-                    continue
-                try:
-                    obj = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if obj.get("class") != "TPV":
-                    continue
-                mode = int(obj.get("mode", 0))
-                if mode < 2:
-                    continue
-                lat = float(obj["lat"])
-                lon = float(obj["lon"])
-                alt = float(obj.get("altHAE") or obj.get("alt") or 0.0)
-                return lat, lon, alt, mode
-        return None, None, None, None
+        line = buf.split(b"\n", 1)[0]
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            return None, None, None, None
+        if obj.get("class") != "POLL":
+            return None, None, None, None
+        tpvs = obj.get("tpv") or []
+        if not tpvs:
+            return None, None, None, None
+        # gpsd's tpv array can have multiple entries (one per receiver);
+        # take the best-quality fix.
+        best = max(tpvs, key=lambda t: int(t.get("mode", 0)))
+        mode = int(best.get("mode", 0))
+        if mode < 2 or "lat" not in best or "lon" not in best:
+            return None, None, None, None
+        lat = float(best["lat"])
+        lon = float(best["lon"])
+        alt = float(best.get("altHAE") or best.get("alt") or 0.0)
+        return lat, lon, alt, mode
     finally:
         sock.close()
+        last_gpsd_query_ms = int((_time.monotonic() - started) * 1000)
 
 
 # --- network ---

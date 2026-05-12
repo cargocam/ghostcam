@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from ghostcam import upload as upload_module
 from ghostcam.client import S3UploadError
 from ghostcam.upload import (
     PendingConfirms,
@@ -177,3 +178,26 @@ async def test_resumes_pending_confirms_on_startup(tmp_path: Path) -> None:
     assert fake.presign_calls
     first_count, first_uploaded = fake.presign_calls[0]
     assert any(u.segment_id == "prev-1" for u in first_uploaded)
+
+
+def test_upload_latency_window_caps_at_window_size() -> None:
+    flags.upload_latency_ms_window.clear()
+    for i in range(200):
+        upload_module.record_upload_latency(i)
+    assert len(flags.upload_latency_ms_window) == upload_module.UPLOAD_LATENCY_WINDOW
+    # Window should hold the most recent N entries.
+    assert flags.upload_latency_ms_window[0] == 200 - upload_module.UPLOAD_LATENCY_WINDOW
+    assert flags.upload_latency_ms_window[-1] == 199
+
+
+def test_p95_helper() -> None:
+    """telemetry_poll._p95 — nearest-rank p95 over a small samples list."""
+    from ghostcam.telemetry_poll import _p95
+
+    assert _p95([]) == 0
+    assert _p95([100]) == 100
+    # 100 samples: p95 ≈ 95th value when sorted.
+    samples = list(range(1, 101))
+    assert _p95(samples) == 95
+    # Small list: nearest-rank rounds down.
+    assert _p95([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) == 9

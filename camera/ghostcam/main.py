@@ -198,6 +198,8 @@ async def _amain() -> int:
                     power=power,
                     wake_live_callback=live_driver.wake,
                     battery_reader=None,  # see GH #73 — HAT driver landing later
+                    live_relay=relay,
+                    segment_queue=segments,
                 ),
                 name="telemetry-poll",
             )

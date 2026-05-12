@@ -137,3 +137,29 @@ def test_null_relay_is_noop() -> None:
     null.write(b"\x00\x00\x00\x01\x67")
     null.push_audio(b"opus")
     null.close()
+
+
+def test_live_relay_byte_tally_and_drop_counter() -> None:
+    """pop_byte_tally returns bytes since the last call and resets;
+    dropped_frames_total counts drops when the ring fills up."""
+    from ghostcam.live_relay import DEFAULT_RING_SIZE, LiveRelay
+
+    relay = LiveRelay(ring_size=4)
+    # Push 5 frames into a 4-slot ring. One drop expected.
+    nal = b"\x00\x00\x00\x01\x67abcdef"  # SPS-shaped NAL with content
+    for _ in range(5):
+        relay.write(nal)
+        # Force the NAL to flush by writing a trailing start code.
+    # Trail a start code to terminate the last NAL.
+    relay.write(b"\x00\x00\x00\x01")
+    # We pushed 5 NALs; ring depth 4 means at least one drop.
+    assert relay.dropped_frames_total >= 1
+
+    # bytes_sent_window should equal the sum of all data bytes seen so far.
+    bytes_seen = relay.pop_byte_tally()
+    assert bytes_seen > 0
+    # Second pop should be zero (we just reset).
+    assert relay.pop_byte_tally() == 0
+
+    # Default ring size sanity.
+    LiveRelay(ring_size=DEFAULT_RING_SIZE)
