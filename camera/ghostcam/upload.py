@@ -35,6 +35,7 @@ import logging
 import os
 import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -155,6 +156,7 @@ async def run_upload_loop(
     power: PowerModeState | None = None,
     priority: deque[str] | None = None,
     recording_mode: str = "constant",
+    get_recording_mode: Callable[[], str] | None = None,
 ) -> None:
     """Long-running upload loop.
 
@@ -171,6 +173,12 @@ async def run_upload_loop(
     upload-decision boundary; recording_mode is the higher-level user
     intent ("only record motion"), upload_mode is the lower-level
     bandwidth knob ("defer non-motion until scrubbed-to").
+
+    `get_recording_mode` is an optional getter for live mode changes:
+    when provided, every loop iteration re-reads the current mode so
+    that constant ↔ motion transitions take effect without a daemon
+    restart. The static `recording_mode` kwarg is the initial value
+    used when no getter is wired in.
     """
     state = _UploadState()
     pending: PendingConfirms | None = None
@@ -248,11 +256,14 @@ async def run_upload_loop(
             # Either gate produces the same wire behaviour: segment
             # registered with uploaded_to_s3=FALSE; viewer scrub → camera
             # uploads on demand.
+            current_recording_mode = (
+                get_recording_mode() if get_recording_mode is not None else recording_mode
+            )
             lazy_skip = (
                 power is not None and not power.should_upload(seg.has_motion)
             )
             motion_mode_skip = (
-                recording_mode == "motion" and not seg.has_motion
+                current_recording_mode == "motion" and not seg.has_motion
             )
             if lazy_skip or motion_mode_skip:
                 reason = "lazy" if lazy_skip else "motion-only"
