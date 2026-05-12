@@ -48,13 +48,14 @@ logger = logging.getLogger(__name__)
 BASE_INTERVAL = 10.0
 MAX_INTERVAL = 60.0
 
-# After this many consecutive telemetry-POST failures we call
-# platform.recover_network() to cycle the network stack. Picked so that
-# a normal 30 s glitch (server bounce, momentary congestion) doesn't
-# trigger a recovery — we only act on what looks like a sustained
-# black-hole. With BASE_INTERVAL = 10 s the trigger fires after ~1 min
-# of silence; with sleep-mode's 300 s cadence it fires after ~6 min.
-NETWORK_RECOVERY_THRESHOLD = 6
+# If we haven't had a successful telemetry POST in this many seconds,
+# call platform.recover_network() to cycle the network stack. Measured
+# in wall-time-since-last-success rather than consecutive-failure-
+# count so the trigger doesn't drift with httpx's request timeout or
+# the backoff curve in _compute_failure_interval — both of which would
+# otherwise stretch a "60 s threshold" out to several minutes in
+# practice (caught by the 2026-05-12 black-hole test).
+NETWORK_RECOVERY_SILENCE_S = 60.0
 
 # Cooldown between recovery attempts. Prevents back-to-back recoveries
 # from masking the underlying issue and from spamming logs.
@@ -93,6 +94,10 @@ async def run_telemetry_poll(
     health_marked = False
     last_tick_at = asyncio.get_event_loop().time()
     last_recovery_at: float | None = None
+    # Wall-time of the last successful telemetry POST. Initialized to
+    # start-of-loop so we don't fire recovery before the first attempt
+    # has even run.
+    last_successful_post_at: float = asyncio.get_event_loop().time()
 
     while True:
         # Measure how long the sleep over-ran its scheduled deadline.
@@ -165,36 +170,42 @@ async def run_telemetry_poll(
             )
             # The 2026-05-12 incident (GH #82) was the daemon happily
             # backing off forever while the AP had silently dropped the
-            # association. After NETWORK_RECOVERY_THRESHOLD consecutive
-            # failures we kick the network stack via the platform hook,
-            # bounded by a cooldown so we don't loop on a server that's
-            # genuinely down.
-            if consecutive_failures >= NETWORK_RECOVERY_THRESHOLD:
-                now = asyncio.get_event_loop().time()
-                if (
-                    last_recovery_at is None
-                    or now - last_recovery_at >= NETWORK_RECOVERY_COOLDOWN_S
-                ):
-                    last_recovery_at = now
-                    upload_flags.network_recovery_attempts += 1
-                    logger.warning(
-                        "%d consecutive telemetry failures, attempting network recovery (attempt #%d)",
-                        consecutive_failures,
-                        upload_flags.network_recovery_attempts,
-                    )
-                    try:
-                        ok = await recover_network()
-                    except Exception as rec_e:  # noqa: BLE001
-                        logger.warning("recover_network raised: %s", rec_e)
-                        ok = False
-                    if ok:
-                        # Reset the failure counter — we don't want to
-                        # immediately re-trigger on the next failure;
-                        # give the new transport a chance.
-                        consecutive_failures = 0
+            # association. When we haven't had a successful POST in
+            # NETWORK_RECOVERY_SILENCE_S seconds we kick the network
+            # stack via the platform hook. Wall-time gating so the
+            # trigger doesn't drift with httpx timeouts or our own
+            # backoff curve; cooldown so we don't recover-loop against
+            # a server that's genuinely down.
+            now = asyncio.get_event_loop().time()
+            silence_s = now - last_successful_post_at
+            if silence_s >= NETWORK_RECOVERY_SILENCE_S and (
+                last_recovery_at is None
+                or now - last_recovery_at >= NETWORK_RECOVERY_COOLDOWN_S
+            ):
+                last_recovery_at = now
+                upload_flags.network_recovery_attempts += 1
+                logger.warning(
+                    "no successful telemetry for %.0fs, attempting network recovery (attempt #%d)",
+                    silence_s,
+                    upload_flags.network_recovery_attempts,
+                )
+                try:
+                    ok = await recover_network()
+                except Exception as rec_e:  # noqa: BLE001
+                    logger.warning("recover_network raised: %s", rec_e)
+                    ok = False
+                if ok:
+                    # Treat recovery as a successful "we have a route
+                    # again" beat — without this, the very next failed
+                    # POST would immediately re-trigger recovery (since
+                    # last_successful_post_at hasn't moved). The next
+                    # genuine POST success will overwrite this anyway.
+                    last_successful_post_at = now
+                    consecutive_failures = 0
             interval = _compute_failure_interval(consecutive_failures, power)
             continue
 
+        last_successful_post_at = asyncio.get_event_loop().time()
         if consecutive_failures > 0:
             consecutive_failures = 0
 
