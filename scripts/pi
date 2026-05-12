@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Containerized entry point for pi management. Re-execs scripts/pi.sh
-# inside the ghostcam-pi-tools image so the host doesn't need sshpass,
-# rsync, python-build, or openssh installed.
+# Containerized entry point for pi management. Delegates to the
+# `pi-tools` service in docker-compose.yml (gated behind profile `tools`,
+# so it never starts via plain `docker compose up`).
 #
 # Usage matches scripts/pi.sh exactly:
 #   ./scripts/pi setup
@@ -11,26 +11,38 @@
 #   etc.
 #
 # If you'd rather run pi.sh directly on the host (e.g. you already have
-# the deps and want to skip docker), invoke ./scripts/pi.sh instead.
+# sshpass / rsync / python-build installed), invoke ./scripts/pi.sh
+# instead.
 
 set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IMAGE="ghostcam-pi-tools"
-DOCKERFILE="${PROJECT_ROOT}/docker/pi-tools.Dockerfile"
+cd "${PROJECT_ROOT}"
 
 if ! command -v docker >/dev/null 2>&1; then
     echo "ERROR: docker not found. Either install Docker Desktop or run scripts/pi.sh directly." >&2
     exit 1
 fi
 
-# Rebuild the image when the Dockerfile changes; otherwise reuse.
+# Source .pi.env on the host so the values flow through compose's
+# `environment:` block (which references $PI_HOST etc.). Without this,
+# compose would only see vars that are already exported in the shell.
+if [ -f "${PROJECT_ROOT}/.pi.env" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "${PROJECT_ROOT}/.pi.env"
+    set +a
+fi
+
+# Rebuild the pi-tools image when the Dockerfile is newer than the
+# cached image. Compose otherwise reuses whatever's tagged, so changes
+# to docker/pi-tools.Dockerfile would silently go unbuilt.
+IMAGE="ghostcam-pi-tools"
+DOCKERFILE="${PROJECT_ROOT}/docker/pi-tools.Dockerfile"
 need_build=0
 if ! docker image inspect "${IMAGE}" >/dev/null 2>&1; then
     need_build=1
 else
-    # Compare Dockerfile mtime against image creation. If the Dockerfile
-    # is newer, the image is stale.
     image_created=$(docker image inspect -f '{{.Created}}' "${IMAGE}" 2>/dev/null || echo "")
     if [ -n "${image_created}" ]; then
         image_epoch=$(date -j -f "%Y-%m-%dT%H:%M:%S" "${image_created%.*Z}" "+%s" 2>/dev/null \
@@ -42,29 +54,12 @@ else
         fi
     fi
 fi
-
 if [ "${need_build}" -eq 1 ]; then
     echo "Building ${IMAGE} (first run / Dockerfile changed)..."
-    docker build -q -t "${IMAGE}" -f "${DOCKERFILE}" "${PROJECT_ROOT}" >/dev/null
+    docker compose build pi-tools >/dev/null
 fi
 
-# Source .pi.env on the host side and forward via -e. The in-container
-# pi.sh also sources it from the bind-mount, but explicit env is the
-# canonical override path so user-set vars (e.g. PI_HOST=10.0.0.10
-# ./scripts/pi deploy) propagate without rewriting .pi.env.
-if [ -f "${PROJECT_ROOT}/.pi.env" ]; then
-    # shellcheck disable=SC1091
-    source "${PROJECT_ROOT}/.pi.env"
-fi
-
-# Only allocate a TTY when stdout is a terminal so piping (./scripts/pi
-# logs | grep error) still works.
-tty_flag=""
-if [ -t 1 ]; then tty_flag="-t"; fi
-
-exec docker run --rm -i ${tty_flag} \
-    -v "${PROJECT_ROOT}:/repo" \
-    -e PI_HOST="${PI_HOST:-}" \
-    -e PI_USER="${PI_USER:-}" \
-    -e PI_PASSWORD="${PI_PASSWORD:-}" \
-    "${IMAGE}" "$@"
+# Profile-gated services aren't auto-started by `up`, but `run` bypasses
+# profile filtering and starts the service one-shot. --rm cleans up the
+# container after exit; compose handles TTY allocation automatically.
+exec docker compose run --rm pi-tools "$@"

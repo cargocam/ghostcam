@@ -190,9 +190,11 @@ Requires `GITHUB_RUNNER_TOKEN` in `.env` (generate at repo Settings → Actions 
 ```bash
 # Camera manager CLI (all Pi operations). `./scripts/pi` is the
 # containerized entry point — no host-side sshpass/rsync/python-build
-# needed; the wrapper lazily builds docker/pi-tools.Dockerfile on first
-# run and execs into it. (`./scripts/pi.sh` is the in-container script,
-# usable directly on the host if you already have the deps installed.)
+# needed; it's a thin shortcut over the `pi-tools` compose service
+# (profile-gated to `tools`, so `docker compose up` never starts it).
+# Equivalent invocation: `docker compose run --rm pi-tools <cmd>`.
+# (`./scripts/pi.sh` is the in-container script, usable directly on the
+# host if you already have the deps installed.)
 ./scripts/pi setup    [HOST] [USER] [PASS]      # First-time Pi provisioning
 ./scripts/pi deploy   [HOST] [USER] [PASS]      # Build wheel + deploy (full cycle, ~30s)
 ./scripts/pi watch    [HOST] [USER] [PASS]      # Hot-reload: rsync .py on save (~3-5s)

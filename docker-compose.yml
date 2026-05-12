@@ -95,6 +95,23 @@ services:
       - server-go-build-cache:/root/.cache/go-build
       - server-go-mod-cache:/root/go/pkg/mod
 
+  # Containerized runtime for scripts/pi.sh. Gated behind the `tools`
+  # profile so `docker compose up` never starts it — it only runs when
+  # explicitly invoked via `docker compose run --rm pi-tools <cmd>` (or
+  # the `./scripts/pi` wrapper, which is just a thin shortcut over that).
+  pi-tools:
+    profiles: [tools]
+    build:
+      context: .
+      dockerfile: docker/pi-tools.Dockerfile
+    image: ghostcam-pi-tools
+    environment:
+      - PI_HOST=${PI_HOST:-}
+      - PI_USER=${PI_USER:-}
+      - PI_PASSWORD=${PI_PASSWORD:-}
+    volumes:
+      - ./:/repo
+
   ui:
     build:
       context: .
