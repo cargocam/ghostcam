@@ -22,3 +22,6 @@ infra/secrets.env
 # Test fixtures (generated on demand)
 docker/test-loop.mp4
 .pi.env
+
+# Air hot-reload (tmp/ghostcam-server, build-errors.log)
+/tmp/

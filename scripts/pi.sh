@@ -8,6 +8,7 @@ set -euo pipefail
 # Usage:
 #   ./scripts/pi.sh setup    [HOST] [USER] [PASS]          # Full provisioning (fresh Pi)
 #   ./scripts/pi.sh deploy   [HOST] [USER] [PASS]          # Build wheel + deploy to Pi
+#   ./scripts/pi.sh watch    [HOST] [USER] [PASS]          # Hot-reload: rsync .py on save
 #   ./scripts/pi.sh logs     [HOST] [USER] [PASS]          # Stream camera logs
 #   ./scripts/pi.sh status   [HOST] [USER] [PASS]          # Health check
 #   ./scripts/pi.sh wifi-off [SECS] [HOST] [USER] [PASS]   # Toggle WiFi for failover testing
@@ -321,6 +322,63 @@ cmd_deploy() {
     pi_ssh "journalctl -u ghostcam-camera -f --no-pager"
 }
 
+cmd_watch() {
+    # Hot-reload loop for local dev: rsync the camera package's .py files
+    # into the Pi-side venv's site-packages and restart the service on
+    # every save. Faster than a full wheel deploy (~3-5s vs ~30s) because
+    # it skips the build/scp/pip-install round-trip — at the cost of not
+    # exercising the wheel packaging path. Run a periodic `deploy` to
+    # catch wheel/deb regressions.
+    if ! command -v fswatch >/dev/null 2>&1; then
+        echo "ERROR: fswatch not found. Install: brew install fswatch"
+        exit 1
+    fi
+    check_connection
+
+    # Discover the venv's ghostcam package dir once (handles whichever
+    # python3.X the Pi has).
+    local pkg_dir
+    pkg_dir=$(pi_ssh "ls -d ${VENV_DIR}/lib/python*/site-packages/ghostcam 2>/dev/null | head -1")
+    if [ -z "${pkg_dir}" ]; then
+        echo "ERROR: ghostcam not installed on Pi. Run './scripts/pi.sh deploy' first."
+        exit 1
+    fi
+
+    echo "Watching ${CAMERA_DIR}/ghostcam → ${PI_USER}@${PI_HOST}:${pkg_dir}"
+    echo "  (run 'pi.sh deploy' for dependency changes or wheel/.deb verification)"
+    echo ""
+
+    # SSHPASS keeps the password out of `ps` (rsync --rsh exposes its argv).
+    export SSHPASS="${PI_PASSWORD}"
+    local rsh="sshpass -e ssh ${SSH_OPTS}"
+
+    sync_once() {
+        local ts
+        ts="$(date '+%H:%M:%S')"
+        echo "[${ts}] syncing..."
+        # --rsync-path runs sudo on the remote so we can write into the
+        # root-owned venv. yurei has passwordless sudo (see cmd_setup).
+        if rsync --rsh="${rsh}" \
+            --rsync-path="sudo rsync" \
+            -a --delete \
+            --exclude='__pycache__' --exclude='*.pyc' \
+            "${CAMERA_DIR}/ghostcam/" \
+            "${PI_USER}@${PI_HOST}:${pkg_dir}/" 2>&1 | tail -5; then
+            pi_ssh "sudo systemctl restart ghostcam-camera"
+            echo "[$(date '+%H:%M:%S')] restarted"
+        else
+            echo "[$(date '+%H:%M:%S')] rsync failed; skipping restart"
+        fi
+    }
+
+    sync_once
+    # fswatch -o emits one event per coalesced batch, so a multi-file
+    # save (e.g. a refactor across 5 files) triggers one sync, not five.
+    fswatch -o "${CAMERA_DIR}/ghostcam" | while read -r _; do
+        sync_once
+    done
+}
+
 cmd_logs() {
     check_connection
     pi_ssh "journalctl -u ghostcam-camera -f --no-pager"
@@ -425,6 +483,13 @@ case "${CMD}" in
         check_sshpass
         cmd_deploy
         ;;
+    watch)
+        PI_HOST="${1:-${PI_HOST:-10.0.0.229}}"
+        PI_USER="${2:-${PI_USER:-yurei}}"
+        PI_PASSWORD="${3:-${PI_PASSWORD:-password}}"
+        check_sshpass
+        cmd_watch
+        ;;
     logs)
         PI_HOST="${1:-${PI_HOST:-10.0.0.229}}"
         PI_USER="${2:-${PI_USER:-yurei}}"
@@ -475,6 +540,7 @@ case "${CMD}" in
         echo "Usage:"
         echo "  ./scripts/pi.sh setup    [HOST] [USER] [PASS]          # Full provisioning (fresh Pi)"
         echo "  ./scripts/pi.sh deploy   [HOST] [USER] [PASS]          # Quick build + deploy binary"
+        echo "  ./scripts/pi.sh watch    [HOST] [USER] [PASS]          # Hot-reload: rsync .py on save"
         echo "  ./scripts/pi.sh logs     [HOST] [USER] [PASS]          # Stream camera logs"
         echo "  ./scripts/pi.sh status   [HOST] [USER] [PASS]          # Health check"
         echo "  ./scripts/pi.sh wifi-off [SECS] [HOST] [USER] [PASS]   # Toggle WiFi for failover testing"

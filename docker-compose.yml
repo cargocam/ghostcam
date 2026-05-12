@@ -53,7 +53,7 @@ services:
   server:
     build:
       context: .
-      target: server
+      target: server-dev
     restart: unless-stopped
     ports:
       - "3000:3000"
@@ -88,6 +88,12 @@ services:
       - RESEND_REPLY_TO=${RESEND_REPLY_TO:-}
     volumes:
       - server-data:/var/ghostcam
+      # Source bind-mount for `air` hot-reload. Save a .go file → air
+      # rebuilds + restarts the server (~1-2s). The named-volume Go
+      # caches survive container rebuilds.
+      - ./:/app
+      - server-go-build-cache:/root/.cache/go-build
+      - server-go-mod-cache:/root/go/pkg/mod
 
   ui:
     build:
@@ -221,6 +227,8 @@ volumes:
   redis-data:
   minio-data:
   server-data:
+  server-go-build-cache:
+  server-go-mod-cache:
   camera-1-data:
   camera-2-data:
   camera-3-data:
