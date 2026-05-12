@@ -49,6 +49,50 @@ func TestHLSManifestCache_GetPutTTL(t *testing.T) {
 	}
 }
 
+func TestHLSManifestCache_GetEvictsStaleOnAccess(t *testing.T) {
+	// Stale entries should be deleted on `get()` so a connected camera
+	// that's no longer queried doesn't hold a stale body indefinitely.
+	c := &hlsManifestCache{}
+	c.put("device-a", []byte("body"))
+
+	// Force expiry.
+	if v, ok := c.entries.Load("device-a"); ok {
+		v.(*hlsManifestCacheEntry).expiresAt = time.Now().Add(-time.Second).UnixNano()
+	}
+
+	if got := c.get("device-a"); got != nil {
+		t.Errorf("expected stale miss, got %q", got)
+	}
+
+	// Map should no longer have the entry — opportunistic eviction.
+	if _, ok := c.entries.Load("device-a"); ok {
+		t.Error("stale entry was not deleted on get()")
+	}
+}
+
+func TestHLSManifestCache_Sweep(t *testing.T) {
+	c := &hlsManifestCache{}
+	// Three entries: two stale, one fresh.
+	c.put("stale-1", []byte("a"))
+	c.put("stale-2", []byte("b"))
+	c.put("fresh", []byte("c"))
+	for _, k := range []string{"stale-1", "stale-2"} {
+		v, _ := c.entries.Load(k)
+		v.(*hlsManifestCacheEntry).expiresAt = time.Now().Add(-time.Second).UnixNano()
+	}
+
+	evicted := c.sweep()
+	if evicted != 2 {
+		t.Errorf("sweep evicted %d, want 2", evicted)
+	}
+	if _, ok := c.entries.Load("fresh"); !ok {
+		t.Error("sweep evicted a fresh entry")
+	}
+	if _, ok := c.entries.Load("stale-1"); ok {
+		t.Error("sweep left stale-1 in place")
+	}
+}
+
 func TestHLSManifestCache_IsolatesPerDevice(t *testing.T) {
 	c := &hlsManifestCache{}
 	c.put("a", []byte("body-a"))
@@ -61,6 +105,30 @@ func TestHLSManifestCache_IsolatesPerDevice(t *testing.T) {
 	}
 	if c.get("c") != nil {
 		t.Error("unknown device should miss")
+	}
+}
+
+func TestRuntimeNumGoroutine_CacheConsistentPair(t *testing.T) {
+	// The new packed-atomic-pointer cache returns (count, expiry) from
+	// a single load; readers can't observe a new expiry with an old
+	// count. Drive a cache miss + verify the stored sample is fresh.
+	cachedGoroutineSample.Store(nil) // reset
+	n1 := runtimeNumGoroutine()
+	if n1 < 1 {
+		t.Errorf("count = %d, want >= 1", n1)
+	}
+	sample := cachedGoroutineSample.Load()
+	if sample == nil {
+		t.Fatal("cache not populated after miss")
+	}
+	if sample.count != n1 {
+		t.Errorf("cache count = %d, returned %d", sample.count, n1)
+	}
+	if sample.expiryNs <= time.Now().UnixNano() {
+		t.Error("cache expiry not in the future")
+	}
+	if sample.expiryNs > time.Now().Add(2*time.Second).UnixNano() {
+		t.Error("cache expiry too far in the future")
 	}
 }
 

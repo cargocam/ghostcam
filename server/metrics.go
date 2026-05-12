@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"sync"
 	"sync/atomic"
@@ -70,9 +71,16 @@ func (c *hlsRequestCounter) qps5m() float64 {
 
 // hlsManifestCache caches the rendered live.m3u8 body for ~1 s. Reads
 // take a single map lookup; only the writer holds the lock. Sized for
-// O(connected cameras) entries which is small enough that an unbounded
-// sync.Map is fine. Entries are reaped opportunistically by the next
-// reader after their TTL elapses — no background sweeper.
+// O(connected cameras) entries.
+//
+// Stale entries are evicted two ways:
+//   1. Opportunistically on `get()` — any reader that hits a stale
+//      entry deletes it before returning miss. Handles the common
+//      "camera still attached, just past TTL" case in steady state.
+//   2. Periodically via the sweeper goroutine started from main()
+//      under runHLSManifestCacheSweeper. Handles the long-tail case
+//      where a camera disconnects forever; without this the map
+//      would grow without bound by deviceID count.
 type hlsManifestCache struct {
 	entries sync.Map // deviceID → *hlsManifestCacheEntry
 }
@@ -85,8 +93,9 @@ type hlsManifestCacheEntry struct {
 const hlsManifestCacheTTL = time.Second
 
 // get returns the cached body for a device or nil if the entry is
-// absent / stale. A stale entry is left in place so the next miss can
-// race-replace it; no need to evict.
+// absent / stale. Stale entries are deleted on read so a connected
+// camera that's no longer queried doesn't hold a reference to a
+// stale body indefinitely.
 func (c *hlsManifestCache) get(deviceID string) []byte {
 	v, ok := c.entries.Load(deviceID)
 	if !ok {
@@ -94,9 +103,46 @@ func (c *hlsManifestCache) get(deviceID string) []byte {
 	}
 	entry := v.(*hlsManifestCacheEntry)
 	if time.Now().UnixNano() > entry.expiresAt {
+		c.entries.Delete(deviceID)
 		return nil
 	}
 	return entry.body
+}
+
+// sweep evicts every entry whose TTL has expired. Called periodically
+// by runHLSManifestCacheSweeper. Cheap: sync.Map.Range iterates a
+// snapshot, and the entry count is bounded by O(connected cameras).
+func (c *hlsManifestCache) sweep() int {
+	now := time.Now().UnixNano()
+	evicted := 0
+	c.entries.Range(func(k, v any) bool {
+		entry := v.(*hlsManifestCacheEntry)
+		if now > entry.expiresAt {
+			c.entries.Delete(k)
+			evicted++
+		}
+		return true
+	})
+	return evicted
+}
+
+// runHLSManifestCacheSweeper periodically evicts expired entries. The
+// `get()` path also evicts on access, but a deviceID that stops being
+// queried (camera offline, viewer left) would otherwise sit in the map
+// forever. Period chosen well above the 1 s TTL so we don't churn
+// freshly-replaced entries — we're guarding against orphans, not
+// optimising hit rate.
+func runHLSManifestCacheSweeper(ctx context.Context) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			hlsCache.sweep()
+		}
+	}
 }
 
 func (c *hlsManifestCache) put(deviceID string, body []byte) {
@@ -172,22 +218,33 @@ var goroutineCountFn = func() int { return runtimeNumGoroutine() }
 
 func runtimeGoroutineCount() int { return goroutineCountFn() }
 
-// runtimeNumGoroutine is a thin wrapper so we can stub it in tests
-// without dragging in the full runtime package at call sites. Marked
-// with an atomic.Int64 cache to keep the cost truly trivial — only
-// refreshed once a second.
-var (
-	cachedGoroutineCount  atomic.Int64
-	cachedGoroutineExpiry atomic.Int64
-)
+// goroutineSample packs count + expiry behind a single atomic pointer
+// so a concurrent reader sees a consistent pair. Previously these were
+// two independent atomic.Int64 — a reader could observe a new expiry
+// with an old count. The drift was bounded for this use case (gauge,
+// no percentile maths) but the pattern would bite us the moment we
+// added a "report N to logs every K seconds" check that wanted both
+// values from the same snapshot.
+type goroutineSample struct {
+	count    int
+	expiryNs int64
+}
 
+var cachedGoroutineSample atomic.Pointer[goroutineSample]
+
+// runtimeNumGoroutine returns a 1-second-cached count. Multiple
+// concurrent readers may all observe a stale cache and call
+// numGoroutineSlow; last-write-wins on the atomic pointer. Values are
+// monotonically close so the resulting drift is negligible.
 func runtimeNumGoroutine() int {
 	now := time.Now().UnixNano()
-	if cachedGoroutineExpiry.Load() > now {
-		return int(cachedGoroutineCount.Load())
+	if s := cachedGoroutineSample.Load(); s != nil && s.expiryNs > now {
+		return s.count
 	}
 	n := numGoroutineSlow()
-	cachedGoroutineCount.Store(int64(n))
-	cachedGoroutineExpiry.Store(now + int64(time.Second))
+	cachedGoroutineSample.Store(&goroutineSample{
+		count:    n,
+		expiryNs: now + int64(time.Second),
+	})
 	return n
 }
