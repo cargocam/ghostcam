@@ -137,6 +137,24 @@ func (g *GlobalRateLimiter) Allow() (allowed bool, retryAfter time.Duration) {
 	return true, 0
 }
 
+// Tokens returns the current bucket fill level. Reflects time-based
+// refill since the last Allow() call. Pair with MaxBurst() to compute
+// "headroom remaining". Lock-protected so concurrent Allow()s don't
+// observe a torn read.
+func (g *GlobalRateLimiter) Tokens() float64 {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := time.Now()
+	tokens := g.tokens + now.Sub(g.lastCheck).Seconds()*g.rate
+	if tokens > g.maxBurst {
+		tokens = g.maxBurst
+	}
+	return tokens
+}
+
+// MaxBurst returns the configured bucket size.
+func (g *GlobalRateLimiter) MaxBurst() float64 { return g.maxBurst }
+
 // Middleware rate-limits the wrapped handler at the global rate.
 func (g *GlobalRateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
