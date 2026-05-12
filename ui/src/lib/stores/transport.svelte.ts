@@ -91,6 +91,16 @@ class TransportStore {
 						power_mode?: string;
 						upload_mode?: string;
 						battery_pct?: number;
+						segment_upload_p95_ms?: number;
+						segment_upload_retries?: number;
+						segment_queue_depth?: number;
+						live_ws_bytes_per_sec?: number;
+						live_ws_dropped_frames?: number;
+						gpsd_query_ms?: number;
+						event_loop_lag_ms?: number;
+						disk_used_pct?: number;
+						modem_rat?: string;
+						network_recovery_attempts?: number;
 					};
 				};
 				const t = data.telemetry;
@@ -105,6 +115,16 @@ class TransportStore {
 					power_mode: t.power_mode,
 					upload_mode: t.upload_mode,
 					battery_pct: t.battery_pct,
+					segment_upload_p95_ms: t.segment_upload_p95_ms,
+					segment_upload_retries: t.segment_upload_retries,
+					segment_queue_depth: t.segment_queue_depth,
+					live_ws_bytes_per_sec: t.live_ws_bytes_per_sec,
+					live_ws_dropped_frames: t.live_ws_dropped_frames,
+					gpsd_query_ms: t.gpsd_query_ms,
+					event_loop_lag_ms: t.event_loop_lag_ms,
+					disk_used_pct: t.disk_used_pct,
+					modem_rat: t.modem_rat,
+					network_recovery_attempts: t.network_recovery_attempts,
 				}, t.server_ts);
 			} catch {
 				// Ignore malformed events

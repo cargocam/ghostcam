@@ -62,6 +62,18 @@ class CameraStore {
 				gps: t.lat != null && t.lon != null
 					? { latitude: t.lat, longitude: t.lon, alt: t.alt ?? undefined }
 					: undefined,
+				// Pass-through health metrics (camera-side fields added
+				// during the 2026-05-12 perf series — PRs #80, #84).
+				segment_upload_p95_ms: t.segment_upload_p95_ms,
+				segment_upload_retries: t.segment_upload_retries,
+				segment_queue_depth: t.segment_queue_depth,
+				live_ws_bytes_per_sec: t.live_ws_bytes_per_sec,
+				live_ws_dropped_frames: t.live_ws_dropped_frames,
+				gpsd_query_ms: t.gpsd_query_ms,
+				event_loop_lag_ms: t.event_loop_lag_ms,
+				disk_used_pct: t.disk_used_pct,
+				modem_rat: t.modem_rat,
+				network_recovery_attempts: t.network_recovery_attempts,
 			} : null;
 			return {
 				device_id: c.device_id,

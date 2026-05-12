@@ -27,6 +27,20 @@ export interface TelemetryData {
 	upload_mode?: string;
 	/** 0–100. Only set when a battery-sensing HAT (GH #73) is wired up. */
 	battery_pct?: number;
+	/** Health metrics surfaced from the camera's TelemetryDatagram.
+	 * Names mirror the wire format intentionally — these are pass-
+	 * through for the UI; renaming would force two places to stay in
+	 * sync for no gain. */
+	segment_upload_p95_ms?: number;
+	segment_upload_retries?: number;
+	segment_queue_depth?: number;
+	live_ws_bytes_per_sec?: number;
+	live_ws_dropped_frames?: number;
+	gpsd_query_ms?: number;
+	event_loop_lag_ms?: number;
+	disk_used_pct?: number;
+	modem_rat?: string;
+	network_recovery_attempts?: number;
 }
 
 /**

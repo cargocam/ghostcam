@@ -40,6 +40,31 @@
 		if (value >= warn) return 'text-warning';
 		return 'text-primary';
 	}
+
+	function formatBitrate(bytesPerSec: number): string {
+		const kbps = (bytesPerSec * 8) / 1000;
+		if (kbps >= 1000) return `${(kbps / 1000).toFixed(1)} Mbps`;
+		return `${kbps.toFixed(0)} kbps`;
+	}
+
+	// Returns true if the telemetry carries any health signal worth
+	// rendering. Avoids drawing an empty "Health" section on cameras
+	// running an older firmware that doesn't emit these fields.
+	function hasHealth(t: typeof telemetry): boolean {
+		if (!t) return false;
+		return (
+			t.segment_upload_p95_ms != null ||
+			(t.segment_queue_depth ?? 0) > 0 ||
+			(t.segment_upload_retries ?? 0) > 0 ||
+			(t.live_ws_dropped_frames ?? 0) > 0 ||
+			(t.live_ws_bytes_per_sec ?? 0) > 0 ||
+			t.disk_used_pct != null ||
+			(t.network_recovery_attempts ?? 0) > 0 ||
+			t.modem_rat != null ||
+			(t.event_loop_lag_ms ?? 0) > 5 ||
+			(t.gpsd_query_ms ?? 0) > 100
+		);
+	}
 </script>
 
 {#if telemetry}
@@ -78,6 +103,87 @@
 				<span class="font-mono">{formatUptime(telemetry.uptime_secs ?? 0)}</span>
 			</div>
 		</div>
+
+		<!-- Health metrics. Surfaced selectively: most rows only render
+			 when they carry a signal — non-zero retries, recoveries,
+			 dropped frames — so a healthy camera shows a short, clean
+			 tile. Always-on rows (disk, p95) only render when the field
+			 is present at all. -->
+		{#if hasHealth(telemetry)}
+			<div class="border-t border-border/30 pt-3 space-y-1.5 text-xs">
+				<div class="text-[10px] uppercase tracking-wider text-muted-foreground">Health</div>
+				{#if telemetry.segment_upload_p95_ms != null}
+					<div class="flex justify-between">
+						<span class="text-muted-foreground">Upload p95</span>
+						<span class={cn("font-mono", statusColor(telemetry.segment_upload_p95_ms, 1000, 3000))}>
+							{telemetry.segment_upload_p95_ms} ms
+						</span>
+					</div>
+				{/if}
+				{#if (telemetry.segment_queue_depth ?? 0) > 0}
+					<div class="flex justify-between">
+						<span class="text-muted-foreground">Upload queue</span>
+						<span class={cn("font-mono", statusColor(telemetry.segment_queue_depth ?? 0, 10, 30))}>
+							{telemetry.segment_queue_depth}
+						</span>
+					</div>
+				{/if}
+				{#if (telemetry.segment_upload_retries ?? 0) > 0}
+					<div class="flex justify-between">
+						<span class="text-muted-foreground">Upload retries</span>
+						<span class="font-mono text-warning">{telemetry.segment_upload_retries}</span>
+					</div>
+				{/if}
+				{#if (telemetry.live_ws_dropped_frames ?? 0) > 0}
+					<div class="flex justify-between">
+						<span class="text-muted-foreground">Live drops</span>
+						<span class="font-mono text-warning">{telemetry.live_ws_dropped_frames}</span>
+					</div>
+				{/if}
+				{#if (telemetry.live_ws_bytes_per_sec ?? 0) > 0}
+					<div class="flex justify-between">
+						<span class="text-muted-foreground">Live</span>
+						<span class="font-mono">{formatBitrate(telemetry.live_ws_bytes_per_sec ?? 0)}</span>
+					</div>
+				{/if}
+				{#if telemetry.disk_used_pct != null}
+					<div class="flex justify-between">
+						<span class="text-muted-foreground">Disk</span>
+						<span class={cn("font-mono", statusColor(telemetry.disk_used_pct, 85, 95))}>
+							{telemetry.disk_used_pct}%
+						</span>
+					</div>
+				{/if}
+				{#if (telemetry.network_recovery_attempts ?? 0) > 0}
+					<div class="flex justify-between">
+						<span class="text-muted-foreground">Net recoveries</span>
+						<span class="font-mono text-warning">{telemetry.network_recovery_attempts}</span>
+					</div>
+				{/if}
+				{#if telemetry.modem_rat}
+					<div class="flex justify-between">
+						<span class="text-muted-foreground">Modem</span>
+						<span class="font-mono">{telemetry.modem_rat}</span>
+					</div>
+				{/if}
+				{#if (telemetry.event_loop_lag_ms ?? 0) > 5}
+					<div class="flex justify-between">
+						<span class="text-muted-foreground">Loop lag</span>
+						<span class={cn("font-mono", statusColor(telemetry.event_loop_lag_ms ?? 0, 50, 200))}>
+							{telemetry.event_loop_lag_ms} ms
+						</span>
+					</div>
+				{/if}
+				{#if (telemetry.gpsd_query_ms ?? 0) > 100}
+					<div class="flex justify-between">
+						<span class="text-muted-foreground">gpsd query</span>
+						<span class={cn("font-mono", statusColor(telemetry.gpsd_query_ms ?? 0, 200, 1000))}>
+							{telemetry.gpsd_query_ms} ms
+						</span>
+					</div>
+				{/if}
+			</div>
+		{/if}
 	</div>
 {:else}
 	<div class="px-4 py-6 text-xs text-muted-foreground text-center">
