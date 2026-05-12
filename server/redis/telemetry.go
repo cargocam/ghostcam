@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strconv"
 	"time"
 
@@ -41,211 +42,147 @@ func WriteTelemetry(ctx context.Context, rdb *goredis.Client, deviceID string, d
 	}
 }
 
+// datagramToFields walks d via reflection and serializes every field
+// whose `json:"..."` tag is non-empty. Pointer fields are skipped when
+// nil; scalar fields are always emitted.
+//
+// Why reflection: the prior per-field if-fanout was a known footgun —
+// every new field on TelemetryDatagram needed three updates (this
+// function, FieldsToEntry below, and apitypes.TelemetryEntry) and we
+// regularly forgot one. PR #83 fixed a months-long silent-drop bug
+// caused by exactly that pattern. This loop is ~50 µs per call (a
+// telemetry post happens every 10 s in steady state) so the runtime
+// cost is irrelevant.
 func datagramToFields(d *common.TelemetryDatagram, serverTS uint64) map[string]interface{} {
 	fields := map[string]interface{}{
 		"ts":        strconv.FormatUint(d.TS, 10),
 		"server_ts": strconv.FormatUint(serverTS, 10),
 	}
-	if d.Sig != nil {
-		fields["sig"] = strconv.FormatInt(int64(*d.Sig), 10)
-	}
-	if d.Temp != nil {
-		fields["temp"] = strconv.FormatUint(uint64(*d.Temp), 10)
-	}
-	if d.FPS != nil {
-		fields["fps"] = strconv.FormatFloat(float64(*d.FPS), 'f', -1, 32)
-	}
-	if d.Kbps != nil {
-		fields["kbps"] = strconv.FormatUint(uint64(*d.Kbps), 10)
-	}
-	if d.CPU != nil {
-		fields["cpu"] = strconv.FormatUint(uint64(*d.CPU), 10)
-	}
-	if d.Mem != nil {
-		fields["mem"] = strconv.FormatUint(uint64(*d.Mem), 10)
-	}
-	if d.Uptime != nil {
-		fields["uptime"] = strconv.FormatUint(uint64(*d.Uptime), 10)
-	}
-	if d.Lat != nil {
-		fields["lat"] = strconv.FormatFloat(*d.Lat, 'f', -1, 64)
-	}
-	if d.Lon != nil {
-		fields["lon"] = strconv.FormatFloat(*d.Lon, 'f', -1, 64)
-	}
-	if d.Alt != nil {
-		fields["alt"] = strconv.FormatFloat(float64(*d.Alt), 'f', -1, 32)
-	}
-	if d.GPSFix != nil {
-		fields["gps_fix"] = strconv.FormatUint(uint64(*d.GPSFix), 10)
-	}
-	// --- power-mode + bandwidth-savings fields (GH #75 / #76 series) ---
-	if d.PowerMode != nil {
-		fields["power_mode"] = *d.PowerMode
-	}
-	if d.UploadMode != nil {
-		fields["upload_mode"] = *d.UploadMode
-	}
-	if d.BatteryPct != nil {
-		fields["battery_pct"] = strconv.FormatUint(uint64(*d.BatteryPct), 10)
-	}
-	if d.MotionSegmentsUploaded != nil {
-		fields["motion_segments_uploaded"] = strconv.FormatUint(uint64(*d.MotionSegmentsUploaded), 10)
-	}
-	if d.MotionSegmentsSkipped != nil {
-		fields["motion_segments_skipped"] = strconv.FormatUint(uint64(*d.MotionSegmentsSkipped), 10)
-	}
-	// --- performance health metrics (PR A of the 2026-05-12 perf series) ---
-	if d.SegmentUploadP95Ms != nil {
-		fields["segment_upload_p95_ms"] = strconv.FormatUint(uint64(*d.SegmentUploadP95Ms), 10)
-	}
-	if d.SegmentUploadRetries != nil {
-		fields["segment_upload_retries"] = strconv.FormatUint(uint64(*d.SegmentUploadRetries), 10)
-	}
-	if d.SegmentQueueDepth != nil {
-		fields["segment_queue_depth"] = strconv.FormatUint(uint64(*d.SegmentQueueDepth), 10)
-	}
-	if d.LiveWSBytesPerSec != nil {
-		fields["live_ws_bytes_per_sec"] = strconv.FormatUint(uint64(*d.LiveWSBytesPerSec), 10)
-	}
-	if d.LiveWSDroppedFrames != nil {
-		fields["live_ws_dropped_frames"] = strconv.FormatUint(uint64(*d.LiveWSDroppedFrames), 10)
-	}
-	if d.GpsdQueryMs != nil {
-		fields["gpsd_query_ms"] = strconv.FormatUint(uint64(*d.GpsdQueryMs), 10)
-	}
-	if d.EventLoopLagMs != nil {
-		fields["event_loop_lag_ms"] = strconv.FormatUint(uint64(*d.EventLoopLagMs), 10)
-	}
-	if d.DiskUsedPct != nil {
-		fields["disk_used_pct"] = strconv.FormatUint(uint64(*d.DiskUsedPct), 10)
-	}
-	if d.ModemRAT != nil {
-		fields["modem_rat"] = *d.ModemRAT
-	}
-	if d.NetworkRecoveryAttempts != nil {
-		fields["network_recovery_attempts"] = strconv.FormatUint(uint64(*d.NetworkRecoveryAttempts), 10)
+
+	v := reflect.ValueOf(d).Elem()
+	t := v.Type()
+	for i := 0; i < t.NumField(); i++ {
+		key := jsonKey(t.Field(i))
+		if key == "" || key == "ts" {
+			continue // ts is the only non-pointer scalar we handle above
+		}
+		fv := v.Field(i)
+		if fv.Kind() == reflect.Pointer {
+			if fv.IsNil() {
+				continue
+			}
+			fv = fv.Elem()
+		}
+		s := formatScalar(fv)
+		if s != "" {
+			fields[key] = s
+		}
 	}
 	return fields
 }
 
-// FieldsToEntry parses Redis stream entry fields into a TelemetryEntry.
+// FieldsToEntry parses Redis stream entry fields into a TelemetryEntry
+// via reflection. Mirrors datagramToFields on the read path. Unknown
+// keys are ignored — a Redis stream might still carry fields from a
+// future schema, and we shouldn't fail to parse the rest.
 func FieldsToEntry(fields map[string]interface{}) (*apitypes.TelemetryEntry, error) {
 	e := &apitypes.TelemetryEntry{}
-	for k, v := range fields {
-		s, ok := v.(string)
+	v := reflect.ValueOf(e).Elem()
+	t := v.Type()
+
+	byKey := make(map[string]reflect.Value, t.NumField())
+	for i := 0; i < t.NumField(); i++ {
+		key := jsonKey(t.Field(i))
+		if key != "" {
+			byKey[key] = v.Field(i)
+		}
+	}
+
+	for k, raw := range fields {
+		s, ok := raw.(string)
 		if !ok {
 			continue
 		}
-		switch k {
-		case "ts":
-			n, _ := strconv.ParseUint(s, 10, 64)
-			e.TS = n
-		case "server_ts":
-			n, _ := strconv.ParseUint(s, 10, 64)
-			e.ServerTS = n
-		case "sig":
-			n, _ := strconv.ParseInt(s, 10, 8)
-			v := int8(n)
-			e.Sig = &v
-		case "temp":
-			n, _ := strconv.ParseUint(s, 10, 32)
-			v := uint32(n)
-			e.Temp = &v
-		case "fps":
-			n, _ := strconv.ParseFloat(s, 32)
-			v := float32(n)
-			e.FPS = &v
-		case "kbps":
-			n, _ := strconv.ParseUint(s, 10, 32)
-			v := uint32(n)
-			e.Kbps = &v
-		case "cpu":
-			n, _ := strconv.ParseUint(s, 10, 32)
-			v := uint32(n)
-			e.CPU = &v
-		case "mem":
-			n, _ := strconv.ParseUint(s, 10, 32)
-			v := uint32(n)
-			e.Mem = &v
-		case "uptime":
-			n, _ := strconv.ParseUint(s, 10, 32)
-			v := uint32(n)
-			e.Uptime = &v
-		case "lat":
-			n, _ := strconv.ParseFloat(s, 64)
-			e.Lat = &n
-		case "lon":
-			n, _ := strconv.ParseFloat(s, 64)
-			e.Lon = &n
-		case "alt":
-			n, _ := strconv.ParseFloat(s, 32)
-			v := float32(n)
-			e.Alt = &v
-		case "gps_fix":
-			n, _ := strconv.ParseUint(s, 10, 8)
-			v := uint8(n)
-			e.GPSFix = &v
-		case "power_mode":
-			v := s
-			e.PowerMode = &v
-		case "upload_mode":
-			v := s
-			e.UploadMode = &v
-		case "battery_pct":
-			n, _ := strconv.ParseUint(s, 10, 8)
-			v := uint8(n)
-			e.BatteryPct = &v
-		case "motion_segments_uploaded":
-			n, _ := strconv.ParseUint(s, 10, 32)
-			v := uint32(n)
-			e.MotionSegmentsUploaded = &v
-		case "motion_segments_skipped":
-			n, _ := strconv.ParseUint(s, 10, 32)
-			v := uint32(n)
-			e.MotionSegmentsSkipped = &v
-		case "segment_upload_p95_ms":
-			n, _ := strconv.ParseUint(s, 10, 32)
-			v := uint32(n)
-			e.SegmentUploadP95Ms = &v
-		case "segment_upload_retries":
-			n, _ := strconv.ParseUint(s, 10, 32)
-			v := uint32(n)
-			e.SegmentUploadRetries = &v
-		case "segment_queue_depth":
-			n, _ := strconv.ParseUint(s, 10, 8)
-			v := uint8(n)
-			e.SegmentQueueDepth = &v
-		case "live_ws_bytes_per_sec":
-			n, _ := strconv.ParseUint(s, 10, 32)
-			v := uint32(n)
-			e.LiveWSBytesPerSec = &v
-		case "live_ws_dropped_frames":
-			n, _ := strconv.ParseUint(s, 10, 32)
-			v := uint32(n)
-			e.LiveWSDroppedFrames = &v
-		case "gpsd_query_ms":
-			n, _ := strconv.ParseUint(s, 10, 16)
-			v := uint16(n)
-			e.GpsdQueryMs = &v
-		case "event_loop_lag_ms":
-			n, _ := strconv.ParseUint(s, 10, 16)
-			v := uint16(n)
-			e.EventLoopLagMs = &v
-		case "disk_used_pct":
-			n, _ := strconv.ParseUint(s, 10, 8)
-			v := uint8(n)
-			e.DiskUsedPct = &v
-		case "modem_rat":
-			v := s
-			e.ModemRAT = &v
-		case "network_recovery_attempts":
-			n, _ := strconv.ParseUint(s, 10, 32)
-			v := uint32(n)
-			e.NetworkRecoveryAttempts = &v
+		dst, ok := byKey[k]
+		if !ok {
+			continue
 		}
+		assignScalar(dst, s)
 	}
 	return e, nil
+}
+
+// jsonKey returns the "name" part of a `json:"name,omitempty"` tag, or
+// "" when the field is untagged (skip).
+func jsonKey(f reflect.StructField) string {
+	tag, ok := f.Tag.Lookup("json")
+	if !ok || tag == "-" {
+		return ""
+	}
+	if comma := indexComma(tag); comma >= 0 {
+		return tag[:comma]
+	}
+	return tag
+}
+
+func indexComma(s string) int {
+	for i := 0; i < len(s); i++ {
+		if s[i] == ',' {
+			return i
+		}
+	}
+	return -1
+}
+
+// formatScalar converts a single reflect.Value to the string form
+// Redis stores. Returns "" for unsupported kinds (caller drops them).
+func formatScalar(v reflect.Value) string {
+	switch v.Kind() {
+	case reflect.String:
+		return v.String()
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return strconv.FormatInt(v.Int(), 10)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return strconv.FormatUint(v.Uint(), 10)
+	case reflect.Float32:
+		return strconv.FormatFloat(v.Float(), 'f', -1, 32)
+	case reflect.Float64:
+		return strconv.FormatFloat(v.Float(), 'f', -1, 64)
+	case reflect.Bool:
+		if v.Bool() {
+			return "1"
+		}
+		return "0"
+	}
+	return ""
+}
+
+// assignScalar parses the Redis-stored string into the destination
+// field's kind. Pointer destinations get a fresh-allocated pointer to
+// the parsed value; non-pointer destinations get the value directly.
+// Parse errors result in the field being left at its zero value — same
+// failure mode as the old hand-written switch.
+func assignScalar(dst reflect.Value, s string) {
+	switch dst.Kind() {
+	case reflect.String:
+		dst.SetString(s)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+			dst.SetInt(n)
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if n, err := strconv.ParseUint(s, 10, 64); err == nil {
+			dst.SetUint(n)
+		}
+	case reflect.Float32, reflect.Float64:
+		if n, err := strconv.ParseFloat(s, 64); err == nil {
+			dst.SetFloat(n)
+		}
+	case reflect.Pointer:
+		// Allocate a fresh element and recurse onto its target.
+		dst.Set(reflect.New(dst.Type().Elem()))
+		assignScalar(dst.Elem(), s)
+	}
 }
 
 // QueryTelemetryRange returns telemetry entries for a device between fromMs and toMs.
