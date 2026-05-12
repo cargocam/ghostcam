@@ -251,6 +251,10 @@ func (a *App) router() http.Handler {
 	r.Post("/api/v1/auth/verify-email", a.VerifyEmail)
 	r.Post("/api/v1/auth/email/confirm", a.ConfirmEmailChange)
 	r.With(otpRL.Middleware).Post("/api/v1/auth/otp/request", a.RequestLoginOTP)
+	// /otp/verify itself isn't argon2-bearing — it checks an HMAC token —
+	// but we gate it under the global limiter anyway as defence-in-depth
+	// against OTP brute-force, and so that an attacker can't pivot from a
+	// throttled /login path to an unthrottled /otp/verify path.
 	r.With(loginRL.Middleware, argon2GlobalRL.Middleware).Post("/api/v1/auth/otp/verify", a.VerifyLoginOTP)
 	r.Post("/api/v1/webhooks/stripe", a.StripeWebhook)
 	r.Post("/api/v1/webhooks/github", a.GithubWebhook)

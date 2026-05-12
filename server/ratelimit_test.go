@@ -3,6 +3,7 @@ package main
 import (
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -14,11 +15,13 @@ func TestGlobalRateLimiter_BurstThenRejects(t *testing.T) {
 	g := NewGlobalRateLimiter(6)
 
 	for i := 0; i < 6; i++ {
-		if !g.Allow() {
+		ok, _ := g.Allow()
+		if !ok {
 			t.Fatalf("Allow #%d returned false inside burst window", i+1)
 		}
 	}
-	if g.Allow() {
+	ok, _ := g.Allow()
+	if ok {
 		t.Fatal("Allow #7 should be rejected — bucket should be empty after burst")
 	}
 }
@@ -29,7 +32,8 @@ func TestGlobalRateLimiter_RefillsOverTime(t *testing.T) {
 	for i := 0; i < 60; i++ {
 		g.Allow()
 	}
-	if g.Allow() {
+	ok, _ := g.Allow()
+	if ok {
 		t.Fatal("expected empty bucket")
 	}
 	// Hand-advance the limiter's clock by 1.1s instead of sleeping.
@@ -37,7 +41,8 @@ func TestGlobalRateLimiter_RefillsOverTime(t *testing.T) {
 	g.lastCheck = g.lastCheck.Add(-1100 * time.Millisecond)
 	g.mu.Unlock()
 
-	if !g.Allow() {
+	ok, _ = g.Allow()
+	if !ok {
 		t.Fatal("expected at least one token to have refilled after 1.1s")
 	}
 }
@@ -55,7 +60,7 @@ func TestGlobalRateLimiter_ConcurrentAccountsForEveryRequest(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if g.Allow() {
+			if ok, _ := g.Allow(); ok {
 				allowed.Add(1)
 			}
 		}()
@@ -90,5 +95,60 @@ func TestGlobalRateLimiter_Middleware_Returns429(t *testing.T) {
 	}
 	if called.Load() != 1 {
 		t.Errorf("handler called %d times, want exactly 1", called.Load())
+	}
+	// Retry-After must be present, parse as a positive integer (seconds).
+	ra := rec.Header().Get("Retry-After")
+	if ra == "" {
+		t.Error("Retry-After header missing on 429 response")
+	} else if secs, err := strconv.Atoi(ra); err != nil || secs < 1 {
+		t.Errorf("Retry-After = %q, want positive integer seconds", ra)
+	}
+}
+
+func TestRateLimiter_Middleware_Returns429WithRetryAfter(t *testing.T) {
+	// Per-IP limiter must also emit Retry-After. Use 1/min so the second
+	// hit from the same IP is immediately rejected.
+	rl := NewRateLimiter(1)
+	h := rl.Middleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodPost, "/login", nil)
+	req.Header.Set("Fly-Client-IP", "203.0.113.7")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first request: code = %d, want 200", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second request: code = %d, want 429", rec.Code)
+	}
+	ra := rec.Header().Get("Retry-After")
+	if ra == "" {
+		t.Error("Retry-After header missing on 429 response")
+	} else if secs, err := strconv.Atoi(ra); err != nil || secs < 1 {
+		t.Errorf("Retry-After = %q, want positive integer seconds", ra)
+	}
+}
+
+func TestSecondsUntilNextToken(t *testing.T) {
+	// 10/min → 1/6s per token. Empty bucket needs ceil(6) = 6s.
+	got := secondsUntilNextToken(0, 10.0/60.0)
+	if got != 6*time.Second {
+		t.Errorf("empty bucket at 10/min: got %v, want 6s", got)
+	}
+	// Half a token at 60/min → 0.5s to fill, rounded up to 1s minimum.
+	got = secondsUntilNextToken(0.5, 1.0)
+	if got != 1*time.Second {
+		t.Errorf("0.5 tokens at 60/min: got %v, want 1s (floor)", got)
+	}
+	// Edge: rate=0 must not divide-by-zero or hang.
+	got = secondsUntilNextToken(0, 0)
+	if got != 1*time.Second {
+		t.Errorf("zero rate: got %v, want 1s fallback", got)
 	}
 }
