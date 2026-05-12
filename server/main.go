@@ -226,21 +226,32 @@ func (a *App) router() http.Handler {
 	forgotRL := NewRateLimiter(5)
 	otpRL := NewRateLimiter(5)
 
+	// Single shared cap across all clients for unauthenticated endpoints
+	// that drive argon2id (~64 MiB working memory per call). The per-IP
+	// limiters above stop single-attacker spam; this stops distributed
+	// credential stuffing from saturating the server when every IP stays
+	// under its cap but the aggregate would still pile up at the argon2
+	// semaphore. Sized at 30/min — generous for real humans (3–5
+	// login/hour with retry), tight enough that a botnet can't force
+	// more than ~30 password verifications per minute regardless of how
+	// many source IPs it has. See GH #56.
+	argon2GlobalRL := NewGlobalRateLimiter(30)
+
 	// Public
 	r.Get("/healthz", a.Healthz)
 	r.Get("/readyz", a.Readyz)
-	r.With(loginRL.Middleware).Post("/api/v1/auth/login", a.Login)
+	r.With(loginRL.Middleware, argon2GlobalRL.Middleware).Post("/api/v1/auth/login", a.Login)
 	r.With(registerRL.Middleware).Post("/api/v1/auth/register", a.Register)
 	r.With(provisionRL.Middleware).Post("/api/v1/cameras/provision", a.Provision)
 	r.Get("/api/v1/billing/tiers", a.ListTiers)
 	r.Get("/api/v1/firmware/latest", a.FirmwareLatest)
 	r.Get("/api/v1/firmware/images", a.PiImagesList)
 	r.With(forgotRL.Middleware).Post("/api/v1/auth/forgot-password", a.ForgotPassword)
-	r.Post("/api/v1/auth/reset-password", a.ResetPassword)
+	r.With(argon2GlobalRL.Middleware).Post("/api/v1/auth/reset-password", a.ResetPassword)
 	r.Post("/api/v1/auth/verify-email", a.VerifyEmail)
 	r.Post("/api/v1/auth/email/confirm", a.ConfirmEmailChange)
 	r.With(otpRL.Middleware).Post("/api/v1/auth/otp/request", a.RequestLoginOTP)
-	r.With(loginRL.Middleware).Post("/api/v1/auth/otp/verify", a.VerifyLoginOTP)
+	r.With(loginRL.Middleware, argon2GlobalRL.Middleware).Post("/api/v1/auth/otp/verify", a.VerifyLoginOTP)
 	r.Post("/api/v1/webhooks/stripe", a.StripeWebhook)
 	r.Post("/api/v1/webhooks/github", a.GithubWebhook)
 	r.Post("/api/v1/webhooks/resend", a.ResendInboundWebhook)
