@@ -317,6 +317,25 @@
 		return mergeSpans(coverage.filter((s) => !(s.uploaded ?? true)));
 	});
 
+	// Pending bars (blue, pulsing) — segments the camera pre-announced
+	// but the upload PUT hasn't confirmed yet. Surfaces the "uploading
+	// now" state instead of the timeline gap that used to appear.
+	let selectedPendingBars = $derived.by(() => {
+		const id = cameraStore.selectedId;
+		if (!id) return [];
+		const pending = scrubberStore.pendingSegments.get(id);
+		if (!pending || pending.length === 0) return [];
+		const range = windowEnd - windowStart;
+		if (range <= 0) return [];
+		const bars: { left: number; width: number }[] = [];
+		for (const p of pending) {
+			const left = Math.max(0, ((p.start - windowStart) / range) * 100);
+			const right = Math.min(100, ((p.end - windowStart) / range) * 100);
+			if (right > left) bars.push({ left, width: right - left });
+		}
+		return bars;
+	});
+
 	let hasSelection = $derived(cameraStore.selectedId != null && selectedBars.length > 0);
 
 	// Motion dots: amber markers at motion event timestamps
@@ -472,6 +491,17 @@
 					class="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-primary/40"
 					style="left: {bar.left}%; width: {bar.width}%; background-image: repeating-linear-gradient(45deg, transparent 0 3px, rgba(255,255,255,0.35) 3px 6px);"
 					title="Local-only: scrubbing here triggers the camera to upload on demand"
+				></div>
+			{/each}
+			<!-- Pending bars (camera pre-announced these uploads via
+				 segment_pending SSE — upload in flight). Pulsing blue
+				 so the operator sees the segment arriving instead of a
+				 timeline gap. Auto-fades after 60 s if no confirm. -->
+			{#each selectedPendingBars as bar}
+				<div
+					class="absolute top-1/2 -translate-y-1/2 h-1.5 rounded-full bg-sky-400 animate-pulse"
+					style="left: {bar.left}%; width: {bar.width}%"
+					title="Uploading…"
 				></div>
 			{/each}
 		{/if}

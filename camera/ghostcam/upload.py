@@ -151,6 +151,14 @@ class PendingConfirms:
 class _UploadState:
     available_urls: deque[PresignedUrl] = field(default_factory=deque)
     confirms: list[UploadedSegment] = field(default_factory=list)
+    # Segments that started uploading since the last presign call but
+    # haven't yet confirmed. Surfaced on the next presign request's
+    # `pending` field; server publishes a `segment_pending` SSE so the
+    # viewer's timeline can render a blue indicator instead of a gap.
+    # Cleared after each presign call — the same segments will appear
+    # in `confirms` next cycle, at which point the server flips them
+    # from pending→landed via InsertSegments' ON CONFLICT.
+    pending: list[UploadedSegment] = field(default_factory=list)
 
 
 async def run_upload_loop(
@@ -374,6 +382,18 @@ async def _upload_segment(
         logger.warning("failed to read segment file %s: %s", seg.filename, e)
         return True  # gone, no retry
 
+    # Pre-announce the upload so the viewer's timeline can render a
+    # blue placeholder immediately (instead of waiting for the next
+    # presign cycle to confirm it). Added BEFORE the PUT so a slow
+    # upload's "blue ghost" appears as soon as we commit to it.
+    state.pending.append(UploadedSegment(
+        segment_id=presigned.segment_id,
+        start_ts=seg.start_ts,
+        end_ts=seg.end_ts,
+        size_bytes=seg.size_bytes,
+        has_motion=seg.has_motion,
+    ))
+
     # Latency is wall-time from "we have the data + a presigned URL" to
     # "S3 returned 2xx". Excludes presign latency intentionally —
     # presign p95 is a separate question that lives on the server side.
@@ -416,12 +436,19 @@ async def _replenish_urls(
     index: SegmentIndex | None,
 ) -> None:
     pending_confirms = state.confirms
+    pending_announce = state.pending
     state.confirms = []
+    state.pending = []
 
     try:
-        resp = await client.request_presigned_urls(3, pending_confirms)
+        resp = await client.request_presigned_urls(
+            3, pending_confirms, pending_announce,
+        )
     except Exception:
+        # Restore both lists so the next presign attempt re-announces
+        # the same pending uploads and re-confirms the same uploads.
         state.confirms = pending_confirms
+        state.pending = pending_announce
         flags.presign_fail_count += 1
         if flags.presign_fail_count >= 3:
             flags.server_unreachable = True

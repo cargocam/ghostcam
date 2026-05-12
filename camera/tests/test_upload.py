@@ -32,7 +32,7 @@ class FakeClient:
     """Minimal Client stand-in. Records requests, scripts responses."""
 
     presign_responses: list[PresignResponse] = field(default_factory=list)
-    presign_calls: list[tuple[int, list[UploadedSegment]]] = field(default_factory=list)
+    presign_calls: list[tuple[int, list[UploadedSegment], list[UploadedSegment]]] = field(default_factory=list)
     upload_paths: list[str] = field(default_factory=list)
     s3_failure_status: int | None = None
 
@@ -40,8 +40,9 @@ class FakeClient:
         self,
         count: int,
         uploaded: list[UploadedSegment] | None = None,
+        pending: list[UploadedSegment] | None = None,
     ) -> PresignResponse:
-        self.presign_calls.append((count, list(uploaded or [])))
+        self.presign_calls.append((count, list(uploaded or []), list(pending or [])))
         if self.presign_responses:
             return self.presign_responses.pop(0)
         return PresignResponse(urls=[])
@@ -176,7 +177,7 @@ async def test_resumes_pending_confirms_on_startup(tmp_path: Path) -> None:
 
     # The first presign call should carry the previously-pending confirm.
     assert fake.presign_calls
-    first_count, first_uploaded = fake.presign_calls[0]
+    first_count, first_uploaded, _first_pending = fake.presign_calls[0]
     assert any(u.segment_id == "prev-1" for u in first_uploaded)
 
 
@@ -201,3 +202,51 @@ def test_p95_helper() -> None:
     assert _p95(samples) == 95
     # Small list: nearest-rank rounds down.
     assert _p95([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) == 9
+
+
+@pytest.mark.asyncio
+async def test_pending_announced_in_presign_call(tmp_path: Path) -> None:
+    """A batch of successful PUTs surfaces in the NEXT presign call's
+    `pending` field. This is the wire signal powering the viewer's
+    blue-indicator overlay. The first 3 uploads exhaust the initial
+    URL batch; the next presign call (to replenish) carries them as
+    `pending`."""
+    fake = FakeClient(
+        presign_responses=[
+            # Initial batch of 3 URLs.
+            PresignResponse(urls=[
+                _presigned("seg-1"), _presigned("seg-2"), _presigned("seg-3"),
+            ]),
+            # Replenish call — this is the one that should carry the
+            # 3 just-uploaded segments in `pending`.
+            PresignResponse(urls=[_presigned("seg-4")]),
+            PresignResponse(urls=[]),
+        ],
+    )
+    shared: asyncio.Queue[NewSegment] = asyncio.Queue()
+    for i in range(4):
+        await shared.put(_make_segment(tmp_path, f"seg0000{i}.ts"))
+
+    task = asyncio.create_task(run_upload_loop(fake, tmp_path, shared))  # type: ignore[arg-type]
+    # 4 sequential uploads finish well under 200 ms with the fake client.
+    await asyncio.sleep(0.25)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+
+    # Cold start: first presign call has no pending.
+    assert fake.presign_calls
+    _count0, _uploaded0, pending0 = fake.presign_calls[0]
+    assert pending0 == []
+
+    # The replenish call (presign call #2) should carry the first 3
+    # segments as pending — they finished uploading but haven't yet
+    # confirmed via the `uploaded` path.
+    pending_segs = [
+        seg
+        for _, _uploaded, pending in fake.presign_calls
+        for seg in pending
+    ]
+    announced_ids = {p.segment_id for p in pending_segs}
+    assert {"seg-1", "seg-2", "seg-3"} <= announced_ids, \
+        f"expected seg-1/2/3 in pending across {fake.presign_calls}"

@@ -70,10 +70,17 @@ type CameraCommand struct {
 	SegmentIDs   []string `json:"segment_ids,omitempty"`   // upload_segments: priority-fetch these segments now
 }
 
-// PresignRequest requests presigned PUT URLs and confirms previously uploaded segments.
+// PresignRequest requests presigned PUT URLs and confirms previously
+// uploaded segments. The `pending` field declares segments the camera
+// is *about* to upload but hasn't yet — server uses it to surface a
+// "blue ghost" placeholder in the viewer timeline before the actual
+// S3 PUT lands. Lags upload by at most one presign cycle, which is
+// still way faster than waiting for the confirm-on-next-cycle round
+// trip the timeline currently uses.
 type PresignRequest struct {
-	Count    uint32           `json:"count"`
+	Count    uint32            `json:"count"`
 	Uploaded []UploadedSegment `json:"uploaded,omitempty"`
+	Pending  []UploadedSegment `json:"pending,omitempty"`
 }
 
 // UploadedSegment confirms a successfully uploaded segment.

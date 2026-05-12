@@ -81,6 +81,7 @@ func (a *App) SSE(w http.ResponseWriter, r *http.Request) {
 		fmt.Sprintf("storage_capped:%s", userID),
 		fmt.Sprintf("camera_limit_exceeded:%s", userID),
 		fmt.Sprintf("coverage:%s", userID),
+		fmt.Sprintf("segment_pending:%s", userID),
 		fmt.Sprintf("events_sync:%s", userID),
 	)
 	go func() {
@@ -131,6 +132,8 @@ func (a *App) SSE(w http.ResponseWriter, r *http.Request) {
 				eventType = "storage_capped"
 			case strings.HasPrefix(channel, "coverage:"):
 				eventType = "coverage"
+			case strings.HasPrefix(channel, "segment_pending:"):
+				eventType = "segment_pending"
 			case strings.HasPrefix(channel, "events_sync:"):
 				eventType = "events_sync"
 			}

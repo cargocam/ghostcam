@@ -188,6 +188,48 @@ func (a *App) Presign(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Pending pre-announce: camera says "I'm about to PUT these to S3"
+	// — surface as a `segment_pending` SSE so the viewer timeline
+	// renders a blue indicator instead of a gap. Rows confirm later
+	// via the presign cycle's `uploaded` path above (which flips
+	// pending=FALSE in InsertSegments' ON CONFLICT); stale pending
+	// rows are reaped by the periodic sweeper.
+	if len(body.Pending) > 0 {
+		now := uint64(time.Now().UnixMilli())
+		pendingRecords := make([]db.SegmentRecord, 0, len(body.Pending))
+		for _, p := range body.Pending {
+			pendingRecords = append(pendingRecords, db.SegmentRecord{
+				SegmentID:  p.SegmentID,
+				DeviceID:   deviceID,
+				S3Key:      s3.SegmentKey(deviceID, p.SegmentID),
+				StartTS:    p.StartTS,
+				EndTS:      p.EndTS,
+				SizeBytes:  p.SizeBytes,
+				Resolution: "",
+				CreatedAt:  now,
+				HasMotion:  p.HasMotion,
+			})
+		}
+		if err := a.DB.InsertPendingSegments(ctx, pendingRecords, now); err != nil {
+			slog.Warn("presign: insert pending segments failed", "device_id", deviceID, "error", err)
+		} else if a.Redis != nil {
+			pendingSegs := make([]apitypes.CoverageSegment, 0, len(body.Pending))
+			for _, p := range body.Pending {
+				pendingSegs = append(pendingSegs, apitypes.CoverageSegment{
+					ID:        p.SegmentID,
+					StartMs:   p.StartTS,
+					EndMs:     p.EndTS,
+					HasMotion: p.HasMotion,
+				})
+			}
+			payload, _ := json.Marshal(apitypes.SegmentPendingPayload{
+				DeviceID: deviceID,
+				Segments: pendingSegs,
+			})
+			a.Redis.Publish(ctx, fmt.Sprintf("segment_pending:%s", userID), payload)
+		}
+	}
+
 	// 3. Check tier limits.
 	sub, _ := a.DB.GetSubscription(ctx, userID)
 	tier := a.effectiveTier(ctx, sub)

@@ -73,12 +73,19 @@ Power-mode commands:
     segment_ids: list[str] | None = Field(default=None)
 
 class PresignRequest(BaseModel):
-    """PresignRequest requests presigned PUT URLs and confirms previously uploaded segments."""
+    """PresignRequest requests presigned PUT URLs and confirms previously
+uploaded segments. The `pending` field declares segments the camera
+is *about* to upload but hasn't yet — server uses it to surface a
+"blue ghost" placeholder in the viewer timeline before the actual
+S3 PUT lands. Lags upload by at most one presign cycle, which is
+still way faster than waiting for the confirm-on-next-cycle round
+trip the timeline currently uses."""
 
     model_config = ConfigDict(populate_by_name=True)
 
     count: int
     uploaded: list[UploadedSegment] | None = Field(default=None)
+    pending: list[UploadedSegment] | None = Field(default=None)
 
 class UploadedSegment(BaseModel):
     """UploadedSegment confirms a successfully uploaded segment."""

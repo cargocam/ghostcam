@@ -203,6 +203,13 @@ func run() error {
 	// sit in the map forever. Exits when ctx is cancelled at shutdown.
 	go runHLSManifestCacheSweeper(ctx)
 
+	// Drops pending-segment rows that never got confirmed (camera
+	// crashed mid-upload). Without this, the "I'm uploading" timeline
+	// indicators would persist forever in the DB. UI has its own
+	// shorter client-side fade so the user's view recovers fast; this
+	// is the durable cleanup. See server/pending_sweeper.go.
+	go runPendingSegmentSweeper(ctx, app)
+
 	select {
 	case err := <-errCh:
 		return fmt.Errorf("HTTP server: %w", err)

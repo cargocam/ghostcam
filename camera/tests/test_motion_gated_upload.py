@@ -37,7 +37,7 @@ class FakeClient:
     """Minimal client that captures upload + local-manifest calls."""
 
     presign_responses: list[PresignResponse] = field(default_factory=list)
-    presign_calls: list[tuple[int, list[UploadedSegment]]] = field(default_factory=list)
+    presign_calls: list[tuple[int, list[UploadedSegment], list[UploadedSegment]]] = field(default_factory=list)
     upload_paths: list[str] = field(default_factory=list)
     local_manifests: list[list[UploadedSegment]] = field(default_factory=list)
 
@@ -45,8 +45,9 @@ class FakeClient:
         self,
         count: int,
         uploaded: list[UploadedSegment] | None = None,
+        pending: list[UploadedSegment] | None = None,
     ) -> PresignResponse:
-        self.presign_calls.append((count, list(uploaded or [])))
+        self.presign_calls.append((count, list(uploaded or []), list(pending or [])))
         if self.presign_responses:
             return self.presign_responses.pop(0)
         return PresignResponse(urls=[])

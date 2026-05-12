@@ -10,7 +10,14 @@ import (
 // InsertSegments inserts a batch of segment metadata records. Segments
 // inserted here are assumed UPLOADED to S3 (`uploaded_to_s3 = TRUE`) —
 // the presign confirm path uses this. For lazy-mode local-only segments
-// see `InsertLocalSegments`.
+// see `InsertLocalSegments`. For pre-announced segments still in flight
+// see `InsertPendingSegments`.
+//
+// ON CONFLICT clears the `pending` flag and its timestamp so a row that
+// was first registered as pending (via InsertPendingSegments) flips to
+// the confirmed state cleanly. Without this clause, a confirmed row
+// would carry stale pending=TRUE / pending_at metadata and the SSE
+// "drop expired pending" sweeper would later issue a spurious removal.
 func (db *DB) InsertSegments(ctx context.Context, segments []SegmentRecord) error {
 	if len(segments) == 0 {
 		return nil
@@ -22,7 +29,8 @@ func (db *DB) InsertSegments(ctx context.Context, segments []SegmentRecord) erro
 			`INSERT INTO segments (segment_id, device_id, s3_key, start_ts, end_ts,
 			                       size_bytes, resolution, created_at, has_motion, uploaded_to_s3)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE)
-			 ON CONFLICT (segment_id) DO UPDATE SET uploaded_to_s3 = TRUE`,
+			 ON CONFLICT (segment_id) DO UPDATE
+			   SET uploaded_to_s3 = TRUE, pending = FALSE, pending_at = NULL`,
 			s.SegmentID, s.DeviceID, s.S3Key, int64(s.StartTS), int64(s.EndTS),
 			int64(s.SizeBytes), s.Resolution, int64(s.CreatedAt), s.HasMotion,
 		)
@@ -37,6 +45,76 @@ func (db *DB) InsertSegments(ctx context.Context, segments []SegmentRecord) erro
 		}
 	}
 	return nil
+}
+
+// InsertPendingSegments records a batch of segments the camera has
+// pre-announced via its presign call's `pending` array. The row carries
+// `pending = TRUE` and a `pending_at` timestamp; the next presign
+// confirm cycle flips it to `pending = FALSE, uploaded_to_s3 = TRUE`
+// via InsertSegments' ON CONFLICT branch. Stale pending rows are
+// dropped by a periodic sweeper (see PrunePendingSegments).
+//
+// Idempotent: ON CONFLICT DO NOTHING. The expected re-call path
+// (camera retries presign because its prior request timed out) shouldn't
+// reset pending_at — if the row already exists as pending we'd just
+// be re-confirming the same imminent upload.
+func (db *DB) InsertPendingSegments(ctx context.Context, segments []SegmentRecord, pendingAtMs uint64) error {
+	if len(segments) == 0 {
+		return nil
+	}
+
+	batch := &pgx.Batch{}
+	for _, s := range segments {
+		batch.Queue(
+			`INSERT INTO segments (segment_id, device_id, s3_key, start_ts, end_ts,
+			                       size_bytes, resolution, created_at, has_motion,
+			                       uploaded_to_s3, pending, pending_at)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, FALSE, TRUE, $10)
+			 ON CONFLICT (segment_id) DO NOTHING`,
+			s.SegmentID, s.DeviceID, s.S3Key, int64(s.StartTS), int64(s.EndTS),
+			int64(s.SizeBytes), s.Resolution, int64(s.CreatedAt), s.HasMotion,
+			int64(pendingAtMs),
+		)
+	}
+
+	br := db.pool.SendBatch(ctx, batch)
+	defer br.Close()
+
+	for range segments {
+		if _, err := br.Exec(); err != nil {
+			return fmt.Errorf("insert pending segment: %w", err)
+		}
+	}
+	return nil
+}
+
+// PrunePendingSegments removes pending-but-never-confirmed rows that
+// have aged past olderThanMs. Returns the segment_ids that were
+// dropped so callers can emit a corrective SSE. The sweeper in
+// server/main.go schedules this every minute with a 5-minute cutoff —
+// short enough that the "blue ghost" doesn't sit on the timeline
+// after a real upload failure, long enough that mild congestion
+// doesn't false-positive.
+func (db *DB) PrunePendingSegments(ctx context.Context, olderThanMs uint64) ([]string, error) {
+	rows, err := db.pool.Query(ctx,
+		`DELETE FROM segments
+		 WHERE pending = TRUE AND pending_at < $1
+		 RETURNING segment_id`,
+		int64(olderThanMs),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("prune pending segments: %w", err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan pending segment_id: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 // InsertLocalSegments records lazy-mode segments the camera produced
