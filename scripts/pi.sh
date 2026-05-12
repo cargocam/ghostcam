@@ -329,10 +329,10 @@ cmd_watch() {
     # it skips the build/scp/pip-install round-trip — at the cost of not
     # exercising the wheel packaging path. Run a periodic `deploy` to
     # catch wheel/deb regressions.
-    if ! command -v fswatch >/dev/null 2>&1; then
-        echo "ERROR: fswatch not found. Install: brew install fswatch"
-        exit 1
-    fi
+    #
+    # Uses pure-bash polling (find -newer) rather than fswatch/inotify so
+    # the host doesn't need an extra tool installed. 1s poll interval is
+    # plenty for an interactive edit loop.
     check_connection
 
     # Discover the venv's ghostcam package dir once (handles whichever
@@ -371,11 +371,22 @@ cmd_watch() {
         fi
     }
 
+    # Sentinel file's mtime is the "last sync" marker. find -newer beats
+    # it against every .py file under camera/ghostcam; if anything is
+    # newer, sync and bump the sentinel.
+    local sentinel
+    sentinel="$(mktemp -t ghostcam-watch.XXXXXX)"
+    trap 'rm -f "${sentinel}"' EXIT
+
     sync_once
-    # fswatch -o emits one event per coalesced batch, so a multi-file
-    # save (e.g. a refactor across 5 files) triggers one sync, not five.
-    fswatch -o "${CAMERA_DIR}/ghostcam" | while read -r _; do
-        sync_once
+    touch "${sentinel}"
+
+    while true; do
+        if [ -n "$(find "${CAMERA_DIR}/ghostcam" -name '*.py' -newer "${sentinel}" -type f -print -quit 2>/dev/null)" ]; then
+            touch "${sentinel}"
+            sync_once
+        fi
+        sleep 1
     done
 }
 

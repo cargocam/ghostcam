@@ -25,3 +25,6 @@ docker/test-loop.mp4
 
 # Air hot-reload (tmp/ghostcam-server, build-errors.log)
 /tmp/
+
+# Python build artifacts
+dist/

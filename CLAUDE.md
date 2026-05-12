@@ -188,21 +188,25 @@ docker compose up -d --profile runner  # GitHub Actions self-hosted runner
 Requires `GITHUB_RUNNER_TOKEN` in `.env` (generate at repo Settings → Actions → Runners → New self-hosted runner). The runner registers with labels `self-hosted,linux,x64` and picks up workflow jobs. Docker socket is mounted so jobs can run containers (integration tests, Docker builds).
 
 ```bash
-# Camera manager CLI (all Pi operations):
-./scripts/pi.sh setup    [HOST] [USER] [PASS]   # First-time Pi provisioning
-./scripts/pi.sh deploy   [HOST] [USER] [PASS]   # Build wheel + deploy (full cycle, ~30s)
-./scripts/pi.sh watch    [HOST] [USER] [PASS]   # Hot-reload: rsync .py on save (~3-5s)
-./scripts/pi.sh logs     [HOST] [USER] [PASS]   # Stream camera logs
-./scripts/pi.sh status   [HOST] [USER] [PASS]   # Health check
-./scripts/pi.sh wifi-off [SECS] [HOST] [USER] [PASS]  # Cellular failover test
-./scripts/pi.sh restart  [HOST] [USER] [PASS]   # Restart camera service
-./scripts/pi.sh ssh      [HOST] [USER] [PASS]   # Interactive SSH
-./scripts/pi.sh unenroll [HOST] [USER] [PASS]   # Reset enrollment
+# Camera manager CLI (all Pi operations). `./scripts/pi` is the
+# containerized entry point — no host-side sshpass/rsync/python-build
+# needed; the wrapper lazily builds docker/pi-tools.Dockerfile on first
+# run and execs into it. (`./scripts/pi.sh` is the in-container script,
+# usable directly on the host if you already have the deps installed.)
+./scripts/pi setup    [HOST] [USER] [PASS]      # First-time Pi provisioning
+./scripts/pi deploy   [HOST] [USER] [PASS]      # Build wheel + deploy (full cycle, ~30s)
+./scripts/pi watch    [HOST] [USER] [PASS]      # Hot-reload: rsync .py on save (~3-5s)
+./scripts/pi logs     [HOST] [USER] [PASS]      # Stream camera logs
+./scripts/pi status   [HOST] [USER] [PASS]      # Health check
+./scripts/pi wifi-off [SECS] [HOST] [USER] [PASS]  # Cellular failover test
+./scripts/pi restart  [HOST] [USER] [PASS]      # Restart camera service
+./scripts/pi ssh      [HOST] [USER] [PASS]      # Interactive SSH
+./scripts/pi unenroll [HOST] [USER] [PASS]      # Reset enrollment
 
 # `watch` rsyncs camera/ghostcam/ → /opt/ghostcam/lib/python*/site-packages/ghostcam
-# on every save and restarts the service. Skips the wheel build/scp/pip-install path,
-# so run `deploy` periodically (or for dependency changes) to catch packaging
-# regressions. Requires fswatch (brew install fswatch).
+# on every save (pure-bash find -newer poll, 1s interval) and restarts the service.
+# Skips the wheel build/scp/pip-install path, so run `deploy` periodically (or for
+# dependency changes) to catch packaging regressions.
 
 # The server hot-reloads automatically via `air` inside docker-compose — edit a
 # .go file and the container rebuilds + restarts in ~1-2s (see .air.toml).
