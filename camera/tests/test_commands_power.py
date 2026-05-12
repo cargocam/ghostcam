@@ -155,3 +155,98 @@ async def test_set_power_mode_without_power_state_is_noop(
     cmd = CameraCommand(type="set_power_mode", power_mode="standby")
     # No `power=` — handler silently does nothing.
     await handle_command(cmd, tmp_path, fake_client)
+
+
+# --- set_recording_mode hot-swap (PR B follow-up) ---
+
+
+def _patch_exit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Replace os._exit with a function that raises SystemExit. The
+    production handler uses os._exit (C-level exit, bypasses Python
+    cleanup) so systemd restarts the daemon; here we want the
+    handler-exit to be catchable inside a test."""
+    import os as _os
+
+    def _raise_systemexit(code: int) -> None:
+        raise SystemExit(code)
+
+    monkeypatch.setattr(_os, "_exit", _raise_systemexit)
+
+
+@pytest.mark.asyncio
+async def test_set_recording_mode_hot_swaps_constant_to_motion(
+    tmp_path: Path, power: PowerModeState,
+) -> None:
+    """Going constant → motion mutates the holder in-place, no exit."""
+    holder = ["constant"]
+    client = MagicMock()
+    await handle_command(
+        CameraCommand(type="set_recording_mode", mode="motion"),
+        tmp_path, client,
+        power=power,
+        set_recording_mode=lambda m: holder.__setitem__(0, m),
+        get_recording_mode=lambda: holder[0],
+    )
+    assert holder[0] == "motion"
+    # Stored file is still written so the new mode survives a future
+    # restart for any reason.
+    assert (tmp_path / "recording_mode").read_text() == "motion"
+
+
+@pytest.mark.asyncio
+async def test_set_recording_mode_exits_on_transition_to_never(
+    tmp_path: Path, power: PowerModeState, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Going constant → never requires task-lifecycle change → restart."""
+    _patch_exit(monkeypatch)
+    holder = ["constant"]
+    client = MagicMock()
+    with pytest.raises(SystemExit) as exc:
+        await handle_command(
+            CameraCommand(type="set_recording_mode", mode="never"),
+            tmp_path, client,
+            power=power,
+            set_recording_mode=lambda m: holder.__setitem__(0, m),
+            get_recording_mode=lambda: holder[0],
+        )
+    assert exc.value.code == 0
+    # Holder was NOT mutated — restart path means main.py will re-read
+    # the stored file on next boot.
+    assert holder[0] == "constant"
+    assert (tmp_path / "recording_mode").read_text() == "never"
+
+
+@pytest.mark.asyncio
+async def test_set_recording_mode_exits_on_transition_from_never(
+    tmp_path: Path, power: PowerModeState, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Going never → constant requires spawning watcher+upload tasks → restart."""
+    _patch_exit(monkeypatch)
+    holder = ["never"]
+    client = MagicMock()
+    with pytest.raises(SystemExit):
+        await handle_command(
+            CameraCommand(type="set_recording_mode", mode="constant"),
+            tmp_path, client,
+            power=power,
+            set_recording_mode=lambda m: holder.__setitem__(0, m),
+            get_recording_mode=lambda: holder[0],
+        )
+    assert holder[0] == "never"
+
+
+@pytest.mark.asyncio
+async def test_set_recording_mode_falls_back_to_restart_without_holder(
+    tmp_path: Path, power: PowerModeState, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When set_recording_mode/get_recording_mode kwargs are absent
+    (legacy callers, partial setups), the handler falls back to the
+    old restart-to-apply path so behaviour is unchanged."""
+    _patch_exit(monkeypatch)
+    client = MagicMock()
+    with pytest.raises(SystemExit):
+        await handle_command(
+            CameraCommand(type="set_recording_mode", mode="motion"),
+            tmp_path, client,
+            power=power,
+        )

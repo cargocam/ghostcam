@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 # commands — given a list of segment IDs, push them to the front of
 # the upload queue ahead of normal new-segment work.
 PriorityUploadCallback = Callable[[list[str]], None]
+# Holder setter / getter for the current recording_mode. When wired up,
+# set_recording_mode commands can hot-swap constant ↔ motion without a
+# daemon restart.
+RecordingModeSetter = Callable[[str], None]
+RecordingModeGetter = Callable[[], str]
 
 
 async def handle_command(
@@ -40,6 +45,8 @@ async def handle_command(
     *,
     power: PowerModeState | None = None,
     prioritize_uploads: PriorityUploadCallback | None = None,
+    set_recording_mode: RecordingModeSetter | None = None,
+    get_recording_mode: RecordingModeGetter | None = None,
 ) -> None:
     """Dispatch a single CameraCommand.
 
@@ -57,11 +64,27 @@ async def handle_command(
     elif cmd.type == "set_recording_mode":
         if cmd.mode is None:
             return
-        logger.info("recording mode change requested: %s", cmd.mode)
+        new_mode = cmd.mode
+        logger.info("recording mode change requested: %s", new_mode)
         try:
-            write_stored_file(data_dir, "recording_mode", cmd.mode)
+            write_stored_file(data_dir, "recording_mode", new_mode)
         except OSError as e:
             logger.error("failed to persist recording_mode: %s", e)
+            return
+        # Hot-swap when only the upload-decision flag changes (constant
+        # ↔ motion). The upload loop reads via get_recording_mode each
+        # iteration. Transitions to/from "never" still require a restart
+        # because the watcher and upload tasks are conditionally spawned
+        # in main.py based on the boot-time mode.
+        current_mode = get_recording_mode() if get_recording_mode is not None else None
+        if (
+            set_recording_mode is not None
+            and current_mode is not None
+            and current_mode != "never"
+            and new_mode != "never"
+        ):
+            set_recording_mode(new_mode)
+            logger.info("recording mode hot-swapped: %s → %s", current_mode, new_mode)
             return
         logger.info("recording mode updated, restarting to apply")
         os._exit(0)

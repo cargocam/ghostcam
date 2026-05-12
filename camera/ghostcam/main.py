@@ -118,6 +118,12 @@ async def _amain() -> int:
     # the upload loop drains it before the regular new-segment queue.
     priority_uploads: deque[str] = deque()
 
+    # Single-cell holder for the current recording mode. The upload loop
+    # reads this every iteration via a getter, so commands.py can swap
+    # constant ↔ motion without a daemon restart. Transitions to/from
+    # "never" still require a restart (task lifecycle).
+    recording_mode_holder: list[str] = [cfg.recording_mode]
+
     try:
         if await check_firmware_update(client, cfg.data_dir):
             return 0  # systemd restarts; ExecStartPre installs
@@ -132,6 +138,8 @@ async def _amain() -> int:
             client=client,
             power=power,
             prioritize_uploads=lambda ids: priority_uploads.extend(ids),
+            set_recording_mode=lambda mode: recording_mode_holder.__setitem__(0, mode),
+            get_recording_mode=lambda: recording_mode_holder[0],
         )
 
         async def _supervise_capture() -> None:
@@ -221,6 +229,7 @@ async def _amain() -> int:
                         power=power,
                         priority=priority_uploads,
                         recording_mode=cfg.recording_mode,
+                        get_recording_mode=lambda: recording_mode_holder[0],
                     ),
                     name="upload-loop",
                 )
