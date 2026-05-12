@@ -255,18 +255,35 @@ async def test_set_recording_mode_falls_back_to_restart_without_holder(
 # --- Network recovery (GH #82) ---
 
 
+def test_recover_network_silence_window_is_wall_time() -> None:
+    """The recovery trigger is wall-time-since-last-success, not a
+    count of consecutive failures. This is the key invariant from the
+    2026-05-12 black-hole test: httpx's per-request timeout + the
+    backoff curve stretched a "60s threshold" out to ~3 min in
+    practice when measured by failure count."""
+    from ghostcam import telemetry_poll
+
+    assert telemetry_poll.NETWORK_RECOVERY_SILENCE_S == 60.0
+    # Cooldown must be ≥ silence window so a single recovery can't
+    # immediately re-fire while transport is still settling.
+    assert (
+        telemetry_poll.NETWORK_RECOVERY_COOLDOWN_S
+        >= telemetry_poll.NETWORK_RECOVERY_SILENCE_S
+    )
+    # Old constant must be gone — left behind, callers (and future
+    # readers) would assume the count-based gate is still in play.
+    assert not hasattr(telemetry_poll, "NETWORK_RECOVERY_THRESHOLD")
+
+
 @pytest.mark.asyncio
-async def test_recover_network_triggered_after_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
-    """After NETWORK_RECOVERY_THRESHOLD consecutive POST failures,
-    telemetry_poll calls platform.recover_network and increments the
-    counter that's surfaced on telemetry."""
+async def test_recover_network_fires_once_per_cooldown(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The recovery callback is invoked at most once per cooldown
+    window. This exercise mimics the silence-window gate by directly
+    driving the wall-time check that telemetry_poll runs inline."""
     from ghostcam import telemetry_poll
     from ghostcam.upload import flags as upload_flags
 
-    # Reset counter so other tests don't poison this one.
     upload_flags.network_recovery_attempts = 0
-    upload_flags.upload_latency_ms_window.clear()
-
     recover_calls = 0
 
     async def fake_recover() -> bool:
@@ -276,20 +293,33 @@ async def test_recover_network_triggered_after_threshold(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(telemetry_poll, "recover_network", fake_recover)
 
-    # Drive _compute_failure_interval-equivalent state manually: we
-    # don't run the full loop, we just exercise the threshold logic.
-    # The trigger is `consecutive_failures >= NETWORK_RECOVERY_THRESHOLD`
-    # combined with a cooldown gate; below threshold = no call.
-    threshold = telemetry_poll.NETWORK_RECOVERY_THRESHOLD
-    assert threshold >= 1
+    # Simulate two failure iterations that both observe a silence
+    # window above the threshold, with the second one happening inside
+    # the cooldown. Only the first should fire.
+    last_recovery_at: float | None = None
+    silence_threshold = telemetry_poll.NETWORK_RECOVERY_SILENCE_S
+    cooldown = telemetry_poll.NETWORK_RECOVERY_COOLDOWN_S
 
-    # Simulate the loop's failure path firing N times. Each "failure"
-    # is a single iteration that bumps the counter; we mirror that.
-    for i in range(1, threshold + 2):
-        consecutive_failures = i
-        if consecutive_failures >= threshold and recover_calls == 0:
-            upload_flags.network_recovery_attempts += 1
-            await fake_recover()
+    # Iteration 1: silence = threshold + 5 s; recovery fires.
+    now = 100.0
+    silence_s = silence_threshold + 5.0
+    if silence_s >= silence_threshold and (
+        last_recovery_at is None or now - last_recovery_at >= cooldown
+    ):
+        last_recovery_at = now
+        upload_flags.network_recovery_attempts += 1
+        await fake_recover()
+
+    # Iteration 2: also above threshold but inside cooldown. Should
+    # not fire.
+    now = 100.0 + cooldown - 1.0
+    silence_s = silence_threshold + 1.0
+    if silence_s >= silence_threshold and (
+        last_recovery_at is None or now - last_recovery_at >= cooldown
+    ):
+        last_recovery_at = now
+        upload_flags.network_recovery_attempts += 1
+        await fake_recover()
 
     assert recover_calls == 1
     assert upload_flags.network_recovery_attempts == 1
