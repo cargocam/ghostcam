@@ -79,6 +79,50 @@ func datagramToFields(d *common.TelemetryDatagram, serverTS uint64) map[string]i
 	if d.GPSFix != nil {
 		fields["gps_fix"] = strconv.FormatUint(uint64(*d.GPSFix), 10)
 	}
+	// --- power-mode + bandwidth-savings fields (GH #75 / #76 series) ---
+	if d.PowerMode != nil {
+		fields["power_mode"] = *d.PowerMode
+	}
+	if d.UploadMode != nil {
+		fields["upload_mode"] = *d.UploadMode
+	}
+	if d.BatteryPct != nil {
+		fields["battery_pct"] = strconv.FormatUint(uint64(*d.BatteryPct), 10)
+	}
+	if d.MotionSegmentsUploaded != nil {
+		fields["motion_segments_uploaded"] = strconv.FormatUint(uint64(*d.MotionSegmentsUploaded), 10)
+	}
+	if d.MotionSegmentsSkipped != nil {
+		fields["motion_segments_skipped"] = strconv.FormatUint(uint64(*d.MotionSegmentsSkipped), 10)
+	}
+	// --- performance health metrics (PR A of the 2026-05-12 perf series) ---
+	if d.SegmentUploadP95Ms != nil {
+		fields["segment_upload_p95_ms"] = strconv.FormatUint(uint64(*d.SegmentUploadP95Ms), 10)
+	}
+	if d.SegmentUploadRetries != nil {
+		fields["segment_upload_retries"] = strconv.FormatUint(uint64(*d.SegmentUploadRetries), 10)
+	}
+	if d.SegmentQueueDepth != nil {
+		fields["segment_queue_depth"] = strconv.FormatUint(uint64(*d.SegmentQueueDepth), 10)
+	}
+	if d.LiveWSBytesPerSec != nil {
+		fields["live_ws_bytes_per_sec"] = strconv.FormatUint(uint64(*d.LiveWSBytesPerSec), 10)
+	}
+	if d.LiveWSDroppedFrames != nil {
+		fields["live_ws_dropped_frames"] = strconv.FormatUint(uint64(*d.LiveWSDroppedFrames), 10)
+	}
+	if d.GpsdQueryMs != nil {
+		fields["gpsd_query_ms"] = strconv.FormatUint(uint64(*d.GpsdQueryMs), 10)
+	}
+	if d.EventLoopLagMs != nil {
+		fields["event_loop_lag_ms"] = strconv.FormatUint(uint64(*d.EventLoopLagMs), 10)
+	}
+	if d.DiskUsedPct != nil {
+		fields["disk_used_pct"] = strconv.FormatUint(uint64(*d.DiskUsedPct), 10)
+	}
+	if d.ModemRAT != nil {
+		fields["modem_rat"] = *d.ModemRAT
+	}
 	return fields
 }
 
@@ -139,6 +183,59 @@ func FieldsToEntry(fields map[string]interface{}) (*apitypes.TelemetryEntry, err
 			n, _ := strconv.ParseUint(s, 10, 8)
 			v := uint8(n)
 			e.GPSFix = &v
+		case "power_mode":
+			v := s
+			e.PowerMode = &v
+		case "upload_mode":
+			v := s
+			e.UploadMode = &v
+		case "battery_pct":
+			n, _ := strconv.ParseUint(s, 10, 8)
+			v := uint8(n)
+			e.BatteryPct = &v
+		case "motion_segments_uploaded":
+			n, _ := strconv.ParseUint(s, 10, 32)
+			v := uint32(n)
+			e.MotionSegmentsUploaded = &v
+		case "motion_segments_skipped":
+			n, _ := strconv.ParseUint(s, 10, 32)
+			v := uint32(n)
+			e.MotionSegmentsSkipped = &v
+		case "segment_upload_p95_ms":
+			n, _ := strconv.ParseUint(s, 10, 32)
+			v := uint32(n)
+			e.SegmentUploadP95Ms = &v
+		case "segment_upload_retries":
+			n, _ := strconv.ParseUint(s, 10, 32)
+			v := uint32(n)
+			e.SegmentUploadRetries = &v
+		case "segment_queue_depth":
+			n, _ := strconv.ParseUint(s, 10, 8)
+			v := uint8(n)
+			e.SegmentQueueDepth = &v
+		case "live_ws_bytes_per_sec":
+			n, _ := strconv.ParseUint(s, 10, 32)
+			v := uint32(n)
+			e.LiveWSBytesPerSec = &v
+		case "live_ws_dropped_frames":
+			n, _ := strconv.ParseUint(s, 10, 32)
+			v := uint32(n)
+			e.LiveWSDroppedFrames = &v
+		case "gpsd_query_ms":
+			n, _ := strconv.ParseUint(s, 10, 16)
+			v := uint16(n)
+			e.GpsdQueryMs = &v
+		case "event_loop_lag_ms":
+			n, _ := strconv.ParseUint(s, 10, 16)
+			v := uint16(n)
+			e.EventLoopLagMs = &v
+		case "disk_used_pct":
+			n, _ := strconv.ParseUint(s, 10, 8)
+			v := uint8(n)
+			e.DiskUsedPct = &v
+		case "modem_rat":
+			v := s
+			e.ModemRAT = &v
 		}
 	}
 	return e, nil
