@@ -6,41 +6,65 @@ on:
 permissions:
   contents: write
 
+# Rolling pre-release. Builds the Python camera wheel + a Debian
+# package wrapping it, attaches both to the v0.1.0-alpha release.
+# Pi cameras with auto-update enabled pull this on their next
+# /api/v1/firmware/latest check.
 jobs:
   release:
     runs-on: self-hosted
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-python@v5
         with:
-          go-version-file: go.mod
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
 
-      - name: Build camera (aarch64)
+      # Pure-Python wheel — no cross-compilation needed. We build the
+      # wheel and the .deb (which wraps a Pi-side venv install of that
+      # wheel) so cameras with auto-update can apt-install the .deb on
+      # firmware check.
+      - name: Build wheel
+        working-directory: camera
         run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
-            go build -ldflags "-X main.Version=v0.1.0-alpha" \
-            -o ghostcam-camera-aarch64 ./legacy_camera
+          uv sync --frozen --extra dev
+          uv run python -m build --wheel --outdir ../dist
 
-      - name: Build camera (x86_64)
+      - name: Package .deb (wraps wheel install into /opt/ghostcam venv)
         run: |
-          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build -ldflags "-X main.Version=v0.1.0-alpha" \
-            -o ghostcam-camera-x86_64 ./legacy_camera
+          set -euo pipefail
+          WHEEL="$(ls dist/ghostcam-*.whl | head -1)"
+          PKG_DIR="ghostcam-camera_0.1.0-alpha_all"
+          mkdir -p "$PKG_DIR/DEBIAN" "$PKG_DIR/opt/ghostcam-camera"
+          cp "$WHEEL" "$PKG_DIR/opt/ghostcam-camera/"
 
-      - name: Package .deb
-        run: |
-          PKG_DIR="ghostcam-camera_0.1.0-alpha_arm64"
-          mkdir -p "$PKG_DIR/DEBIAN" "$PKG_DIR/usr/local/bin"
-          cp ghostcam-camera-aarch64 "$PKG_DIR/usr/local/bin/ghostcam-camera"
-          chmod +x "$PKG_DIR/usr/local/bin/ghostcam-camera"
+          # postinst: install the wheel into /opt/ghostcam (venv) and
+          # symlink the entrypoint at /usr/local/bin/ghostcam-camera.
+          # systemd unit expects that path. Mirrors what scripts/pi.sh
+          # deploy does for dev installs.
+          cat > "$PKG_DIR/DEBIAN/postinst" << 'PEOF'
+          #!/bin/sh
+          set -e
+          if [ ! -x /opt/ghostcam/bin/python3 ]; then
+              python3 -m venv /opt/ghostcam
+          fi
+          WHEEL="$(ls /opt/ghostcam-camera/ghostcam-*.whl | head -1)"
+          /opt/ghostcam/bin/pip install --quiet --upgrade --force-reinstall "$WHEEL[real]"
+          ln -sf /opt/ghostcam/bin/ghostcam-camera /usr/local/bin/ghostcam-camera
+          exit 0
+          PEOF
+          chmod 755 "$PKG_DIR/DEBIAN/postinst"
+
           cat > "$PKG_DIR/DEBIAN/control" << EOF
           Package: ghostcam-camera
           Version: 0.1.0~alpha
-          Architecture: arm64
+          Architecture: all
           Maintainer: Ghostcam <noreply@ghostcam.dev>
-          Depends: ffmpeg, ca-certificates
-          Description: Ghostcam camera agent
+          Depends: ffmpeg, ca-certificates, python3, python3-venv, libzbar0
+          Description: Ghostcam camera agent (Python)
            Captures video via rpicam-vid + ffmpeg and uploads
            HLS segments to S3 via presigned URLs.
           EOF
@@ -48,7 +72,7 @@ jobs:
           dpkg-deb --build "$PKG_DIR"
 
       - name: Generate checksums
-        run: sha256sum ghostcam-camera-aarch64 ghostcam-camera-x86_64 ghostcam-camera_*.deb > checksums.txt
+        run: sha256sum dist/ghostcam-*.whl ghostcam-camera_*.deb > checksums.txt
 
       - name: Install gh CLI
         run: |
@@ -64,8 +88,7 @@ jobs:
           git tag -f v0.1.0-alpha
           git push origin v0.1.0-alpha --force
           gh release create v0.1.0-alpha \
-            ghostcam-camera-aarch64 \
-            ghostcam-camera-x86_64 \
+            dist/ghostcam-*.whl \
             ghostcam-camera_*.deb \
             checksums.txt \
             --prerelease \

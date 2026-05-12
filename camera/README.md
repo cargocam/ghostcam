@@ -5,9 +5,6 @@ camera and ffmpeg) into a Ghostcam node. Captures H.264 + Opus, uploads
 MPEG-TS segments to S3 via presigned URLs, posts telemetry, and relays
 live frames to the server over a WebSocket.
 
-This package replaces the Go implementation under `legacy_camera/`. The
-Go one is kept buildable until the cutover commit deletes it.
-
 ## What it talks to
 
 ```

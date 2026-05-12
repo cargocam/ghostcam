@@ -790,10 +790,9 @@ Requires two .deb versions in the GitHub release:
 
 ## Sign-off
 
-Every box ticked above on the indicated hardware → cutover is safe.
-The cutover commit can then `rm -rf legacy_camera/`, replace
-`release.yml`'s Go camera build with the wheel + Python `.deb`, and
-ship.
+Every box ticked above on the indicated hardware → the release is
+ready to ship. (The cutover commit landed on 2026-05-12 — `legacy_camera/`
+is gone and `release.yml` builds the Python wheel + `.deb`.)
 
 Document the result of each soak run with:
 

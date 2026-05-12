@@ -11,12 +11,11 @@ telemetry.go   TelemetryDatagram — JSON payload with optional fields (CPU, tem
 
 ## Camera Structure
 
-The camera daemon is being ported from Go to Python. Both implementations
-exist on disk during the port; `docker compose --profile test` and
-`./scripts/pi.sh deploy` use the Python build. The Go camera under
-`legacy_camera/` stays buildable until the cutover commit deletes it.
+The camera daemon is Python (in `camera/`). The original Go camera at
+`legacy_camera/` was removed in the 2026-05-12 cutover commit;
+references in earlier docs / commits may still mention it.
 
-### Python camera (`camera/`) — primary
+### Python camera (`camera/`)
 
 ```
 camera/
@@ -24,8 +23,7 @@ camera/
   ghostcam/
     main.py               Entrypoint: load config, signal handling, asyncio.TaskGroup with
                           5 tasks (live_ws, capture supervisor, telemetry, watcher, upload),
-                          15s graceful drain on SIGINT/SIGTERM. Mirrors legacy_camera/main.go's
-                          goroutine structure as cancellable asyncio tasks.
+                          15s graceful drain on SIGINT/SIGTERM.
     config.py             CameraConfig + tomllib + argparse + env layering — same
                           /boot/ghostcam.conf → {dataDir}/camera.toml → env → flags precedence
                           as the Go camera, including the persisted runtime overrides at
@@ -57,9 +55,9 @@ camera/
                           with drop-oldest semantics. _find_nal_boundaries is the
                           isolated swap point for a future Rust+pyo3 native module.
     live_ws.py            websockets client; on-connect "ready" JSON message, then
-                          binary frames `[ts:4 BE][flags:1][payload]` — byte-identical
-                          to legacy_camera/live_ws.go::sendFrame. start_stream/stop_stream
-                          control messages flip the streaming gate.
+                          binary frames `[ts:4 BE][flags:1][payload]`.
+                          start_stream/stop_stream control messages flip the
+                          streaming gate.
     telemetry_poll.py     10s loop, 30s after 3 fails, 60s after 5; writes boot_ok
                           marker after first successful POST.
     commands.py           reboot, unregister, set_recording_mode, set_resolution,
@@ -86,65 +84,7 @@ camera/
                             test_live_ws.py, test_capture.py, test_platform.py.
 ```
 
-### Go camera (`legacy_camera/`) — DEPRECATED, removed by the cutover commit
-
-```
-legacy_camera/     (package main — binary builds from this directory)
-  main.go          Entrypoint: config, signal handling, goroutine orchestration (WaitGroup),
-                   capture crash recovery with exponential backoff (1s→30s) and 5-minute stability threshold,
-                   graceful shutdown (WaitGroup drain, 15s timeout). Pure orchestration — all logic in the
-                   other legacy_camera/ files.
-  config.go        CameraConfig + cameraConfigFile, layered TOML/env/CLI resolution
-                   RecordingMode ("constant"/"motion"/"never") — runtime override via {dataDir}/recording_mode.
-                   "never" (streaming-only) is the default for fresh data dirs and new DB rows: ffmpeg
-                   skips the MPEG-TS segment sink and main.go skips the segment watcher + upload loop,
-                   so nothing is written to disk or uploaded. The live WebSocket relay is unaffected.
-                   LocalStorageCapBytes — configurable via GHOSTCAM_LOCAL_STORAGE_CAP_MB (default 4096 MB)
-                   Resolution runtime override via {dataDir}/resolution
-                   Video profiles: zero2w/480p, pi4/720p, pi5/1080p
-  capture.go       Capture pipeline: rpicam-vid | ffmpeg → MPEG-TS segments (6s each)
-                   Test mode: ffmpeg testsrc2 + sine audio, or pre-encoded test-loop.mp4 (~5% CPU vs 49%)
-                   Uses -segment_start_number to avoid filename collisions on restart
-                   ffmpeg cleanup: SIGTERM to process group, then SIGKILL after 5s
-  watcher.go       NewSegment type, motionDetector (ffprobe P-frame analysis, falls back to file size heuristic)
-                   RunSegmentWatcher: polls every 2s, skips 0-byte and still-being-written files
-                   Backpressure: 5s blocking send to segment channel (drops if full)
-                   EnforceLocalStorageCap: evicts oldest .ts files when over cap
-  upload.go        RunUploadLoop: consumes segments from channel, uploads via presigned PUT URLs
-                   Retry queue: 3 retries with exponential backoff (2s, 4s, 8s)
-                   storageCapped: atomic.Bool — pauses uploads when server indicates storage full
-                   Pending confirmations persisted to {dataDir}/pending_confirms.json so a crash
-                   or restart between S3 PUT and the confirming presign request does not orphan
-                   uploaded S3 objects — loaded on startup, cleared after server accepts confirms
-                   Graceful shutdown: flushes pending confirmations with 5s timeout
-  client.go        HTTP client for server API (telemetry POST, presign, provision, S3 upload)
-  credentials.go   LoadCredentials / SaveCredentials — flat files (api_key, device_id, server_url) with 0600 permissions
-  provisioning.go  Token-based provisioning via POST /api/v1/cameras/provision
-                   Resolution order: CLI/env → flat files → QR scan
-                   Supports --provision-token CLI flag / GHOSTCAM_PROVISION_TOKEN env var for headless provisioning
-  qr_linux.go      QR code scanning via rpicam-still (YUV420 frames) + gozxing (pure Go ZXing)
-                   5-minute timeout, process group cleanup, graceful fallback if rpicam-still missing
-                   Build tag: //go:build linux && !synthetic
-  qr_other.go      No-op QR stub for non-Linux/synthetic platforms
-                   Build tag: //go:build !linux || synthetic
-  commands.go      HandleCommand: processes server-issued commands (reboot, unregister, set_resolution, etc.)
-  telemetry_poll.go RunTelemetryPoll: 10s poll loop with backoff, processes piggy-backed commands
-  motion.go        ffprobe P-frame analysis with file-size fallback for motion detection
-  firmware.go      CheckFirmwareUpdate: checks GET /api/v1/firmware/latest on startup, auto-updates
-  sensors_linux.go ReadTelemetry: CPU (/proc/stat), memory (/proc/meminfo), temp (/sys/class/thermal),
-                   uptime (/proc/uptime), WiFi signal (/proc/net/wireless), GPS (gpsd)
-                   Build tag: //go:build linux && !synthetic
-  sensors_other.go Synthetic telemetry (GPS, CPU, etc.) for dev/Docker
-                   Build tag: //go:build !linux || synthetic
-  sensors_common.go  InjectSyntheticGPS: deterministic GPS from device serial hash (for dev/Docker)
-  gpsd.go          (Linux) Real gpsd integration: connects to localhost:2947, enables JSON watch,
-                   reads TPV reports for lat/lon/alt/fix. Used by SIM7600G-H modem on Pi.
-  gpsd_other.go    (non-Linux) No-op gpsd stub
-  network_linux.go EnsureWifi (nmcli), WaitForRoute (/proc/net/route polling)
-  network_other.go No-op stubs for non-Linux
-```
-
-Runtime override files (`{dataDir}/resolution`, `{dataDir}/recording_mode`) are written when the server sends `set_resolution` or `set_recording_mode` commands via the telemetry poll response. The camera reads these on startup and on pipeline restart, allowing remote configuration changes to survive reboots.
+Runtime override files (`{dataDir}/resolution`, `{dataDir}/recording_mode`) are written when the server sends `set_resolution` or `set_recording_mode` commands via the telemetry poll response. The camera reads these on startup and on pipeline restart, allowing remote configuration changes to survive reboots. As of the 2026-05-12 hot-swap change, `constant ↔ motion` flips happen in-process via a holder updated from `commands.py`; only transitions to/from `never` still trigger a daemon restart.
 
 ## Server Structure
 
