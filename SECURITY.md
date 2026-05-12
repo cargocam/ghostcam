@@ -29,9 +29,6 @@ Out of scope:
 - Issues requiring already-compromised host (root, kernel exploit).
 - Denial-of-service that requires sustained traffic from many sources
   beyond what a normal camera fleet would generate.
-- Reports against `legacy_camera/` (the deprecated Go camera). It's
-  removed by the cutover commit; please report against `camera/`
-  (the Python implementation) instead.
 
 ## How to report
 

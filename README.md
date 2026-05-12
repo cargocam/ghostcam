@@ -81,10 +81,6 @@ go build -o ghostcam-server ./server
 # Build the Python camera wheel
 cd camera && python -m build --wheel    # output: dist/ghostcam-*.whl
 
-# Legacy Go camera (deprecated; removed by the cutover commit)
-go build -o ghostcam-camera ./legacy_camera
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -o ghostcam-camera ./legacy_camera
-
 # Regenerate TypeScript + pydantic types after editing common/ or server/apitypes/
 go generate ./...
 

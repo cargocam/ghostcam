@@ -5,10 +5,6 @@ COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 RUN CGO_ENABLED=0 go build -o /ghostcam-server ./server
-# Legacy Go camera. Kept buildable until the cutover commit deletes legacy_camera/.
-RUN CGO_ENABLED=0 go build -o /ghostcam-camera ./legacy_camera
-# Test camera: synthetic sensors (GPS, CPU, etc.) instead of real hardware
-RUN CGO_ENABLED=0 go build -tags synthetic -o /ghostcam-camera-synthetic ./legacy_camera
 
 # --- UI builder ---
 FROM oven/bun:1 AS ui-builder
@@ -26,22 +22,6 @@ RUN bun install
 COPY ui/ .
 EXPOSE 5173
 CMD ["bun", "run", "dev"]
-
-# --- Legacy Go camera target (test/Docker — synthetic sensors) ---
-# Removed by the cutover commit. Kept here so docker-compose's pre-cutover
-# fallback path (`target: legacy-camera`) still builds for comparisons.
-FROM alpine:3.21 AS legacy-camera
-RUN apk add --no-cache ca-certificates ffmpeg wget font-dejavu tzdata
-COPY --from=builder /ghostcam-camera-synthetic /usr/local/bin/ghostcam-camera
-COPY docker/camera-entrypoint.sh /usr/local/bin/camera-entrypoint.sh
-ENTRYPOINT ["camera-entrypoint.sh"]
-
-# --- Legacy Go camera target (production — real hardware sensors) ---
-FROM alpine:3.21 AS legacy-camera-prod
-RUN apk add --no-cache ca-certificates ffmpeg wget
-COPY --from=builder /ghostcam-camera /usr/local/bin/ghostcam-camera
-COPY docker/camera-entrypoint.sh /usr/local/bin/camera-entrypoint.sh
-ENTRYPOINT ["camera-entrypoint.sh"]
 
 # --- Python camera builder ---
 FROM python:3.11-slim AS python-camera-builder
