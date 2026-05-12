@@ -51,11 +51,16 @@ Either way, subsequent boots are automatic — credentials are persisted after t
 For Pis already running Raspberry Pi OS (Bookworm, arm64):
 
 ```bash
-# Download and install
-curl -LO https://github.com/<owner>/ghostcam/releases/latest/download/ghostcam-camera_<version>_arm64.deb
-sudo dpkg -i ghostcam-camera_<version>_arm64.deb
+# Download and install. Use `apt install ./pkg.deb` — NOT bare
+# `dpkg -i` — so apt resolves the .deb's runtime dependencies
+# (ffmpeg, libzbar0, python3-venv) against the system repos. Bare
+# `dpkg -i` leaves the package half-installed if any of those are
+# missing on a fresh Pi.
+curl -LO https://github.com/cargocam/ghostcam/releases/latest/download/ghostcam-camera_0.1.0-alpha_all.deb
+sudo apt install -y ./ghostcam-camera_0.1.0-alpha_all.deb
 
-# Install remaining dependencies
+# Pi-only system dependencies (not declared by the .deb because the
+# package is arch=all and must install on x86 too for CI testing).
 sudo apt install -y rpicam-apps gpsd gpsd-clients modemmanager alsa-utils
 
 # Create data directory
