@@ -65,3 +65,15 @@ RUN apk add --no-cache ca-certificates
 COPY --from=builder /ghostcam-server /usr/local/bin/ghostcam-server
 COPY --from=ui-builder /app/build /app/static
 ENTRYPOINT ["ghostcam-server"]
+
+# --- Server dev target (air hot-reload, used by docker-compose) ---
+# Source is bind-mounted from the repo at /app. Air watches *.go files
+# and rebuilds the binary on change; the UI is still served by Vite at
+# :5173, so the static-file handler in server/main.go no-ops when
+# /app/static is missing.
+FROM golang:1-alpine AS server-dev
+RUN apk add --no-cache ca-certificates git
+RUN go install github.com/air-verse/air@latest
+WORKDIR /app
+EXPOSE 3000
+CMD ["air", "-c", ".air.toml"]

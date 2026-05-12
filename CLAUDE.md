@@ -190,13 +190,22 @@ Requires `GITHUB_RUNNER_TOKEN` in `.env` (generate at repo Settings → Actions 
 ```bash
 # Camera manager CLI (all Pi operations):
 ./scripts/pi.sh setup    [HOST] [USER] [PASS]   # First-time Pi provisioning
-./scripts/pi.sh deploy   [HOST] [USER] [PASS]   # Build + deploy (primary dev loop)
+./scripts/pi.sh deploy   [HOST] [USER] [PASS]   # Build wheel + deploy (full cycle, ~30s)
+./scripts/pi.sh watch    [HOST] [USER] [PASS]   # Hot-reload: rsync .py on save (~3-5s)
 ./scripts/pi.sh logs     [HOST] [USER] [PASS]   # Stream camera logs
 ./scripts/pi.sh status   [HOST] [USER] [PASS]   # Health check
 ./scripts/pi.sh wifi-off [SECS] [HOST] [USER] [PASS]  # Cellular failover test
 ./scripts/pi.sh restart  [HOST] [USER] [PASS]   # Restart camera service
 ./scripts/pi.sh ssh      [HOST] [USER] [PASS]   # Interactive SSH
 ./scripts/pi.sh unenroll [HOST] [USER] [PASS]   # Reset enrollment
+
+# `watch` rsyncs camera/ghostcam/ → /opt/ghostcam/lib/python*/site-packages/ghostcam
+# on every save and restarts the service. Skips the wheel build/scp/pip-install path,
+# so run `deploy` periodically (or for dependency changes) to catch packaging
+# regressions. Requires fswatch (brew install fswatch).
+
+# The server hot-reloads automatically via `air` inside docker-compose — edit a
+# .go file and the container rebuilds + restarts in ~1-2s (see .air.toml).
 
 # Defaults configured via .pi.env (gitignored) or CLI args
 # Clean restart: docker compose down -v && docker compose up -d
