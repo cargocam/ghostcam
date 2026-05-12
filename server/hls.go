@@ -41,6 +41,19 @@ func (a *App) GetLiveManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Owner-check happens above; cache is keyed on deviceID alone
+	// because the manifest body is per-device (not per-viewer). 1 s
+	// TTL absorbs hls.js's natural ~1 RPS poll cadence per viewer
+	// without making the timeline feel stale (new segments land
+	// every 6 s anyway). See server/metrics.go.
+	hlsCounter.inc()
+	if cached := hlsCache.get(deviceID); cached != nil {
+		w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Write(cached)
+		return
+	}
+
 	nowMs := uint64(time.Now().UnixMilli())
 	fromMs := nowMs - liveWindowMs
 
@@ -82,9 +95,11 @@ func (a *App) GetLiveManifest(w http.ResponseWriter, r *http.Request) {
 	}
 	// No EXT-X-ENDLIST — hls.js will poll for updates.
 
+	body := []byte(b.String())
+	hlsCache.put(deviceID, body)
 	w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Write([]byte(b.String()))
+	w.Write(body)
 }
 
 // GetVodManifest handles GET /hls/{deviceID}/vod.m3u8?from=&to=

@@ -231,17 +231,18 @@ func newTestApp(t *testing.T) (*App, *httptest.Server, string) {
 	}
 
 	app := &App{
-		Config:     cfg,
-		DB:         database,
-		Redis:      s.redisClient,
-		S3:         nil, // auth seam doesn't touch S3
-		HMACSecret: hmacSecret,
-		Tiers:      billing.NewCache(),
-		Mailer:     mailer.New(mailer.Config{}),
-		Live:       NewLiveManager(),
-		WHEP:       NewWHEPManager(),
-		Triage:     triage.New(""),
-		Linear:     linear.New(linear.Config{}),
+		Config:         cfg,
+		DB:             database,
+		Redis:          s.redisClient,
+		S3:             nil, // auth seam doesn't touch S3
+		HMACSecret:     hmacSecret,
+		Tiers:          billing.NewCache(),
+		Mailer:         mailer.New(mailer.Config{}),
+		Live:           NewLiveManager(),
+		WHEP:           NewWHEPManager(),
+		Triage:         triage.New(""),
+		Linear:         linear.New(linear.Config{}),
+		Argon2GlobalRL: NewGlobalRateLimiter(30),
 	}
 
 	srv := httptest.NewServer(app.router())

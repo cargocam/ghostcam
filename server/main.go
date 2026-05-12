@@ -42,6 +42,11 @@ type App struct {
 	WHEP       *WHEPManager // WebRTC viewer sessions
 	Triage     triage.Classifier // support-email triage (no-op when unconfigured)
 	Linear     *linear.Client    // Linear issue creation (no-op when unconfigured)
+	// Global rate limiter for argon2-bearing endpoints — promoted from
+	// router-local to App-level so the admin metrics endpoint can read
+	// its current token level alongside the other gauges. Same instance
+	// is wired into the route middleware in router().
+	Argon2GlobalRL *GlobalRateLimiter
 }
 
 
@@ -143,17 +148,18 @@ func run() error {
 	})
 
 	app := &App{
-		Config:     cfg,
-		DB:         database,
-		Redis:      redisClient,
-		S3:         s3Client,
-		HMACSecret: hmacSecret,
-		Tiers:      tierCache,
-		Mailer:     mailerClient,
-		Live:       NewLiveManager(),
-		WHEP:       NewWHEPManager(),
-		Triage:     triageClassifier,
-		Linear:     linearClient,
+		Config:         cfg,
+		DB:             database,
+		Redis:          redisClient,
+		S3:             s3Client,
+		HMACSecret:     hmacSecret,
+		Tiers:          tierCache,
+		Mailer:         mailerClient,
+		Live:           NewLiveManager(),
+		WHEP:           NewWHEPManager(),
+		Triage:         triageClassifier,
+		Linear:         linearClient,
+		Argon2GlobalRL: NewGlobalRateLimiter(30),
 	}
 
 	srv := &http.Server{
@@ -226,16 +232,9 @@ func (a *App) router() http.Handler {
 	forgotRL := NewRateLimiter(5)
 	otpRL := NewRateLimiter(5)
 
-	// Single shared cap across all clients for unauthenticated endpoints
-	// that drive argon2id (~64 MiB working memory per call). The per-IP
-	// limiters above stop single-attacker spam; this stops distributed
-	// credential stuffing from saturating the server when every IP stays
-	// under its cap but the aggregate would still pile up at the argon2
-	// semaphore. Sized at 30/min — generous for real humans (3–5
-	// login/hour with retry), tight enough that a botnet can't force
-	// more than ~30 password verifications per minute regardless of how
-	// many source IPs it has. See GH #56.
-	argon2GlobalRL := NewGlobalRateLimiter(30)
+	// Global cap for argon2-bearing endpoints lives on App so the admin
+	// metrics endpoint can read its current token level. See GH #56.
+	argon2GlobalRL := a.Argon2GlobalRL
 
 	// Public
 	r.Get("/healthz", a.Healthz)
@@ -351,6 +350,7 @@ func (a *App) router() http.Handler {
 		r.Get("/api/v1/admin/cameras", a.AdminListCameras)
 		r.Patch("/api/v1/admin/cameras/{deviceID}", a.AdminReassignCamera)
 		r.Delete("/api/v1/admin/cameras/{deviceID}", a.AdminDeleteCamera)
+		r.Get("/api/v1/admin/metrics", a.AdminMetrics)
 	})
 
 	// Static SPA files

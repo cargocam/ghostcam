@@ -42,6 +42,15 @@ const (
 // state. See GH #56.
 var argon2Sem = make(chan struct{}, 2)
 
+// Argon2SemaphoreDepth returns the number of argon2 calls currently
+// queued or executing. Read it from the admin metrics endpoint to spot
+// login-storm conditions before they manifest as user-visible latency.
+func Argon2SemaphoreDepth() int { return len(argon2Sem) }
+
+// Argon2SemaphoreCapacity returns the configured concurrency cap.
+// Pair with Argon2SemaphoreDepth() to expose "X/Y in use" gauges.
+func Argon2SemaphoreCapacity() int { return cap(argon2Sem) }
+
 func lockedIDKey(password, salt []byte, time, memory uint32, threads uint8, keyLen uint32) []byte {
 	argon2Sem <- struct{}{}
 	defer func() { <-argon2Sem }()
