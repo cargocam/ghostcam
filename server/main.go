@@ -197,6 +197,12 @@ func run() error {
 		}()
 	}
 
+	// Periodic eviction of orphaned HLS manifest cache entries —
+	// `get()` does opportunistic cleanup on access, but a deviceID
+	// that stops being queried (camera disconnected) would otherwise
+	// sit in the map forever. Exits when ctx is cancelled at shutdown.
+	go runHLSManifestCacheSweeper(ctx)
+
 	select {
 	case err := <-errCh:
 		return fmt.Errorf("HTTP server: %w", err)
