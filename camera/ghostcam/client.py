@@ -123,11 +123,19 @@ class Client:
         return TelemetryPollResponse.model_validate(raw)
 
     async def request_presigned_urls(
-        self, count: int, uploaded: list[UploadedSegment] | None = None
+        self,
+        count: int,
+        uploaded: list[UploadedSegment] | None = None,
+        pending: list[UploadedSegment] | None = None,
     ) -> PresignResponse:
-        body = PresignRequest(count=count, uploaded=uploaded).model_dump(
-            by_alias=True, exclude_none=True
-        )
+        """Request `count` presigned PUT URLs and tell the server about
+        previously-completed (`uploaded`) and just-started (`pending`)
+        segments. The pending list surfaces in the viewer's timeline as
+        a blue placeholder until the next confirm cycle flips it solid.
+        """
+        body = PresignRequest(
+            count=count, uploaded=uploaded, pending=pending,
+        ).model_dump(by_alias=True, exclude_none=True)
         path = f"/api/v1/cameras/{self.device_id}/presign"
         raw = await self._post_json(path, body)
         return PresignResponse.model_validate(raw)

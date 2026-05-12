@@ -727,6 +727,18 @@ type CoveragePayload struct {
 	Segments []CoverageSegment `json:"segments"`
 }
 
+// SegmentPendingPayload is the SSE `segment_pending` event. The camera
+// reports segments it's about to upload via the next PresignRequest
+// before the S3 PUT round-trip completes. The UI uses it to render a
+// blue pulsing indicator in the timeline so the operator sees the
+// upload in flight rather than a gap that "fills in late". TTL on the
+// pending state is server-managed — if no confirm arrives within
+// PendingTTLSeconds the row reverts and a corrective SSE fires.
+type SegmentPendingPayload struct {
+	DeviceID string            `json:"device_id"`
+	Segments []CoverageSegment `json:"segments"`
+}
+
 // StorageCappedEvent is the payload of the SSE `storage_capped` event,
 // published when a camera's upload would exceed the user's tier limit.
 type StorageCappedEvent struct {

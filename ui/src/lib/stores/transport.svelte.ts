@@ -159,6 +159,27 @@ class TransportStore {
 			} catch { /* ignore */ }
 		});
 
+		es.addEventListener('segment_pending', (e: MessageEvent) => {
+			// The camera pre-announced segments it's about to PUT. Show
+			// them as a blue pulsing stripe in the timeline so the
+			// operator sees the upload in flight instead of a gap that
+			// fills in late. Server-side TTL is 5 min; client-side fade
+			// is 60 s (see scrubberStore.expirePendingOlderThan).
+			try {
+				const data = JSON.parse(e.data) as {
+					device_id: string;
+					segments: { id: string; start_ms: number; end_ms: number; has_motion: boolean }[];
+				};
+				const pending = data.segments.map((s) => ({
+					id: s.id,
+					start: s.start_ms / 1000,
+					end: s.end_ms / 1000,
+					hasMotion: s.has_motion,
+				}));
+				scrubberStore.addPendingSegments(data.device_id, pending);
+			} catch { /* ignore */ }
+		});
+
 		es.addEventListener('storage_capped', (e: MessageEvent) => {
 			try {
 				const data = JSON.parse(e.data) as { event_id?: string; device_id?: string; storage_bytes?: number; limit_gb?: number };
