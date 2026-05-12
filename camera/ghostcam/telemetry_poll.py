@@ -31,12 +31,17 @@ import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from ghostcam.client import Client
 from ghostcam.platform import read_telemetry
 from ghostcam.power_mode import PowerModeState
 from ghostcam.upload import flags as upload_flags
 from ghostcam.wire import CameraCommand
+
+if TYPE_CHECKING:
+    from ghostcam.live_relay import LiveRelay
+    from ghostcam.watcher import NewSegment
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +61,8 @@ async def run_telemetry_poll(
     power: PowerModeState | None = None,
     wake_live_callback: Callable[[], None] | None = None,
     battery_reader: BatteryReader | None = None,
+    live_relay: LiveRelay | None = None,
+    segment_queue: asyncio.Queue[NewSegment] | None = None,
 ) -> None:
     """Long-running telemetry loop.
 
@@ -65,14 +72,33 @@ async def run_telemetry_poll(
     `wake_live` flag in a poll response — the live WS task hooks here.
     `battery_reader` is the platform/battery hook; today returns None
     until a HAT driver lands (see GH issue #73).
+    `live_relay` and `segment_queue` are optional observability hooks
+    — when provided, the loop attaches WebSocket throughput and queue-
+    depth metrics to each telemetry datagram.
     """
     interval = BASE_INTERVAL
     consecutive_failures = 0
     health_marked = False
+    last_tick_at = asyncio.get_event_loop().time()
 
     while True:
+        # Measure how long the sleep over-ran its scheduled deadline.
+        # Non-zero here = something blocked the event loop synchronously
+        # during the previous interval. Surfaced as
+        # TelemetryDatagram.event_loop_lag_ms so it shows up in the UI.
+        scheduled_wake = last_tick_at + interval
         await asyncio.sleep(interval)
-        telemetry = read_telemetry()
+        woken_at = asyncio.get_event_loop().time()
+        event_loop_lag_ms = max(0, int((woken_at - scheduled_wake) * 1000))
+        last_tick_at = woken_at
+        tick_interval_s = interval
+
+        # Read platform sensors off the event loop so a slow gpsd /
+        # nmcli can't stall the live WS or upload tasks.
+        telemetry = await asyncio.to_thread(read_telemetry)
+
+        if event_loop_lag_ms:
+            telemetry.event_loop_lag_ms = min(event_loop_lag_ms, 65535)
 
         # Annotate with power-mode and battery state so the server (and UI)
         # can see what the camera is actually doing right now.
@@ -97,6 +123,22 @@ async def run_telemetry_poll(
         if upload_flags.motion_segments_uploaded or upload_flags.motion_segments_skipped:
             telemetry.motion_segments_uploaded = upload_flags.motion_segments_uploaded
             telemetry.motion_segments_skipped = upload_flags.motion_segments_skipped
+
+        # Upload-path health metrics.
+        if upload_flags.upload_retries_total:
+            telemetry.segment_upload_retries = upload_flags.upload_retries_total
+        if upload_flags.upload_latency_ms_window:
+            telemetry.segment_upload_p95_ms = _p95(upload_flags.upload_latency_ms_window)
+        if segment_queue is not None:
+            telemetry.segment_queue_depth = min(segment_queue.qsize(), 255)
+
+        # Live-WS health metrics.
+        if live_relay is not None:
+            bytes_in_window = live_relay.pop_byte_tally()
+            if bytes_in_window and tick_interval_s > 0:
+                telemetry.live_ws_bytes_per_sec = int(bytes_in_window / tick_interval_s)
+            if live_relay.dropped_frames_total:
+                telemetry.live_ws_dropped_frames = live_relay.dropped_frames_total
 
         try:
             response = await client.post_telemetry_full(telemetry)
@@ -137,6 +179,15 @@ async def run_telemetry_poll(
                 await handle_command(cmd)
             except Exception as e:  # noqa: BLE001
                 logger.warning("command handler raised: %s", e)
+
+
+def _p95(samples: list[int]) -> int:
+    """Nearest-rank p95 of a small samples list. Returns 0 on empty."""
+    if not samples:
+        return 0
+    s = sorted(samples)
+    idx = max(0, min(len(s) - 1, int(len(s) * 0.95) - 1))
+    return s[idx]
 
 
 def _compute_failure_interval(

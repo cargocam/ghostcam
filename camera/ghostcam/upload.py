@@ -33,6 +33,7 @@ import contextlib
 import json
 import logging
 import os
+import time
 from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -70,6 +71,27 @@ class _SharedFlags:
     presign_fail_count: int = 0
     motion_segments_uploaded: int = 0
     motion_segments_skipped: int = 0
+    # Cumulative retry count since boot (every retry of a presign or PUT
+    # increments this — eventually-successful uploads still count their
+    # retries here). Surfaced via telemetry.segment_upload_retries.
+    upload_retries_total: int = 0
+    # Sliding window of recent (close → PUT 200) latencies in ms, capped
+    # at WINDOW. telemetry_poll computes p95 over this.
+    upload_latency_ms_window: list[int] = field(default_factory=list)
+
+
+# Width of the upload-latency sliding window. Chosen to cover ~5 minutes
+# of constant-mode traffic (1 segment every 6 s → ~50 segments). Small
+# enough that one slow burst doesn't pollute the p95 for an hour.
+UPLOAD_LATENCY_WINDOW = 50
+
+
+def record_upload_latency(latency_ms: int) -> None:
+    """Append to the latency window, evicting oldest entries when full."""
+    win = flags.upload_latency_ms_window
+    win.append(latency_ms)
+    if len(win) > UPLOAD_LATENCY_WINDOW:
+        del win[: len(win) - UPLOAD_LATENCY_WINDOW]
 
 
 # Module-level singleton — main.py and capture.py both observe these.
@@ -296,6 +318,7 @@ async def _upload_with_retry(
         )
         return None
     seg.retry_count += 1
+    flags.upload_retries_total += 1
     logger.warning(
         "S3 upload failed, will retry: %s (attempt %d/%d)",
         seg.filename, seg.retry_count, MAX_UPLOAD_RETRIES,
@@ -334,6 +357,10 @@ async def _upload_segment(
         logger.warning("failed to read segment file %s: %s", seg.filename, e)
         return True  # gone, no retry
 
+    # Latency is wall-time from "we have the data + a presigned URL" to
+    # "S3 returned 2xx". Excludes presign latency intentionally —
+    # presign p95 is a separate question that lives on the server side.
+    upload_start = time.monotonic()
     try:
         await client.upload_segment(presigned.put_url, data)
     except S3UploadError as e:
@@ -345,6 +372,7 @@ async def _upload_segment(
         logger.warning("S3 upload failed: %s (%s)", seg.filename, e)
         return False
 
+    record_upload_latency(int((time.monotonic() - upload_start) * 1000))
     logger.debug("segment uploaded: %s", presigned.segment_id)
     state.confirms.append(UploadedSegment(
         segment_id=presigned.segment_id,

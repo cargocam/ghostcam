@@ -47,6 +47,48 @@ type TelemetryDatagram struct {
 	// running recording_mode='constant' (always zero, no signal).
 	MotionSegmentsUploaded *uint32 `json:"motion_segments_uploaded,omitempty"`
 	MotionSegmentsSkipped  *uint32 `json:"motion_segments_skipped,omitempty"`
+	// Performance / health metrics. All optional; absent fields stay
+	// out of the JSON envelope so a missing capability (no gpsd, no
+	// modem) doesn't surface as zero.
+	//
+	// SegmentUploadP95Ms: 95th percentile of the time from segment file
+	// close to S3 PUT 200, sampled over the most recent ~50 uploads.
+	// Leading indicator of network or presign-path slowdown.
+	SegmentUploadP95Ms *uint32 `json:"segment_upload_p95_ms,omitempty"`
+	// SegmentUploadRetries: cumulative retry count since boot. Differs
+	// from a "failed uploads" counter: a single eventually-successful
+	// upload that hits 2 retries adds 2 here.
+	SegmentUploadRetries *uint32 `json:"segment_upload_retries,omitempty"`
+	// SegmentQueueDepth: instantaneous depth of the asyncio segment
+	// queue feeding the upload loop. Saturation means the camera is
+	// producing segments faster than it can upload them — leading
+	// indicator before storage_capped fires.
+	SegmentQueueDepth *uint8 `json:"segment_queue_depth,omitempty"`
+	// LiveWSBytesPerSec: bytes pushed over the live WebSocket since the
+	// last telemetry tick, divided by the tick interval. Tracks WebRTC
+	// viewer egress independently of S3 upload bandwidth.
+	LiveWSBytesPerSec *uint32 `json:"live_ws_bytes_per_sec,omitempty"`
+	// LiveWSDroppedFrames: cumulative count of frames dropped by the
+	// LiveRelay ring buffer (drop-oldest under back-pressure). Any
+	// non-zero number means the consumer (server) is slower than the
+	// camera's encode rate.
+	LiveWSDroppedFrames *uint32 `json:"live_ws_dropped_frames,omitempty"`
+	// GpsdQueryMs: wall-time of the most recent gpsd query in
+	// milliseconds. Catches gpsd hiccups (slow socket, parse errors)
+	// that don't surface as fix-quality changes.
+	GpsdQueryMs *uint16 `json:"gpsd_query_ms,omitempty"`
+	// EventLoopLagMs: scheduling latency for asyncio.sleep(0) measured
+	// at the schedule-ticker task. A sustained non-zero here = some
+	// task is blocking the loop synchronously.
+	EventLoopLagMs *uint16 `json:"event_loop_lag_ms,omitempty"`
+	// DiskUsedPct: percent disk used at segment_dir's filesystem.
+	// Complements local_storage_cap_bytes for visibility into
+	// whether the cap is doing its job.
+	DiskUsedPct *uint8 `json:"disk_used_pct,omitempty"`
+	// ModemRAT: cellular Radio Access Technology in use (e.g. "LTE",
+	// "5G_NSA", "WCDMA"). Pairs with the existing Sig dBm so the UI
+	// can show "−95 dBm LTE" vs "−95 dBm 3G". Absent when wired.
+	ModemRAT *string `json:"modem_rat,omitempty"`
 }
 
 // Ptr helpers for building TelemetryDatagram literals.

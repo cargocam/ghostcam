@@ -28,6 +28,15 @@ Pointer fields implement omitempty — only non-nil fields are serialized."""
     battery_pct: int | None = Field(default=None)
     motion_segments_uploaded: int | None = Field(default=None)
     motion_segments_skipped: int | None = Field(default=None)
+    segment_upload_p95_ms: int | None = Field(default=None)
+    segment_upload_retries: int | None = Field(default=None)
+    segment_queue_depth: int | None = Field(default=None)
+    live_ws_bytes_per_sec: int | None = Field(default=None)
+    live_ws_dropped_frames: int | None = Field(default=None)
+    gpsd_query_ms: int | None = Field(default=None)
+    event_loop_lag_ms: int | None = Field(default=None)
+    disk_used_pct: int | None = Field(default=None)
+    modem_rat: str | None = Field(default=None)
 
 
 TelemetryDatagram.model_rebuild()

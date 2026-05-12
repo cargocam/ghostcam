@@ -84,6 +84,65 @@ export interface TelemetryDatagram {
    */
   motion_segments_uploaded?: number /* uint32 */;
   motion_segments_skipped?: number /* uint32 */;
+  /**
+   * Performance / health metrics. All optional; absent fields stay
+   * out of the JSON envelope so a missing capability (no gpsd, no
+   * modem) doesn't surface as zero.
+   * SegmentUploadP95Ms: 95th percentile of the time from segment file
+   * close to S3 PUT 200, sampled over the most recent ~50 uploads.
+   * Leading indicator of network or presign-path slowdown.
+   */
+  segment_upload_p95_ms?: number /* uint32 */;
+  /**
+   * SegmentUploadRetries: cumulative retry count since boot. Differs
+   * from a "failed uploads" counter: a single eventually-successful
+   * upload that hits 2 retries adds 2 here.
+   */
+  segment_upload_retries?: number /* uint32 */;
+  /**
+   * SegmentQueueDepth: instantaneous depth of the asyncio segment
+   * queue feeding the upload loop. Saturation means the camera is
+   * producing segments faster than it can upload them — leading
+   * indicator before storage_capped fires.
+   */
+  segment_queue_depth?: number /* uint8 */;
+  /**
+   * LiveWSBytesPerSec: bytes pushed over the live WebSocket since the
+   * last telemetry tick, divided by the tick interval. Tracks WebRTC
+   * viewer egress independently of S3 upload bandwidth.
+   */
+  live_ws_bytes_per_sec?: number /* uint32 */;
+  /**
+   * LiveWSDroppedFrames: cumulative count of frames dropped by the
+   * LiveRelay ring buffer (drop-oldest under back-pressure). Any
+   * non-zero number means the consumer (server) is slower than the
+   * camera's encode rate.
+   */
+  live_ws_dropped_frames?: number /* uint32 */;
+  /**
+   * GpsdQueryMs: wall-time of the most recent gpsd query in
+   * milliseconds. Catches gpsd hiccups (slow socket, parse errors)
+   * that don't surface as fix-quality changes.
+   */
+  gpsd_query_ms?: number /* uint16 */;
+  /**
+   * EventLoopLagMs: scheduling latency for asyncio.sleep(0) measured
+   * at the schedule-ticker task. A sustained non-zero here = some
+   * task is blocking the loop synchronously.
+   */
+  event_loop_lag_ms?: number /* uint16 */;
+  /**
+   * DiskUsedPct: percent disk used at segment_dir's filesystem.
+   * Complements local_storage_cap_bytes for visibility into
+   * whether the cap is doing its job.
+   */
+  disk_used_pct?: number /* uint8 */;
+  /**
+   * ModemRAT: cellular Radio Access Technology in use (e.g. "LTE",
+   * "5G_NSA", "WCDMA"). Pairs with the existing Sig dBm so the UI
+   * can show "−95 dBm LTE" vs "−95 dBm 3G". Absent when wired.
+   */
+  modem_rat?: string;
 }
 
 //////////
