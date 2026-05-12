@@ -1,8 +1,10 @@
 package main
 
 import (
+	"math"
 	"net"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -33,8 +35,10 @@ func NewRateLimiter(reqsPerMin int) *RateLimiter {
 	}
 }
 
-// Allow checks whether a request from the given IP is allowed.
-func (rl *RateLimiter) Allow(ip string) bool {
+// Allow checks whether a request from the given IP is allowed. When
+// rejected, retryAfter is the time until at least one token will be
+// available; clients can echo it in the HTTP Retry-After header.
+func (rl *RateLimiter) Allow(ip string) (allowed bool, retryAfter time.Duration) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
@@ -64,17 +68,18 @@ func (rl *RateLimiter) Allow(ip string) bool {
 	entry.lastCheck = now
 
 	if entry.tokens < 1 {
-		return false
+		return false, secondsUntilNextToken(entry.tokens, rl.rate)
 	}
 	entry.tokens--
-	return true
+	return true, 0
 }
 
 // Middleware returns an HTTP middleware that rate-limits by client IP.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !rl.Allow(clientIP(r)) {
-			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+		ok, retryAfter := rl.Allow(clientIP(r))
+		if !ok {
+			writeTooManyRequests(w, retryAfter)
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -111,8 +116,10 @@ func NewGlobalRateLimiter(reqsPerMin int) *GlobalRateLimiter {
 	}
 }
 
-// Allow returns true if a token is available and consumes it.
-func (g *GlobalRateLimiter) Allow() bool {
+// Allow returns whether a token is available (and consumes it). When
+// rejected, retryAfter is the time until at least one token will be
+// available — surfaced via the HTTP Retry-After header.
+func (g *GlobalRateLimiter) Allow() (allowed bool, retryAfter time.Duration) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
@@ -124,21 +131,53 @@ func (g *GlobalRateLimiter) Allow() bool {
 	g.lastCheck = now
 
 	if g.tokens < 1 {
-		return false
+		return false, secondsUntilNextToken(g.tokens, g.rate)
 	}
 	g.tokens--
-	return true
+	return true, 0
 }
 
 // Middleware rate-limits the wrapped handler at the global rate.
 func (g *GlobalRateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !g.Allow() {
-			http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
+		ok, retryAfter := g.Allow()
+		if !ok {
+			writeTooManyRequests(w, retryAfter)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// secondsUntilNextToken computes how long until the bucket holds ≥1 token.
+// Rounded up to the nearest whole second and minimum 1, since Retry-After
+// is integer-seconds and 0 means "retry immediately" — which would defeat
+// the rate-limit.
+func secondsUntilNextToken(currentTokens, ratePerSec float64) time.Duration {
+	if ratePerSec <= 0 {
+		return time.Second
+	}
+	needed := 1.0 - currentTokens
+	if needed <= 0 {
+		return time.Second
+	}
+	secs := math.Ceil(needed / ratePerSec)
+	if secs < 1 {
+		secs = 1
+	}
+	return time.Duration(secs) * time.Second
+}
+
+// writeTooManyRequests writes a 429 with a Retry-After header. The header
+// uses RFC 7231 delta-seconds form. Clients (browsers, fetch retry libs,
+// CLI tools like `curl --retry`) respect it and pace their retries.
+func writeTooManyRequests(w http.ResponseWriter, retryAfter time.Duration) {
+	secs := int(retryAfter.Seconds())
+	if secs < 1 {
+		secs = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(secs))
+	http.Error(w, "Too Many Requests", http.StatusTooManyRequests)
 }
 
 // clientIP extracts the client IP from the request. Prefers Fly-Client-IP
