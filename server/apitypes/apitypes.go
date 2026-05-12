@@ -179,6 +179,21 @@ type TelemetryEntry struct {
 	// BatteryPct is 0–100 only when a battery-sensing HAT is wired up
 	// (see GH issue #73). nil on grid-powered cameras.
 	BatteryPct *uint8 `json:"battery_pct,omitempty"`
+	// Bandwidth-savings counters for motion-gated upload (see GH #75).
+	MotionSegmentsUploaded *uint32 `json:"motion_segments_uploaded,omitempty"`
+	MotionSegmentsSkipped  *uint32 `json:"motion_segments_skipped,omitempty"`
+	// Performance / health metrics — see common/telemetry.go for the
+	// per-field rationale. Mirrored here because the Redis stream is
+	// the UI's source of truth for telemetry tiles.
+	SegmentUploadP95Ms     *uint32 `json:"segment_upload_p95_ms,omitempty"`
+	SegmentUploadRetries   *uint32 `json:"segment_upload_retries,omitempty"`
+	SegmentQueueDepth      *uint8  `json:"segment_queue_depth,omitempty"`
+	LiveWSBytesPerSec      *uint32 `json:"live_ws_bytes_per_sec,omitempty"`
+	LiveWSDroppedFrames    *uint32 `json:"live_ws_dropped_frames,omitempty"`
+	GpsdQueryMs            *uint16 `json:"gpsd_query_ms,omitempty"`
+	EventLoopLagMs         *uint16 `json:"event_loop_lag_ms,omitempty"`
+	DiskUsedPct            *uint8  `json:"disk_used_pct,omitempty"`
+	ModemRAT               *string `json:"modem_rat,omitempty"`
 }
 
 // TelemetryRangeResponse is the body of GET /api/v1/telemetry/{id}?from=&to=.

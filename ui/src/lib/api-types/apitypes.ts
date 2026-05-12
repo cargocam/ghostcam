@@ -187,6 +187,25 @@ export interface TelemetryEntry {
    * (see GH issue #73). nil on grid-powered cameras.
    */
   battery_pct?: number /* uint8 */;
+  /**
+   * Bandwidth-savings counters for motion-gated upload (see GH #75).
+   */
+  motion_segments_uploaded?: number /* uint32 */;
+  motion_segments_skipped?: number /* uint32 */;
+  /**
+   * Performance / health metrics — see common/telemetry.go for the
+   * per-field rationale. Mirrored here because the Redis stream is
+   * the UI's source of truth for telemetry tiles.
+   */
+  segment_upload_p95_ms?: number /* uint32 */;
+  segment_upload_retries?: number /* uint32 */;
+  segment_queue_depth?: number /* uint8 */;
+  live_ws_bytes_per_sec?: number /* uint32 */;
+  live_ws_dropped_frames?: number /* uint32 */;
+  gpsd_query_ms?: number /* uint16 */;
+  event_loop_lag_ms?: number /* uint16 */;
+  disk_used_pct?: number /* uint8 */;
+  modem_rat?: string;
 }
 /**
  * TelemetryRangeResponse is the body of GET /api/v1/telemetry/{id}?from=&to=.
