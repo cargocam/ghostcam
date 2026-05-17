@@ -1,4 +1,16 @@
-# Ghostcam
+<p align="center">
+  <img src="docs/logo.svg" width="120" alt="Ghostcam logo" />
+</p>
+
+<h1 align="center">Ghostcam</h1>
+
+<p align="center">
+  <a href="https://github.com/cargocam/ghostcam/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/cargocam/ghostcam/ci.yml?branch=main&label=ci" alt="CI status" /></a>
+  <a href="https://github.com/cargocam/ghostcam/releases"><img src="https://img.shields.io/github/v/release/cargocam/ghostcam?include_prereleases&sort=semver&label=release" alt="Latest release" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/cargocam/ghostcam" alt="License" /></a>
+  <img src="https://img.shields.io/github/go-mod/go-version/cargocam/ghostcam?filename=go.mod" alt="Go version" />
+  <img src="https://img.shields.io/github/last-commit/cargocam/ghostcam/main" alt="Last commit" />
+</p>
 
 The camera daemon, wire-contract types, and Pi packaging for [Ghostcam](https://ghostcam.fly.dev) — a Raspberry Pi surveillance system.
 
