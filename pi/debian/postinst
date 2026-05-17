@@ -112,13 +112,20 @@ EOF
             # subsequent boots inherit the fix. Best-effort; nmcli
             # absence (chroot) and lack of running NM both make this a
             # no-op.
+            #
+            # Pipe-fed while loop instead of `done < <(...)` because the
+            # shebang is /bin/sh — dash, not bash — and process
+            # substitution isn't POSIX. We don't assign anything inside
+            # the loop body that needs to survive past it, so the
+            # subshell-pipe semantics are fine.
             if command -v nmcli >/dev/null 2>&1; then
-                while IFS=: read -r uuid; do
-                    [ -z "$uuid" ] && continue
-                    nmcli connection modify "$uuid" \
-                        connection.autoconnect-retries 0 \
-                        >/dev/null 2>&1 || true
-                done < <(nmcli -t -f UUID connection show 2>/dev/null)
+                nmcli -t -f UUID connection show 2>/dev/null \
+                    | while IFS=: read -r uuid; do
+                        [ -z "$uuid" ] && continue
+                        nmcli connection modify "$uuid" \
+                            connection.autoconnect-retries 0 \
+                            >/dev/null 2>&1 || true
+                    done
             fi
             # Use is-enabled, not is-active: prerm just stopped the unit
             # (case "$1" in upgrade), so is-active is always false here
