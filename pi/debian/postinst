@@ -1,0 +1,136 @@
+#!/bin/sh
+# postinst — invoked by dpkg/apt after the package files are unpacked.
+# Idempotent: re-running on upgrades must be safe.
+set -e
+
+case "$1" in
+    configure)
+        if ! getent group ghostcam >/dev/null; then
+            addgroup --system ghostcam
+        fi
+        if ! getent passwd ghostcam >/dev/null; then
+            adduser --system --ingroup ghostcam \
+                    --home /var/ghostcam --no-create-home \
+                    --shell /usr/sbin/nologin ghostcam
+        fi
+
+        # Hardware-access groups: video for the camera, audio for
+        # ALSA, dialout for the modem serial, bluetooth for the BlueZ
+        # D-Bus surface the onboarding peripheral writes to, netdev for
+        # NetworkManager (BT-payload `wifi_ssid` triggers EnsureWifi →
+        # `nmcli device wifi connect`, which polkit-rejects with
+        # "Insufficient privileges" for users outside netdev — and a
+        # cellular-only camera that wants to drop to WiFi via BT
+        # onboarding would otherwise stay on cellular forever). getent
+        # guards against distros where one of these isn't standard.
+        for g in video audio dialout bluetooth netdev; do
+            if getent group "$g" >/dev/null; then
+                adduser ghostcam "$g" >/dev/null 2>&1 || true
+            fi
+        done
+
+        # rfkill unblock used to live here but is a no-op when postinst
+        # runs in a chroot during image build (no kernel rfkill state to
+        # touch), so the unblock is now a boot-time oneshot
+        # (ghostcam-firstboot.service in the image layer).
+
+        install -d -o ghostcam -g ghostcam -m 0750 /var/ghostcam
+        # Reassign any pre-existing data (identity key, segments,
+        # pending-confirms). Migrations from the legacy `yurei` /
+        # `pi`-owned layout otherwise leave the daemon unable to read
+        # its own ed25519 private key.
+        chown -R ghostcam:ghostcam /var/ghostcam
+
+        # Seed the rollback target. The systemd unit's ExecStartPre
+        # rollback branch requires /usr/local/bin/ghostcam-camera.prev
+        # to restore from; if a freshly-installed binary crashes
+        # before writing boot_ok on a brand-new camera (no prior
+        # install means no .prev yet), the rollback fires but has
+        # nothing to copy back, and the broken binary loops forever.
+        # Seeding .prev with the just-installed binary means a
+        # first-install crash rolls back to *itself* — a no-op
+        # restore that at least keeps the unit reachable for
+        # diagnostics rather than soft-bricking. Subsequent OTA
+        # updates overwrite .prev with the previous-known-good.
+        if [ -x /usr/local/bin/ghostcam-camera ] && [ ! -e /usr/local/bin/ghostcam-camera.prev ]; then
+            install -m 0755 -o ghostcam -g ghostcam \
+                /usr/local/bin/ghostcam-camera \
+                /usr/local/bin/ghostcam-camera.prev
+        fi
+        install -d -m 0755 /etc/ghostcam
+        if [ ! -e /etc/ghostcam/env ]; then
+            cat > /etc/ghostcam/env <<'EOF'
+# Ghostcam camera daemon environment. The installer (pi-setup.sh) or
+# the operator sets GHOSTCAM_SERVER_URL; everything else is optional.
+# GHOSTCAM_SERVER_URL=https://ghostcam.fly.dev
+GHOSTCAM_DATA_DIR=/var/ghostcam
+EOF
+            chmod 0644 /etc/ghostcam/env
+        fi
+
+        # Enable the service. deb-systemd-helper is the right tool here —
+        # systemctl-based enable is a no-op in a chroot (no /run/systemd/system),
+        # so when the .deb is installed during mmdebstrap image build the
+        # multi-user.target.wants symlink never gets created and the service
+        # boots disabled. deb-systemd-helper writes the symlinks directly
+        # and works correctly in both chroot and live-system installs.
+        # (This is what dh_installsystemd uses under the hood; we replicate
+        # it manually because we hand-build the .deb instead of using
+        # debhelper.)
+        if command -v deb-systemd-helper >/dev/null 2>&1; then
+            deb-systemd-helper enable ghostcam-camera.service >/dev/null 2>&1 || true
+        else
+            # Fallback: manually create the wants symlink. Same end state.
+            install -d /etc/systemd/system/multi-user.target.wants
+            ln -sf /lib/systemd/system/ghostcam-camera.service \
+                /etc/systemd/system/multi-user.target.wants/ghostcam-camera.service
+        fi
+
+        # Live-system follow-through: reload systemd + udev rules + start
+        # if the unit is enabled. Guarded so mmdebstrap-driven chroot builds
+        # skip cleanly (no running daemons to talk to).
+        if [ -d /run/systemd/system ]; then
+            systemctl daemon-reload || true
+            # Pick up our new /lib/udev/rules.d/60-ghostcam-camera.rules
+            # and re-apply to existing dma_heap nodes so the running
+            # daemon doesn't have to wait for a reboot to see the fix.
+            udevadm control --reload-rules >/dev/null 2>&1 || true
+            udevadm trigger --subsystem-match=dma_heap >/dev/null 2>&1 || true
+            # Reload polkit so the netdev → NetworkManager rule (shipped
+            # in /etc/polkit-1/rules.d/49-ghostcam-nm.rules) takes effect
+            # without a reboot. polkit watches the rules dir but a daemon
+            # already running won't pick up new files until reload.
+            systemctl reload polkit >/dev/null 2>&1 || true
+            # Set autoconnect-retries=0 (infinite) on every existing NM
+            # connection. NM's default of 4 retries is fatal on a headless
+            # camera: one bad WPA group-key rekey or AP blip exhausts the
+            # cap, marks the connection "blocked", and the daemon never
+            # retries — leaving the Pi off-network until manual reboot.
+            # autoconnect-retries is a per-connection property (not a
+            # daemon-level config), so we have to walk the connection
+            # list. The setting persists in the .nmconnection file so
+            # subsequent boots inherit the fix. Best-effort; nmcli
+            # absence (chroot) and lack of running NM both make this a
+            # no-op.
+            if command -v nmcli >/dev/null 2>&1; then
+                while IFS=: read -r uuid; do
+                    [ -z "$uuid" ] && continue
+                    nmcli connection modify "$uuid" \
+                        connection.autoconnect-retries 0 \
+                        >/dev/null 2>&1 || true
+                done < <(nmcli -t -f UUID connection show 2>/dev/null)
+            fi
+            # Use is-enabled, not is-active: prerm just stopped the unit
+            # (case "$1" in upgrade), so is-active is always false here
+            # and the previous `is-active && restart` left the daemon
+            # stopped across every package upgrade. The unit is enabled
+            # unconditionally above (deb-systemd-helper), so is-enabled
+            # is true on both fresh installs and upgrades.
+            if systemctl is-enabled --quiet ghostcam-camera.service; then
+                systemctl start ghostcam-camera.service || true
+            fi
+        fi
+        ;;
+esac
+
+exit 0

@@ -1,0 +1,54 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - run: go vet ./...
+
+      - name: Build camera (synthetic — synthetic sensor stubs, host-arch)
+        run: go build -tags synthetic -o /tmp/ghostcam-camera-synthetic ./camera
+
+      - name: Build camera (real — Pi production, linux/arm64 cross)
+        run: GOOS=linux GOARCH=arm64 go build -o /tmp/ghostcam-camera-arm64 ./camera
+
+      # Reproducible-build gate (closes part of #37 in the original repo).
+      # Builds the production camera binary twice with the same flags
+      # release.yml uses and asserts byte-identical output. Catches anything
+      # that sneaks non-determinism into the camera build path (embedded
+      # timestamps, build-path leaks despite -trimpath, env-dependent
+      # codegen). VER is derived from the commit SHA exactly as in
+      # release.yml so the -X main.Version=$VER ldflag is identical
+      # across both builds.
+      - name: Reproducible-build verification (camera, linux/arm64)
+        run: |
+          set -euo pipefail
+          VER="${GITHUB_SHA:0:8}"
+          for i in 1 2; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+              go build -trimpath -ldflags="-s -w -X main.Version=$VER" \
+                -o "/tmp/ghostcam-camera-arm64.repro.$i" ./camera
+          done
+          A=$(sha256sum /tmp/ghostcam-camera-arm64.repro.1 | awk '{print $1}')
+          B=$(sha256sum /tmp/ghostcam-camera-arm64.repro.2 | awk '{print $1}')
+          echo "build 1: $A"
+          echo "build 2: $B"
+          if [ "$A" != "$B" ]; then
+            echo "::error::Camera binary build is NOT reproducible — see SHAs above."
+            ls -la /tmp/ghostcam-camera-arm64.repro.* >&2
+            exit 1
+          fi
+          echo "OK: camera binary builds reproducibly."
+
+      - run: go test ./...

@@ -1,0 +1,189 @@
+name: Release
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+# Rolling pre-release. Builds the Go camera binary for linux/arm64 + a
+# Debian package wrapping it, attaches both to the v0.1.0-alpha release.
+# Pi cameras with auto-update enabled pull this on their next
+# /api/v1/firmware/latest check.
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Static Go binary for the Pi (linux/arm64). Pure Go, no cgo —
+      # build tags select real (vs synthetic) sensors. Same binary the
+      # CI smoke-builds; release just stages + packages it.
+      #
+      # The short commit SHA is baked into main.Version so the camera
+      # can compare its running version against `firmware:latest:version`
+      # (set by the GitHub release webhook in server/firmware.go from
+      # `release.target_commitish`). Without this, every shipped binary
+      # would report Version="dev" and CheckFirmwareUpdate would
+      # short-circuit on every production camera. The release tag
+      # (v0.1.0-alpha) is force-moved on every push and therefore
+      # useless as a version identifier; the SHA is unique per build.
+      - name: Build camera binary (linux/arm64, real sensors)
+        run: |
+          VER="${GITHUB_SHA:0:8}"
+          echo "building camera binary with main.Version=$VER"
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=linux GOARCH=arm64 \
+            go build -trimpath -ldflags="-s -w -X main.Version=$VER" \
+              -o dist/ghostcam-camera_arm64 ./camera
+
+      - name: Package .deb (Go binary, no venv)
+        run: |
+          set -euo pipefail
+          # Append the short SHA to the .deb's Debian Version so apt
+          # detects every release as a real upgrade. Previously the
+          # hardcoded `0.1.0~alpha` collided across every build; apt
+          # saw "already newest version" and silently skipped reinstall,
+          # meaning unit / postinst / Depends changes never reached the
+          # Pi unless an operator ran `apt install --reinstall ./*.deb`
+          # by hand. The `+sha` build-metadata segment is canonical
+          # Debian: it sorts higher than bare `0.1.0~alpha`
+          # (lexicographic on `+`) so old installs upgrade cleanly to
+          # the first +sha build, and each subsequent build's distinct
+          # SHA forces a re-install on every push to main.
+          #
+          # The OUTPUT filename stays stable (`ghostcam-camera_arm64.deb`)
+          # so the `gh release upload --clobber` replaces a single
+          # asset each push instead of accumulating one .deb per SHA on
+          # the release page. Server-side matcher in firmware.go uses
+          # `HasPrefix("ghostcam-camera_") && HasSuffix("_arm64.deb")`
+          # which still matches the stable name.
+          #
+          # Each step runs in a fresh shell, so re-derive VER here
+          # instead of relying on the build step's local var.
+          VER="${GITHUB_SHA:0:8}"
+          DEB_VERSION="0.1.0~alpha+${VER}"
+          PKG_DIR="ghostcam-camera-build"
+          mkdir -p "$PKG_DIR/DEBIAN" "$PKG_DIR/usr/local/bin" "$PKG_DIR/lib/systemd/system" "$PKG_DIR/lib/udev/rules.d" "$PKG_DIR/etc/polkit-1/rules.d"
+          cp dist/ghostcam-camera_arm64 "$PKG_DIR/usr/local/bin/ghostcam-camera"
+          chmod 755 "$PKG_DIR/usr/local/bin/ghostcam-camera"
+
+          # Canonical unit file lives in pi/systemd/; the .deb installs
+          # it to /lib/systemd/system so the package is self-contained
+          # (apt install ./ghostcam-camera_*.deb produces a running service).
+          cp pi/systemd/ghostcam-camera.service "$PKG_DIR/lib/systemd/system/ghostcam-camera.service"
+          chmod 644 "$PKG_DIR/lib/systemd/system/ghostcam-camera.service"
+
+          # Udev rule granting the `video` group access to /dev/dma_heap/*
+          # — required for libcamera to allocate DMA buffers from a
+          # non-root daemon. PiOS images get this via raspberrypi-sys-mods;
+          # we ship it ourselves so the .deb works on any bookworm rootfs.
+          cp pi/debian/udev/60-ghostcam-camera.rules "$PKG_DIR/lib/udev/rules.d/60-ghostcam-camera.rules"
+          chmod 644 "$PKG_DIR/lib/udev/rules.d/60-ghostcam-camera.rules"
+
+          # Polkit rule granting `netdev` group blanket NetworkManager
+          # access (no auth prompt). Required for unattended BT-onboarding:
+          # a cellular-only camera receiving `wifi_ssid` in its provisioning
+          # payload calls `nmcli device wifi connect`, which is gated by
+          # `auth_admin_keep` in the stock NM policy and would otherwise
+          # leave the camera stranded on cellular.
+          cp pi/debian/polkit/49-ghostcam-nm.rules "$PKG_DIR/etc/polkit-1/rules.d/49-ghostcam-nm.rules"
+          chmod 644 "$PKG_DIR/etc/polkit-1/rules.d/49-ghostcam-nm.rules"
+
+          # Maintainer scripts: postinst creates the ghostcam user, data
+          # dir, env skeleton; enables + reloads the unit. prerm stops
+          # the service on remove/upgrade. Both are idempotent and
+          # chroot-safe (mmdebstrap image builds depend on this).
+          cp pi/debian/postinst "$PKG_DIR/DEBIAN/postinst"
+          cp pi/debian/prerm    "$PKG_DIR/DEBIAN/prerm"
+          chmod 755 "$PKG_DIR/DEBIAN/postinst" "$PKG_DIR/DEBIAN/prerm"
+
+          cat > "$PKG_DIR/DEBIAN/control" << EOF
+          Package: ghostcam-camera
+          Version: ${DEB_VERSION}
+          Architecture: arm64
+          Maintainer: Ghostcam <noreply@ghostcam.dev>
+          Depends: ffmpeg, ca-certificates, adduser, network-manager, wpasupplicant, modemmanager, libqmi-utils, usb-modeswitch, gpsd, gpsd-clients, rpicam-apps, libzbar0, alsa-utils, bluez, rfkill, init-system-helpers
+          Description: Ghostcam camera agent (Go)
+           Captures video via rpicam-vid + ffmpeg, uploads HLS
+           segments to S3 via presigned URLs, publishes live via
+           WHIP/WebRTC to the broadcast hub.
+          EOF
+          sed -i 's/^          //' "$PKG_DIR/DEBIAN/control"
+          # Explicit output filename — dpkg-deb defaults to
+          # `<PKG_DIR>.deb`, but we want a stable name that the server's
+          # firmware.go matcher accepts (HasPrefix `ghostcam-camera_` +
+          # HasSuffix `_arm64.deb`) and that `gh release upload
+          # --clobber` overwrites in place each push.
+          dpkg-deb --build "$PKG_DIR" ghostcam-camera_arm64.deb
+
+      # SBOM for the camera binary (#37). cyclonedx-gomod walks the
+      # camera module's import graph and emits a CycloneDX JSON file
+      # listing every Go dependency with version + license. Shipped
+      # alongside the .deb so anyone auditing what's running on a
+      # production camera (or doing supply-chain analysis) can grab
+      # it from the release page without needing to clone the repo.
+      # `app` subcommand targets the main module specifically; `-json`
+      # produces the JSON variant (more tooling-friendly than XML);
+      # `-licenses` adds the license field for each component.
+      - name: Generate camera SBOM (CycloneDX)
+        run: |
+          go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest
+          # `app` walks the import graph of the main package and emits
+          # a CycloneDX BOM. The repo is a single-module checkout, so
+          # MODULE_PATH is "." and we identify the camera's main package
+          # via -main camera (path is relative to MODULE_PATH).
+          "$(go env GOPATH)"/bin/cyclonedx-gomod app \
+            -json -licenses -output ghostcam-camera.sbom.json -main camera .
+
+      - name: Generate checksums
+        run: sha256sum dist/ghostcam-camera_arm64 ghostcam-camera_*.deb ghostcam-camera.sbom.json > checksums.txt
+
+      - name: Install gh CLI
+        run: |
+          curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | sudo dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg
+          echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" | sudo tee /etc/apt/sources.list.d/github-cli.list > /dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq gh
+
+      - name: Upsert release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Don't delete-then-create — that race-wipes any .img.xz
+          # assets the pi-images workflow uploaded in the gap between
+          # this job's start and the previous push. Instead:
+          #   1. force-move the tag to HEAD
+          #   2. create the release if absent, no-op if present
+          #   3. upload binary/.deb/checksums with --clobber so they
+          #      overwrite by name without touching other assets
+          #   4. refresh the title/notes
+          # Net effect: every push refreshes the camera package, but
+          # pi-images-produced .img.xz files persist until pi-images
+          # itself replaces them.
+          git tag -f v0.1.0-alpha
+          git push origin v0.1.0-alpha --force
+          NOTES="Rolling pre-release built from main at $(git rev-parse --short HEAD). Updated on every push."
+          if ! gh release view v0.1.0-alpha >/dev/null 2>&1; then
+            gh release create v0.1.0-alpha \
+              --prerelease \
+              --title "v0.1.0-alpha (latest main)" \
+              --notes "$NOTES"
+          fi
+          # Delete the legacy versioned .deb asset name from previous
+          # builds so the release page settles on a single
+          # `ghostcam-camera_arm64.deb`. No-op once the old asset is gone.
+          gh release delete-asset v0.1.0-alpha ghostcam-camera_0.1.0-alpha_arm64.deb --yes 2>/dev/null || true
+          gh release upload v0.1.0-alpha \
+            dist/ghostcam-camera_arm64 \
+            ghostcam-camera_*.deb \
+            ghostcam-camera.sbom.json \
+            checksums.txt \
+            --clobber
+          gh release edit v0.1.0-alpha \
+            --title "v0.1.0-alpha (latest main)" \
+            --notes "$NOTES"

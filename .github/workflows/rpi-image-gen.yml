@@ -1,0 +1,28 @@
+name: Build rpi-image-gen container
+on:
+  workflow_dispatch: # manual trigger
+  schedule:
+    - cron: '0 6 1 * *' # monthly, 1st at 6am UTC
+
+permissions:
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: .github/rpi-image-gen.Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/rpi-image-gen:latest
+          cache-from: type=gha,scope=rpi-image-gen
+          cache-to: type=gha,mode=max,scope=rpi-image-gen

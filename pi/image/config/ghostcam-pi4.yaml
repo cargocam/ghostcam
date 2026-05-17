@@ -1,0 +1,15 @@
+device:
+  layer: rpi4
+  hostname: ghostcam
+  user1: ghostcam
+  user1pass: Ghostcam1!
+
+image:
+  layer: image-rpios
+  boot_part_size: 512M
+  root_part_size: 4G
+  name: ghostcam-pi4
+
+layer:
+  base: bookworm-minbase
+  ghostcam: ghostcam

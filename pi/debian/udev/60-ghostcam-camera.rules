@@ -1,0 +1,11 @@
+# /dev/dma_heap/* defaults to root:root 0600 on bookworm-minbase, which
+# means libcamera (running as the non-root `ghostcam` user) can't allocate
+# DMA buffers and rpicam-{still,vid,hello} report "Could not open any
+# dmaHeap device" / "No cameras available!" even when the kernel correctly
+# probes the camera sensor (imx708/imx219/etc.).
+#
+# PiOS images get the equivalent rule via the `raspberrypi-sys-mods`
+# package; we ship our own here so the .deb works on any Bookworm rootfs,
+# not just a PiOS-derived one.
+KERNEL=="dma_heap/linux*", GROUP="video", MODE="0660"
+KERNEL=="dma_heap/system",  GROUP="video", MODE="0660"

@@ -1,0 +1,27 @@
+// Allow the ghostcam camera daemon (running as the unprivileged `ghostcam`
+// system user, member of the `netdev` group) to manage NetworkManager
+// connections unattended. Without this, the bookworm default
+// org.freedesktop.NetworkManager policy ships every action with
+// `auth_admin_keep`, which polkit-rejects any GUI-less daemon attempt with
+// "Insufficient privileges" — so a cellular-only camera that receives a
+// `wifi_ssid` in its BT-onboarding payload (provisioning.go::EnsureWifi)
+// silently fails to drop onto WiFi and stays on cellular indefinitely.
+//
+// Scoped to the netdev group, not to "ghostcam" by name, so the rule
+// composes cleanly with operator-added admin accounts that may also need
+// nmcli access. Grant covers the same surface that interactive sudo
+// nmcli would — connection management, wifi credential storage,
+// enabling/disabling devices. The rule is read at polkit reload time;
+// postinst kicks `systemctl reload polkit` after dropping it in place.
+//
+// Filename prefix `49-` sorts the rule just before the Debian default
+// `50-default.rules`, so it overrides the auth_admin_keep gates without
+// being shadowed by anything operator-added at `60-` and up.
+polkit.addRule(function (action, subject) {
+    if (
+        action.id.indexOf("org.freedesktop.NetworkManager.") === 0 &&
+        subject.isInGroup("netdev")
+    ) {
+        return polkit.Result.YES;
+    }
+});

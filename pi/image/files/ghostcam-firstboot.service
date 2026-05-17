@@ -1,0 +1,13 @@
+[Unit]
+Description=Ghostcam first-boot: unblock rfkill (BT + WiFi) and apply /boot/firmware/wifi.conf if present
+DefaultDependencies=no
+After=local-fs.target systemd-tmpfiles-setup.service
+Before=NetworkManager.service bluetooth.service ghostcam-camera.service network-pre.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ghostcam-firstboot
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

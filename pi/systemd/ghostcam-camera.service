@@ -1,0 +1,100 @@
+[Unit]
+Description=Ghostcam Camera
+After=network-online.target bluetooth.service
+Wants=network-online.target bluetooth.service
+
+[Service]
+Type=simple
+User=ghostcam
+Group=ghostcam
+SupplementaryGroups=video dialout audio
+EnvironmentFile=-/etc/ghostcam/env
+EnvironmentFile=-/etc/ghostcam/env.d/00-server.conf
+Environment=MALLOC_ARENA_MAX=2
+# Firmware update with rollback.
+#
+# Four markers drive the state machine:
+#   STAGED            /var/ghostcam/staged-update.deb        written by camera/firmware.go
+#   PENDING_VERIFY    /var/ghostcam/install_pending_verify   written by ExecStartPre after install,
+#                                                            removed by the daemon once it
+#                                                            stabilises (camera/firmware_stability.go)
+#   BOOT_OK           /var/ghostcam/boot_ok                  written by camera after first telemetry
+#                                                            success (camera/telemetry_poll.go)
+#   HEALTHY_MINUTES   /var/ghostcam/healthy_minutes          uptime counter written every minute
+#                                                            by camera/firmware_stability.go
+#
+# Each boot's ExecStartPre:
+#   1. If PENDING_VERIFY still exists, the previous boot ran a freshly
+#      installed binary that did NOT reach the stability threshold
+#      (otherwise the daemon would have removed PENDING_VERIFY itself).
+#      Decide the rollback reason and act:
+#        * BOOT_OK missing  → "no-boot-ok"   (never reached telemetry)
+#        * HEALTHY_MINUTES < 5 → "brief-uptime" (post-boot crash before stable)
+#      Either way restore PREV and write rollback_pending. Always consume
+#      PENDING_VERIFY so a manual fix doesn't loop forever.
+#   2. If STAGED exists (and no rollback fired), install it: back up the
+#      current binary to PREV, extract the new one from the .deb, set
+#      PENDING_VERIFY so the NEXT boot can verify it. Reset HEALTHY_MINUTES
+#      to 0 so a long-running prior install's counter doesn't get inherited.
+#   3. Always clear BOOT_OK so the current run's success is signalled
+#      fresh by the camera writing it after telemetry.
+#
+# We use `dpkg-deb -x` (a pure tarball extract) rather than `dpkg -i`
+# because the .deb's postinst calls `systemctl restart ghostcam-camera`
+# when the service is active, which SIGTERMs the ExecStartPre we're
+# running inside and leaves dpkg half-installed. The only thing
+# dpkg-managed install would buy us is system-package upgrades, which
+# never go out via OTA anyway.
+#
+# $$ in the command escapes systemd's env-substitution; sh sees a literal $.
+ExecStartPre=+/bin/sh -c '\
+  STAGED=/var/ghostcam/staged-update.deb; \
+  BIN=/usr/local/bin/ghostcam-camera; \
+  PREV=$${BIN}.prev; \
+  BOOT_OK=/var/ghostcam/boot_ok; \
+  PENDING_VERIFY=/var/ghostcam/install_pending_verify; \
+  HEALTHY_MINUTES=/var/ghostcam/healthy_minutes; \
+  STABILITY_THRESHOLD=5; \
+  rolled_back=; \
+  if [ -f "$$PENDING_VERIFY" ]; then \
+    reason=; \
+    if [ ! -f "$$BOOT_OK" ]; then \
+      reason=no-boot-ok; \
+    else \
+      m=0; \
+      if [ -f "$$HEALTHY_MINUTES" ]; then m=$$(cat "$$HEALTHY_MINUTES" 2>/dev/null); fi; \
+      case "$$m" in ""|*[!0-9]*) m=0;; esac; \
+      if [ "$$m" -lt "$$STABILITY_THRESHOLD" ]; then reason=brief-uptime; fi; \
+    fi; \
+    if [ -n "$$reason" ] && [ -f "$$PREV" ]; then \
+      echo "Rolling back firmware: $$reason"; \
+      install -m 0755 -o ghostcam -g ghostcam "$$PREV" "$$BIN"; \
+      printf "%%s" "$$reason" > /var/ghostcam/rollback_pending; \
+      chown ghostcam:ghostcam /var/ghostcam/rollback_pending; \
+      chmod 0644 /var/ghostcam/rollback_pending; \
+      rolled_back=1; \
+    fi; \
+    rm -f "$$PENDING_VERIFY"; \
+  fi; \
+  if [ -z "$$rolled_back" ] && [ -f "$$STAGED" ]; then \
+    tmp=$$(mktemp -d); \
+    if dpkg-deb -x "$$STAGED" "$$tmp" && [ -x "$$tmp/usr/local/bin/ghostcam-camera" ]; then \
+      cp "$$BIN" "$$PREV"; \
+      install -m 0755 -o ghostcam -g ghostcam "$$tmp/usr/local/bin/ghostcam-camera" "$$BIN"; \
+      touch "$$PENDING_VERIFY"; \
+      chown ghostcam:ghostcam "$$PENDING_VERIFY"; \
+      rm -f "$$HEALTHY_MINUTES"; \
+      echo "Installed staged firmware from $$STAGED (pending verify)"; \
+    else \
+      echo "Staged firmware extract failed, discarding"; \
+    fi; \
+    rm -rf "$$tmp" "$$STAGED"; \
+  fi; \
+  rm -f "$$BOOT_OK"; \
+  true'
+ExecStart=/usr/local/bin/ghostcam-camera
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

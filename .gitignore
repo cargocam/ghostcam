@@ -1,0 +1,31 @@
+# Build artefacts
+/ghostcam-camera
+/ghostcam-camera_arm64
+/ghostcam-camera-synthetic
+/dist/
+/ghostcam-camera_*.deb
+/checksums.txt
+/ghostcam-camera.sbom.json
+
+# Per-developer Pi config (see .pi.env.example)
+.pi.env
+
+# Go build cache, modules
+*.test
+*.out
+/vendor/
+
+# Editor
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Image-build artefacts (rpi-image-gen)
+/work/
+/out/
+/build/
+*.img
+*.img.xz
