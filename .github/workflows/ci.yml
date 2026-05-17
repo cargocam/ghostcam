@@ -10,10 +10,25 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+
+      # POSIX-shell lint for the Debian maintainer scripts. Catches the
+      # dash-vs-bash class of bugs (process substitution, [[ tests,
+      # ${var^^}) at PR time instead of in a 13-minute image build —
+      # the `done < <(...)` slip in postinst that broke pi-images.yml
+      # would have failed this step. `dash -n` is parse-only (no
+      # execution), so it's safe to run unconditionally on every file.
+      - name: dash-parse Debian maintainer scripts
+        run: |
+          set -e
+          for f in pi/debian/postinst pi/debian/prerm; do
+            [ -f "$f" ] || continue
+            echo "dash -n $f"
+            dash -n "$f"
+          done
 
       - run: go vet ./...
 

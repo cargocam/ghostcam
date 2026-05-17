@@ -19,7 +19,7 @@ jobs:
         # are scaffolding; add them back once validated on hardware.
         device: [zero2w]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download .deb from release
         env:
