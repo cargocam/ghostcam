@@ -72,6 +72,7 @@ mmdebstrap:
       printf '%s\n' \
         'camera_auto_detect=1' \
         'dtparam=i2s=on' \
+        'dtparam=i2c_arm=on' \
         'dtoverlay=googlevoicehat-soundcard' \
         'enable_uart=1' \
         'gpu_mem=128' \

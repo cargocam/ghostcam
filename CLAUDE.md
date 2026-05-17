@@ -40,6 +40,13 @@ ghostcam/
 │   ├── battery_rules.go   Level-triggered evaluation of operator-supplied rules
 │   │                      (lowest-threshold-wins) layered over the manual power
 │   │                      mode.
+│   ├── battery.go         BatteryReader interface + no-op default. Real drivers
+│   │                      are registered at startup based on the
+│   │                      GHOSTCAM_BATTERY_HAT env var.
+│   ├── battery_pisugar_linux.go  PiSugar 3 / 3 Plus driver. Reads register 0x2A
+│   │                      over /dev/i2c-1 at slave 0x57, polled every 30 s;
+│   │                      cached %% feeds telemetry's battery_pct and the
+│   │                      battery_rules evaluator.
 │   ├── bt_onboarding_linux.go  GATT peripheral. Advertises `Ghostcam-<8hex>`,
 │   │                      accepts the same provisioning JSON as the QR path.
 │   │                      Raced with ScanQR in provisioning.go.
@@ -95,7 +102,7 @@ Two camera-side build tags select compile-time variants:
 - `linux && !synthetic` — production. Real sensors (`sensors_linux.go`), real network (`network_linux.go`), real QR scan via `rpicam-still` (`qr_linux.go`), real Bluetooth peripheral (`bt_onboarding_linux.go`).
 - Anything else (including `linux` with `-tags synthetic`) — synthetic. Test source via ffmpeg's `testsrc2` + `sine`, stub network, no QR, no BT.
 
-The pattern across `camera/sensors_*.go`, `camera/network_*.go`, `camera/qr_*.go`, `camera/bt_onboarding_*.go` is: one `_linux.go` file with the real impl behind `//go:build linux && !synthetic`, one `_other.go` with a no-op stub behind `//go:build !linux || synthetic`.
+The pattern across `camera/sensors_*.go`, `camera/network_*.go`, `camera/qr_*.go`, `camera/bt_onboarding_*.go`, `camera/battery_pisugar_*.go` is: one `_linux.go` file with the real impl behind `//go:build linux && !synthetic`, one `_other.go` with a no-op stub behind `//go:build !linux || synthetic`.
 
 ## Release flow
 

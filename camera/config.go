@@ -34,6 +34,8 @@ type CameraConfig struct {
 	ABREnabled            bool   // adaptive bitrate: when true, abr.go drives rpicam-vid resolution+bitrate
 	ABRStartTier          string // tier name to start at; default "minimum"
 	PowerMode             string // "live" | "standby" | "sleep"; loaded from {dataDir}/power_mode
+	BatteryHAT            string // battery HAT driver name; "" = no HAT, "pisugar3" = PiSugar 3 over I²C
+	BatteryI2CBus         string // I²C bus device path for the battery HAT; default "/dev/i2c-1"
 }
 
 // cameraConfigFile is the TOML-deserialized config file. All fields optional.
@@ -230,6 +232,15 @@ func LoadConfig() (*CameraConfig, error) {
 		powerMode = "live"
 	}
 
+	// Battery HAT (#73). No persistence on disk — driver selection is a
+	// provisioning-time decision (which HAT the operator wired up) and
+	// is set via env var or /boot/ghostcam.conf, not via a server
+	// command. Empty string ⇒ no HAT registered ⇒ telemetry's battery
+	// section stays nil, which is the right answer for grid-powered
+	// cameras and any dev build.
+	batteryHAT := envOpt("GHOSTCAM_BATTERY_HAT")
+	batteryI2CBus := coalesceStr(envOpt("GHOSTCAM_BATTERY_I2C_BUS"), "/dev/i2c-1")
+
 	cfg := &CameraConfig{
 		ServerURL:             resolvedServerURL,
 		ProvisionToken:        resolvedProvisionToken,
@@ -250,6 +261,8 @@ func LoadConfig() (*CameraConfig, error) {
 		ABREnabled:            resolvedABREnabled,
 		ABRStartTier:          resolvedABRStartTier,
 		PowerMode:             powerMode,
+		BatteryHAT:            batteryHAT,
+		BatteryI2CBus:         batteryI2CBus,
 	}
 
 	if cfg.DataDir == "" {

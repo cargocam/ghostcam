@@ -71,6 +71,26 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// Battery HAT registration (#73). Empty BatteryHAT leaves the no-op
+	// default reader in place, so telemetry's battery_pct stays nil and
+	// battery rules never fire. Driver init failure (HAT not actually
+	// wired up) is logged but non-fatal — a missing HAT shouldn't keep
+	// a grid-powered camera from coming up.
+	switch cfg.BatteryHAT {
+	case "":
+		// no HAT configured
+	case "pisugar3":
+		if r, err := NewPiSugar3Reader(ctx, cfg.BatteryI2CBus); err != nil {
+			slog.Warn("battery HAT init failed; battery_pct will stay nil",
+				"hat", cfg.BatteryHAT, "bus", cfg.BatteryI2CBus, "err", err)
+		} else {
+			SetBatteryReader(r)
+			slog.Info("battery HAT registered", "hat", cfg.BatteryHAT, "bus", cfg.BatteryI2CBus)
+		}
+	default:
+		slog.Warn("unknown GHOSTCAM_BATTERY_HAT; ignoring", "value", cfg.BatteryHAT)
+	}
+
 	deviceSerial := GetDeviceSerial(cfg.DataDir)
 	slog.Info("device identity", "serial", deviceSerial)
 	SetGPSSeed(deviceSerial)
