@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"strconv"
 	"strings"
@@ -39,8 +40,9 @@ func GetDeviceSerial(dataDir string) string {
 }
 
 // ReadTelemetry reads CPU, memory, temperature, uptime, and WiFi signal from
-// /proc and /sys on Linux.
-func ReadTelemetry() common.TelemetryDatagram {
+// /proc and /sys on Linux. ctx bounds any subprocess calls (mmcli) so a
+// daemon shutdown isn't blocked waiting for a hung modem query.
+func ReadTelemetry(ctx context.Context) common.TelemetryDatagram {
 	d := common.TelemetryDatagram{
 		TS: nowMillis(),
 	}
@@ -98,6 +100,30 @@ func ReadTelemetry() common.TelemetryDatagram {
 	// audio is disabled).
 	if dbfs := ReadAudioRMSDBFS(); dbfs != nil {
 		d.AudioRMSDBFS = dbfs
+	}
+
+	// Cellular link sample (#120 soak validation). ReadModem shells
+	// out to mmcli with a 3 s timeout; returns a zero ModemSample
+	// on any failure (no modem, mmcli missing, command timeout).
+	if m := ReadModem(ctx); m.RAT != "" || m.SigPct > 0 {
+		if m.RAT != "" {
+			rat := m.RAT
+			d.ModemRAT = &rat
+		}
+		if m.SigPct > 0 {
+			pct := m.SigPct
+			d.ModemSigPct = &pct
+		}
+	}
+
+	// Uplink interface + monotonic byte counters. Same struct works
+	// for wifi, cellular, or wired — readDefaultInterface picks
+	// whichever is currently carrying the default route.
+	if u := ReadUplink(); u.Iface != "" {
+		iface := u.Iface
+		d.UplinkIface = &iface
+		d.UplinkRxBytes = common.PtrUint64(u.RxBytes)
+		d.UplinkTxBytes = common.PtrUint64(u.TxBytes)
 	}
 
 	return d

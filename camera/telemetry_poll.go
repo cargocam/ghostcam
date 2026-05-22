@@ -55,7 +55,7 @@ func RunTelemetryPoll(ctx context.Context, client *Client, dataDir string) {
 		case <-ctx.Done():
 			return
 		case <-time.After(interval):
-			telemetry := ReadTelemetry()
+			telemetry := ReadTelemetry(ctx)
 
 			// Battery rule evaluation (#73). Cache the sampled pct so
 			// HandleCommand can re-resolve rules without re-querying

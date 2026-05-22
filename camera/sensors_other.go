@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"math"
 	"time"
 
@@ -18,7 +19,9 @@ func GetDeviceSerial(dataDir string) string {
 }
 
 // ReadTelemetry returns synthetic sensor values for development.
-func ReadTelemetry() common.TelemetryDatagram {
+// ctx is accepted for parity with the linux signature; synthetic
+// readers have no subprocess to cancel so it's unused.
+func ReadTelemetry(_ context.Context) common.TelemetryDatagram {
 	uptime := uint32(time.Since(time.Unix(0, 0)).Seconds()) % 86400
 	cpu := uint32(15)
 	mem := uint32(256)
