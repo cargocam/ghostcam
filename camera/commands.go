@@ -104,6 +104,26 @@ func HandleCommand(ctx context.Context, cmd common.CameraCommand, dataDir string
 		}
 	case "remove_network":
 		slog.Info("remove network command", "ssid", cmd.SSID)
+	case "diag_bundle":
+		// Capture happens in a goroutine so HandleCommand returns
+		// promptly and the telemetry-poll dispatcher can keep moving
+		// through any other queued commands. The bundle lands in
+		// pendingDiagBundles and rides out on the next poll.
+		slog.Info("diag_bundle command received", "diag_id", cmd.DiagID)
+		diagID := cmd.DiagID
+		go func() {
+			bundle := CaptureDiagBundle(context.Background(), diagID)
+			addPendingDiagBundle(bundle)
+			slog.Info("diag_bundle captured, queued for next poll", "diag_id", diagID)
+		}()
+	case "restart_service":
+		// os.Exit; systemd respawns us. No goroutine — we want to
+		// take effect immediately.
+		RestartGhostcamService()
+	case "restart_modem_manager":
+		go RestartModemManager(context.Background())
+	case "restart_network_manager":
+		go RestartNetworkManager(context.Background())
 	default:
 		slog.Warn("unknown command", "type", cmd.Type)
 	}
