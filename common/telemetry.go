@@ -129,9 +129,4 @@ type TelemetryDatagram struct {
 }
 
 // Ptr helpers for building TelemetryDatagram literals.
-func PtrStr(v string) *string         { return &v }
-func PtrInt8(v int8) *int8            { return &v }
-func PtrUint8(v uint8) *uint8         { return &v }
-func PtrUint32(v uint32) *uint32      { return &v }
-func PtrFloat32(v float32) *float32   { return &v }
-func PtrFloat64(v float64) *float64   { return &v }
+func PtrUint32(v uint32) *uint32 { return &v }
