@@ -40,6 +40,23 @@ type Client struct {
 // default settings (and Go's pool doesn't know they're dead), so every
 // retry within that window times out. 30 s + explicit purge-on-error
 // keeps the recovery window bounded to one telemetry tick.
+// Per-endpoint timeouts. http.Client.Timeout caps the WHOLE request and is
+// a single global value, which forces a bad tradeoff: telemetry POSTs and
+// presign calls are <1 KB and want to fail fast (10–15 s) so the daemon
+// recovers quickly from a wifi→cellular failover; S3 PUT of a 5 MB segment
+// over a marginal cellular link can legitimately take >30 s and shouldn't
+// false-fail. We give each endpoint its own ctx deadline below and keep
+// http.Client.Timeout generous (90 s) just as a backstop. Recovery time
+// after a hot failover is bounded by 2 × (the shortest of these) — see
+// ghostcam#123 for the empirical measurement.
+const (
+	telemetryRequestTimeout = 15 * time.Second
+	presignRequestTimeout   = 15 * time.Second
+	uploadInitTimeout       = 30 * time.Second
+	uploadSegmentTimeout    = 60 * time.Second
+	provisionTimeout        = 30 * time.Second
+)
+
 func NewClient(serverURL, deviceID string, identity *Identity) *Client {
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
@@ -55,7 +72,9 @@ func NewClient(serverURL, deviceID string, identity *Identity) *Client {
 	}
 	return &Client{
 		http: &http.Client{
-			Timeout:   30 * time.Second,
+			// Per-call timeouts are set via context.WithTimeout at each
+			// call site; this is the worst-case backstop.
+			Timeout:   90 * time.Second,
 			Transport: transport,
 		},
 		transport: transport,
@@ -94,6 +113,9 @@ func (c *Client) do(req *http.Request) (*http.Response, error) {
 // deleting the on-disk marker only after this call succeeds.
 // POST /api/v1/cameras/:id/telemetry
 func (c *Client) PostTelemetry(ctx context.Context, telemetry common.TelemetryDatagram, rollbackEventJSON string) (common.TelemetryPollResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, telemetryRequestTimeout)
+	defer cancel()
+
 	// Drain any DiagBundles captured since the previous poll. The drain
 	// clears the pending slice; if the post fails we accept the loss
 	// (#119 design note: bundles are explicit operator requests, easy
@@ -123,6 +145,9 @@ func (c *Client) PostTelemetry(ctx context.Context, telemetry common.TelemetryDa
 // RequestPresignedURLs requests presigned PUT URLs and confirms previously uploaded segments.
 // POST /api/v1/cameras/:id/presign
 func (c *Client) RequestPresignedURLs(ctx context.Context, count uint32, uploaded []common.UploadedSegment) (*common.PresignResponse, error) {
+	ctx, cancel := context.WithTimeout(ctx, presignRequestTimeout)
+	defer cancel()
+
 	body := common.PresignRequest{
 		Count:    count,
 		Uploaded: uploaded,
@@ -157,6 +182,9 @@ func (e *S3UploadError) IsClientError() bool {
 
 // UploadFile uploads segment data to a presigned S3 PUT URL.
 func (c *Client) UploadFile(ctx context.Context, presignedURL string, data []byte) error {
+	ctx, cancel := context.WithTimeout(ctx, uploadSegmentTimeout)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPut, presignedURL, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("creating S3 PUT request: %w", err)
@@ -180,7 +208,10 @@ func (c *Client) UploadFile(ctx context.Context, presignedURL string, data []byt
 // ed25519 public key. No secret is returned — the server just registers
 // the public key (like adding to SSH authorized_keys).
 func Provision(ctx context.Context, serverURL, token, deviceSerial string, identity *Identity) error {
-	client := &http.Client{Timeout: 30 * time.Second}
+	ctx, cancel := context.WithTimeout(ctx, provisionTimeout)
+	defer cancel()
+
+	client := &http.Client{Timeout: provisionTimeout}
 	serverURL = strings.TrimRight(serverURL, "/")
 
 	body := common.ProvisionRequest{
@@ -231,6 +262,9 @@ func Provision(ctx context.Context, serverURL, token, deviceSerial string, ident
 // data may change with codec params), but the body is ~1-2 KB so cost is
 // trivial.
 func (c *Client) UploadInit(ctx context.Context, data []byte) error {
+	ctx, cancel := context.WithTimeout(ctx, uploadInitTimeout)
+	defer cancel()
+
 	url := fmt.Sprintf("%s/api/v1/cameras/%s/init", c.serverURL, c.deviceID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
