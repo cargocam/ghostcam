@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -21,6 +22,8 @@ var Version = "dev"
 // Client is the camera's HTTP client for server communication.
 type Client struct {
 	http      *http.Client
+	transport *http.Transport // owned by this client; exposed so we can purge
+	//                           the idle-conn pool on network failure.
 	serverURL string
 	identity  *Identity
 	deviceID  string
@@ -28,15 +31,57 @@ type Client struct {
 
 // NewClient creates a new camera HTTP client. Requests are authenticated
 // via ed25519 signature using the camera's permanent identity keypair.
+//
+// The Transport is owned per-client (not shared with http.DefaultTransport)
+// so we can call CloseIdleConnections after any failed request without
+// affecting unrelated callers. IdleConnTimeout is tuned for the cellular-
+// failover case: after wifi → cellular default-route switch, stale TCP
+// sockets bound to the old interface stay in the kernel for ~90 s on
+// default settings (and Go's pool doesn't know they're dead), so every
+// retry within that window times out. 30 s + explicit purge-on-error
+// keeps the recovery window bounded to one telemetry tick.
 func NewClient(serverURL, deviceID string, identity *Identity) *Client {
+	transport := &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: (&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 15 * time.Second,
+		}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          10,
+		IdleConnTimeout:       30 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
 	return &Client{
 		http: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout:   30 * time.Second,
+			Transport: transport,
 		},
+		transport: transport,
 		serverURL: strings.TrimRight(serverURL, "/"),
 		identity:  identity,
 		deviceID:  deviceID,
 	}
+}
+
+// do is a small wrapper around c.http.Do that purges any idle TCP
+// connections in the transport pool whenever a request fails. Required
+// for clean recovery from default-route changes (wifi → cellular):
+// Go's connection pool happily reuses a TCP socket that's still
+// "open" at the kernel level but actually unreachable because its
+// route is gone, producing context-deadline-exceeded loops until the
+// idle conn ages out (~90 s default). One call after any do() error
+// guarantees the next retry forces a fresh dial via whatever interface
+// is now the default route. Safe to over-call — it only kills CURRENTLY-
+// idle sockets, not in-flight ones.
+func (c *Client) do(req *http.Request) (*http.Response, error) {
+	resp, err := c.http.Do(req)
+	if err != nil {
+		c.transport.CloseIdleConnections()
+		return nil, err
+	}
+	return resp, nil
 }
 
 // PostTelemetry sends telemetry and returns the full poll response
@@ -118,7 +163,7 @@ func (c *Client) UploadFile(ctx context.Context, presignedURL string, data []byt
 	}
 	req.Header.Set("Content-Type", "video/mp2t")
 
-	resp, err := c.http.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return fmt.Errorf("S3 PUT failed: %w", err)
 	}
@@ -193,7 +238,7 @@ func (c *Client) UploadInit(ctx context.Context, data []byte) error {
 	}
 	req.Header.Set("Content-Type", "video/mp4")
 	c.setAuth(req)
-	resp, err := c.http.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return fmt.Errorf("init upload POST failed: %w", err)
 	}
@@ -220,7 +265,7 @@ func (c *Client) postJSON(ctx context.Context, path string, body any) (io.ReadCl
 	req.Header.Set("Content-Type", "application/json")
 	c.setAuth(req)
 
-	resp, err := c.http.Do(req)
+	resp, err := c.do(req)
 	if err != nil {
 		return nil, fmt.Errorf("HTTP POST %s failed: %w", path, err)
 	}
