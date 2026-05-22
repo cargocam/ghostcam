@@ -47,8 +47,8 @@ Or flash a pre-built image — find the latest `.img.xz` for your device (zero2w
 | `camera/` | Go camera daemon. Single static `linux/arm64` binary. Cross-compiles with `CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build ./camera`. Build tags `linux && !synthetic` for real Pi sensors, otherwise synthetic stubs for host-arch dev. |
 | `common/` | Camera ↔ server wire-contract types. Other Go modules consume these via `github.com/cargocam/ghostcam/common`. |
 | `pi/` | Pi-side glue: systemd units, Debian package scripts, udev / polkit / NetworkManager configs, rpi-image-gen layer for flashable `.img.xz` builds. |
-| `tools/sigverify/` | Cross-language ed25519 signature parity harness (regression check). |
-| `docker/` | Camera Docker entrypoints + a `pi-tools` operator container. |
+| `scripts/` | Developer tools: `pi` / `pi.sh` (camera dev loop against a real Pi), `.pi.env.example`. |
+| `docker/` | Camera Docker entrypoints (`camera-entrypoint.sh`, `dummy-cameras-entrypoint.sh`) and the `pi-tools` operator container used by `scripts/pi`. |
 | `Dockerfile` | Four camera-side stages: `camera-builder` (Go cross-compile), `camera` (synthetic-sensor runtime), `dummy-cameras` (manager that forks two synthetic cameras for demo use), `camera-prod` (real-sensor runtime). |
 | `.github/workflows/` | `release.yml` (rolling pre-release `.deb`), `pi-images.yml` (manual `.img.xz` builds), `rpi-image-gen.yml` (base-image container builder), `ci.yml` (vet + build + test + reproducible-build gate). |
 

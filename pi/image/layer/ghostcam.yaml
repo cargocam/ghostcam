@@ -92,5 +92,5 @@ mmdebstrap:
     # want a network-reachable login on every shipped device. To turn it
     # on, drop an empty `/boot/firmware/ssh` touchfile (PiOS convention)
     # and/or an `authorized_keys` file onto the boot partition before
-    # first boot. ghostcam-firstboot.sh consumes both. `scripts/pi.sh
+    # first boot. ghostcam-firstboot.sh consumes both. `scripts/pi
     # flash-dev` automates this for dev images.

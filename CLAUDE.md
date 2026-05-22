@@ -72,8 +72,15 @@ ghostcam/
 │   │                      WiFi config works without an admin prompt)
 │   └── image/             rpi-image-gen layer + firstboot script. Produces
 │                          .img.xz artefacts via pi-images.yml.
-├── tools/sigverify/    Cross-language ed25519 signature parity harness.
-├── docker/             Camera Docker entrypoints + pi-tools container.
+├── scripts/            Developer tools.
+│   ├── pi                 Thin docker wrapper around pi.sh — runs it
+│   │                      inside the pi-tools image so the host doesn't
+│   │                      need sshpass / rsync / Go installed.
+│   └── pi.sh              Camera-manager CLI: cross-compile the daemon,
+│                          scp to a real Pi, deploy/logs/status/etc.
+│                          Reads .pi.env for PI_HOST / PI_USER / PI_PASSWORD.
+├── docker/             Camera Docker entrypoints + pi-tools operator
+│                       container (built by scripts/pi).
 ├── Dockerfile          Four stages: camera-builder, camera (synthetic),
 │                       dummy-cameras (forks 2 synthetic cameras), camera-prod.
 └── .github/workflows/  ci.yml, release.yml, pi-images.yml, rpi-image-gen.yml
