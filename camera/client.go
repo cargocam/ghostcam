@@ -49,10 +49,17 @@ func NewClient(serverURL, deviceID string, identity *Identity) *Client {
 // deleting the on-disk marker only after this call succeeds.
 // POST /api/v1/cameras/:id/telemetry
 func (c *Client) PostTelemetry(ctx context.Context, telemetry common.TelemetryDatagram, rollbackEventJSON string) (common.TelemetryPollResponse, error) {
+	// Drain any DiagBundles captured since the previous poll. The drain
+	// clears the pending slice; if the post fails we accept the loss
+	// (#119 design note: bundles are explicit operator requests, easy
+	// to reissue).
+	bundles := drainPendingDiagBundles()
+
 	body := common.TelemetryPollRequest{
 		Telemetry:     telemetry,
 		FwVersion:     Version,
 		RollbackEvent: rollbackEventJSON,
+		DiagBundles:   bundles,
 	}
 
 	respBody, err := c.postJSON(ctx, fmt.Sprintf("/api/v1/cameras/%s/telemetry", c.deviceID), body)
