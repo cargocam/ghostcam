@@ -48,11 +48,20 @@ func main() {
 	// telemetry tick once we have a battery_pct sample.
 	SetManualPowerMode(cfg.PowerMode)
 	SetPowerMode(cfg.PowerMode)
+	// Battery rules: persisted file wins; missing file → ship the
+	// off-grid solar defaults; explicit `[]` → no rules (operator
+	// cleared via the editor).
 	if rules, err := LoadBatteryRules(cfg.DataDir); err != nil {
 		slog.Warn("failed to load battery rules, continuing with none", "err", err)
+	} else if rules == nil {
+		rules = DefaultBatteryRules()
+		SetBatteryRules(rules)
+		slog.Info("battery rules: applying defaults (no persisted file)", "count", len(rules))
 	} else if len(rules) > 0 {
 		SetBatteryRules(rules)
 		slog.Info("battery rules loaded", "count", len(rules))
+	} else {
+		slog.Info("battery rules: persisted file is empty — operator-cleared, no rules applied")
 	}
 
 	// Seed the segment-dir atomic so ReadTelemetry can sample the
