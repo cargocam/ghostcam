@@ -86,10 +86,13 @@ func TestFirmwareStability_RemovesPendingVerifyAtThreshold(t *testing.T) {
 
 	waitForFileGone(t, pendingVerify, time.Second)
 
-	// healthy_minutes must read ≥ threshold at the moment we observed
-	// the marker disappear. Race-friendly check: read once after the
-	// marker is gone — at that point the watchdog has written at
-	// least `threshold`.
+	// Stop the watchdog before reading healthy_minutes. The ticker
+	// keeps firing after the marker is removed, and each tick's
+	// os.WriteFile truncates-then-writes — a read racing with that
+	// window sees an empty file. Cancel + wait closes the window.
+	cancel()
+	wg.Wait()
+
 	data, err := os.ReadFile(healthyMinutes)
 	if err != nil {
 		t.Fatalf("read healthy_minutes: %v", err)
@@ -101,8 +104,6 @@ func TestFirmwareStability_RemovesPendingVerifyAtThreshold(t *testing.T) {
 	if n < testThreshold {
 		t.Errorf("expected healthy_minutes >= %d when pending_verify removed, got %d", testThreshold, n)
 	}
-	cancel()
-	wg.Wait()
 }
 
 func TestFirmwareStability_NoPendingVerifyMeansNoLogSpam(t *testing.T) {
