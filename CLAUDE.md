@@ -115,11 +115,14 @@ The pattern across `camera/sensors_*.go`, `camera/network_*.go`, `camera/qr_*.go
 
 `release.yml` fires on every push to `main`:
 
-1. Cross-compiles the camera binary for `linux/arm64` with `-X main.Version=${GITHUB_SHA:0:8}`.
-2. Generates a CycloneDX SBOM via `cyclonedx-gomod app`.
-3. Packages the binary into a `.deb` named `ghostcam-camera_arm64.deb` with `Version: 0.1.0~alpha+${SHORT_SHA}` — the `+sha` build metadata makes every push a real upgrade in apt's eyes (a bare `0.1.0~alpha` would let apt skip the reinstall and pre-install postinst changes would never reach the Pi).
-4. Force-moves the `v0.1.0-alpha` tag to HEAD and uploads the .deb, SBOM, and raw binary as release assets with `--clobber`. The release page therefore always shows the latest build at a single stable URL.
-5. The downstream server has a `release.published` webhook that reads `release.target_commitish` for the version and the `.deb` asset for the file; cameras pull updates via that server's `/api/v1/firmware/latest` endpoint.
+1. Computes the next version: highest existing bare-semver tag (`vX.Y.Z`) + patch bump. No existing tag → seeds at `v0.1.0`.
+2. Cross-compiles the camera binary for `linux/arm64` with `-X main.Version=$NEXT` (e.g. `v0.1.8`).
+3. Generates a CycloneDX SBOM via `cyclonedx-gomod app`.
+4. Packages the binary into a `.deb` named `ghostcam-camera_arm64.deb` with `Version: 0.1.8` (bare semver, no tilde/build-metadata suffix).
+5. Tags HEAD with `$NEXT` (no force-move) and creates a fresh GitHub release with the .deb, SBOM, raw binary, and checksums.
+6. The downstream server has a `release.published` webhook that reads the tag name directly from the event payload; cameras pull updates via that server's `/api/v1/firmware/latest` endpoint.
+
+**Manual minor/major bumps**: operator runs locally `git tag v0.2.0 <sha> && git push --tags`, then the next push to main picks `v0.2.1`. There's no commit-message parsing; deliberate bumps go through git.
 
 `pi-images.yml` is **manual** — `workflow_dispatch` triggered by an operator who passes a release tag. Builds `.img.xz` via rpi-image-gen for the requested device profiles (currently `zero2w`).
 
