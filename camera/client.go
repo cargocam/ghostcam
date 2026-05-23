@@ -12,6 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/cargocam/ghostcam/camera/internal/diag"
+	"github.com/cargocam/ghostcam/camera/internal/sensors"
+	"github.com/cargocam/ghostcam/camera/internal/upload"
 	"github.com/cargocam/ghostcam/common"
 )
 
@@ -120,7 +123,7 @@ func (c *Client) PostTelemetry(ctx context.Context, telemetry common.TelemetryDa
 	// clears the pending slice; if the post fails we accept the loss
 	// (#119 design note: bundles are explicit operator requests, easy
 	// to reissue).
-	bundles := drainPendingDiagBundles()
+	bundles := diag.DrainPendingDiagBundles()
 
 	body := common.TelemetryPollRequest{
 		Telemetry:     telemetry,
@@ -166,20 +169,6 @@ func (c *Client) RequestPresignedURLs(ctx context.Context, count uint32, uploade
 	return &resp, nil
 }
 
-// S3UploadError is returned by UploadFile when S3 returns a non-2xx status.
-type S3UploadError struct {
-	StatusCode int
-}
-
-func (e *S3UploadError) Error() string {
-	return fmt.Sprintf("S3 PUT returned %d", e.StatusCode)
-}
-
-// IsClientError returns true for 4xx errors (expired URL, auth failure, etc.).
-func (e *S3UploadError) IsClientError() bool {
-	return e.StatusCode/100 == 4
-}
-
 // UploadFile uploads segment data to a presigned S3 PUT URL.
 func (c *Client) UploadFile(ctx context.Context, presignedURL string, data []byte) error {
 	ctx, cancel := context.WithTimeout(ctx, uploadSegmentTimeout)
@@ -199,10 +188,27 @@ func (c *Client) UploadFile(ctx context.Context, presignedURL string, data []byt
 	io.Copy(io.Discard, resp.Body)
 
 	if resp.StatusCode/100 != 2 {
-		return &S3UploadError{StatusCode: resp.StatusCode}
+		return &upload.S3UploadError{StatusCode: resp.StatusCode}
 	}
 	return nil
 }
+
+// HTTPClient returns the underlying *http.Client. internal/firmware
+// uses this for the unauthenticated GET /firmware/latest and the .deb
+// download (firmware lives in a subpackage that can't reference c.http
+// directly).
+func (c *Client) HTTPClient() *http.Client { return c.http }
+
+// ServerURL returns the trimmed server base URL (no trailing slash).
+// Same motivation as HTTPClient: subpackages that need it can't read
+// c.serverURL.
+func (c *Client) ServerURL() string { return c.serverURL }
+
+// Version returns the build-time Version baked into the binary. The
+// telemetry-poll command dispatcher in internal/commands passes this
+// through to firmware.CheckFirmwareUpdate because Version itself stays
+// in package main for the -X main.Version=$SHA reproducible-build gate.
+func (c *Client) Version() string { return Version }
 
 // Provision calls POST /api/v1/cameras/provision with the camera's
 // ed25519 public key. No secret is returned — the server just registers
@@ -225,7 +231,7 @@ func Provision(ctx context.Context, serverURL, token, deviceSerial string, ident
 		// elsewhere. ReadSIMImsi never blocks more than ~3 s and
 		// returns "" on any failure, so provisioning isn't gated on
 		// modem state.
-		SIMImsi: ReadSIMImsi(ctx),
+		SIMImsi: sensors.ReadSIMImsi(ctx),
 	}
 
 	data, err := json.Marshal(body)
