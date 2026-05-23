@@ -2,20 +2,20 @@ package main
 
 import (
 	"crypto/ed25519"
-	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/cargocam/ghostcam/camera/internal/state"
 )
 
 // Identity holds the camera's permanent ed25519 keypair and derived device ID.
-// Generated on first boot, never regenerated — survives server switches.
-type Identity struct {
-	PrivateKey ed25519.PrivateKey
-	PublicKey  ed25519.PublicKey
-	DeviceID   string // SHA-256(public_key)[:16] hex, 32 chars
-}
+// The struct itself lives in internal/state so subpackages (provisioning,
+// telemetry, command dispatch) can pass *state.Identity around without
+// importing package main; this alias keeps the main-package spelling
+// unchanged at call sites here in camera/.
+type Identity = state.Identity
 
 // LoadOrCreateIdentity loads the ed25519 keypair from dataDir, or generates
 // one on first boot. The keypair is permanent camera identity — like
@@ -35,7 +35,7 @@ func LoadOrCreateIdentity(dataDir string) (*Identity, error) {
 		return &Identity{
 			PrivateKey: priv,
 			PublicKey:  pub,
-			DeviceID:   deriveDeviceID(pub),
+			DeviceID:   state.DeriveDeviceID(pub),
 		}, nil
 	}
 
@@ -55,17 +55,6 @@ func LoadOrCreateIdentity(dataDir string) (*Identity, error) {
 	return &Identity{
 		PrivateKey: priv,
 		PublicKey:  pub,
-		DeviceID:   deriveDeviceID(pub),
+		DeviceID:   state.DeriveDeviceID(pub),
 	}, nil
-}
-
-// PublicKeyHex returns the hex-encoded public key for transmission to the server.
-func (id *Identity) PublicKeyHex() string {
-	return hex.EncodeToString(id.PublicKey)
-}
-
-// deriveDeviceID returns the first 16 bytes of SHA-256(publicKey) as hex (32 chars).
-func deriveDeviceID(pub ed25519.PublicKey) string {
-	h := sha256.Sum256(pub)
-	return hex.EncodeToString(h[:16])
 }

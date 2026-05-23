@@ -10,33 +10,15 @@ import (
 	"syscall"
 
 	"github.com/BurntSushi/toml"
+
+	"github.com/cargocam/ghostcam/camera/internal/state"
 )
 
-// CameraConfig is the fully resolved camera configuration.
-type CameraConfig struct {
-	ServerURL             string
-	ProvisionToken        string // one-time token for headless provisioning
-	TestSource            bool
-	SegmentDir            string
-	DataDir               string
-	NoGPS                 bool
-	NoAudio               bool
-	AudioDevice           string
-	AudioGainDB           int // ffmpeg -af volume=NdB; 0 disables the filter
-
-	VideoWidth            uint32
-	VideoHeight           uint32
-	VideoFPS              uint32
-	VideoBitrate          uint32
-	VideoKeyframeInterval uint32
-	RecordingMode         string // "constant", "motion", or "never" (streaming-only)
-	LocalStorageCapBytes  uint64 // max local segment storage before eviction
-	ABREnabled            bool   // adaptive bitrate: when true, abr.go drives rpicam-vid resolution+bitrate
-	ABRStartTier          string // tier name to start at; default "minimum"
-	PowerMode             string // "live" | "standby" | "sleep"; loaded from {dataDir}/power_mode
-	BatteryHAT            string // battery HAT driver name; "" = no HAT, "pisugar3" = PiSugar 3 over I²C
-	BatteryI2CBus         string // I²C bus device path for the battery HAT; default "/dev/i2c-1"
-}
+// CameraConfig is the fully resolved camera configuration. The struct
+// itself lives in internal/state so every subpackage that needs a knob
+// can import the type without pulling in package main; this alias keeps
+// the main-package spelling unchanged at call sites here.
+type CameraConfig = state.CameraConfig
 
 // cameraConfigFile is the TOML-deserialized config file. All fields optional.
 type cameraConfigFile struct {

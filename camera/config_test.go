@@ -62,3 +62,40 @@ func TestTrimString(t *testing.T) {
 		}
 	}
 }
+
+// TestDefaultLocalStorageCapBytes_* moved here from
+// internal/upload/upload_test.go during the subpackage split:
+// defaultLocalStorageCapBytes lives in config.go (package main) and
+// can only be exercised from the same package.
+func TestDefaultLocalStorageCapBytes_ClampsCeiling(t *testing.T) {
+	// A dir that exists (any tempdir is fine) should return a real
+	// total; whatever it is, the cap respects the 4 GB ceiling. On a
+	// dev box / CI runner the host disk is generally > 8 GB so half >
+	// 4 GB and we expect the ceiling. On a tiny container the floor
+	// branch kicks in instead. Both are valid outcomes — verify only
+	// that the result respects the documented bounds.
+	const (
+		ceiling = uint64(4 * 1024 * 1024 * 1024)
+		floor   = uint64(256 * 1024 * 1024)
+	)
+	dir := t.TempDir()
+	got := defaultLocalStorageCapBytes(dir)
+	if got < floor || got > ceiling {
+		t.Errorf("default cap %d not in [256 MB, 4 GB]", got)
+	}
+}
+
+func TestDefaultLocalStorageCapBytes_FallsBackOnBadDir(t *testing.T) {
+	// A path that doesn't exist falls back to /, which always
+	// statfs's successfully on a real host. So the cap ends up
+	// derived from the host disk (not the fallback ceiling). Just
+	// check that we get a sane value, not the explicit fallback.
+	got := defaultLocalStorageCapBytes("/this/path/never/exists/abc123")
+	const (
+		ceiling = uint64(4 * 1024 * 1024 * 1024)
+		floor   = uint64(256 * 1024 * 1024)
+	)
+	if got < floor || got > ceiling {
+		t.Errorf("walk-up cap %d not in [256 MB, 4 GB]", got)
+	}
+}
