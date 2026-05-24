@@ -11,13 +11,27 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/cargocam/ghostcam/camera/internal/abr"
+	"github.com/cargocam/ghostcam/camera/internal/audio"
+	"github.com/cargocam/ghostcam/camera/internal/battery"
+	"github.com/cargocam/ghostcam/camera/internal/battery/drivers"
+	"github.com/cargocam/ghostcam/camera/internal/bt"
+	"github.com/cargocam/ghostcam/camera/internal/capture"
+	"github.com/cargocam/ghostcam/camera/internal/firmware"
+	"github.com/cargocam/ghostcam/camera/internal/network"
+	"github.com/cargocam/ghostcam/camera/internal/power"
+	"github.com/cargocam/ghostcam/camera/internal/sensors"
+	"github.com/cargocam/ghostcam/camera/internal/state"
+	"github.com/cargocam/ghostcam/camera/internal/telemetry"
+	"github.com/cargocam/ghostcam/camera/internal/upload"
 )
 
 // newConnectedPublisher builds a WHIP publisher and runs the SDP handshake.
 // The 15 s timeout is generous enough for ICE+DTLS over a slow uplink but
 // tight enough that a wedged server doesn't stall capture forever.
-func newConnectedPublisher(ctx context.Context, whipURL, bearer string, withAudio bool) (*Publisher, error) {
-	pub, err := NewPublisher(withAudio)
+func newConnectedPublisher(ctx context.Context, whipURL, bearer string, withAudio bool) (*capture.Publisher, error) {
+	pub, err := capture.NewPublisher(withAudio)
 	if err != nil {
 		return nil, err
 	}
@@ -46,18 +60,27 @@ func main() {
 	// startup (boot in Sleep => never spawn the capture pipeline).
 	// Battery rules layer on top of the manual mode on the first
 	// telemetry tick once we have a battery_pct sample.
-	SetManualPowerMode(cfg.PowerMode)
-	SetPowerMode(cfg.PowerMode)
-	if rules, err := LoadBatteryRules(cfg.DataDir); err != nil {
+	power.SetManualPowerMode(cfg.PowerMode)
+	power.SetPowerMode(cfg.PowerMode)
+	// Battery rules: persisted file wins; missing file → ship the
+	// off-grid solar defaults; explicit `[]` → no rules (operator
+	// cleared via the editor).
+	if rules, err := battery.LoadBatteryRules(cfg.DataDir); err != nil {
 		slog.Warn("failed to load battery rules, continuing with none", "err", err)
+	} else if rules == nil {
+		rules = battery.DefaultBatteryRules()
+		battery.SetBatteryRules(rules)
+		slog.Info("battery rules: applying defaults (no persisted file)", "count", len(rules))
 	} else if len(rules) > 0 {
-		SetBatteryRules(rules)
+		battery.SetBatteryRules(rules)
 		slog.Info("battery rules loaded", "count", len(rules))
+	} else {
+		slog.Info("battery rules: persisted file is empty — operator-cleared, no rules applied")
 	}
 
 	// Seed the segment-dir atomic so ReadTelemetry can sample the
 	// disk-side backlog without a parameter (#115 bug 2).
-	SetSegmentDirForTelemetry(cfg.SegmentDir)
+	upload.SetSegmentDirForTelemetry(cfg.SegmentDir)
 
 	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {
 		slog.Error("failed to create data dir", "err", err)
@@ -80,20 +103,20 @@ func main() {
 	case "":
 		// no HAT configured
 	case "pisugar3":
-		if r, err := NewPiSugar3Reader(ctx, cfg.BatteryI2CBus); err != nil {
+		if r, err := drivers.NewPiSugar3Reader(ctx, cfg.BatteryI2CBus); err != nil {
 			slog.Warn("battery HAT init failed; battery_pct will stay nil",
 				"hat", cfg.BatteryHAT, "bus", cfg.BatteryI2CBus, "err", err)
 		} else {
-			SetBatteryReader(r)
+			battery.SetBatteryReader(r)
 			slog.Info("battery HAT registered", "hat", cfg.BatteryHAT, "bus", cfg.BatteryI2CBus)
 		}
 	default:
 		slog.Warn("unknown GHOSTCAM_BATTERY_HAT; ignoring", "value", cfg.BatteryHAT)
 	}
 
-	deviceSerial := GetDeviceSerial(cfg.DataDir)
+	deviceSerial := sensors.GetDeviceSerial(cfg.DataDir)
 	slog.Info("device identity", "serial", deviceSerial)
-	SetGPSSeed(deviceSerial)
+	sensors.SetGPSSeed(deviceSerial)
 
 	// Always load or create the ed25519 identity keypair. This is
 	// permanent camera identity (like ~/.ssh/id_ed25519) and survives
@@ -117,16 +140,16 @@ func main() {
 
 	if creds != nil {
 		// Already provisioned — block until network is up.
-		WaitForRoute(ctx)
+		network.WaitForRoute(ctx)
 	} else {
 		// Not provisioned — try briefly for existing network, then enter provisioning.
 		// QR scanning may provide WiFi credentials, so don't block forever.
-		if !WaitForRouteTimeout(ctx, 10*time.Second) {
+		if !network.WaitForRouteTimeout(ctx, 10*time.Second) {
 			slog.Info("no network after 10s, proceeding to provisioning (QR may provide WiFi)")
 		}
 
 		slog.Info("no credentials found, entering provisioning mode")
-		creds, err = RunProvisioning(ctx, cfg, deviceSerial, identity)
+		creds, err = bt.RunProvisioning(ctx, cfg, deviceSerial, identity, Provision)
 		if err != nil {
 			slog.Error("provisioning failed", "err", err)
 			os.Exit(1)
@@ -138,7 +161,7 @@ func main() {
 
 		// Ensure network is up after provisioning (QR+WiFi path calls
 		// WaitForRoute internally, but file-based provisioning needs it here).
-		WaitForRoute(ctx)
+		network.WaitForRoute(ctx)
 	}
 
 	if cfg.ServerURL == "" {
@@ -166,7 +189,7 @@ func main() {
 	// boot_ok has already been set, so the rollback semantics work
 	// as intended.
 
-	segments := make(chan NewSegment, 256)
+	segments := make(chan upload.NewSegment, 256)
 
 	whipURL := fmt.Sprintf("%s/api/v1/whip/%s", cfg.ServerURL, creds.DeviceID)
 	whipPath := fmt.Sprintf("/api/v1/whip/%s", creds.DeviceID)
@@ -184,7 +207,7 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		RunFirmwareStabilityWatchdog(ctx, cfg.DataDir)
+		firmware.RunFirmwareStabilityWatchdog(ctx, cfg.DataDir)
 	}()
 
 	// Standby-wake watchdog. In Standby mode, the capture loop opens
@@ -204,15 +227,15 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-tk.C:
-				if CurrentPowerMode() != PowerModeStandby {
+				if power.CurrentPowerMode() != power.PowerModeStandby {
 					continue
 				}
-				if StandbyWakeActive() {
+				if power.StandbyWakeActive() {
 					continue
 				}
-				if currentPublisher.Load() != nil {
+				if state.CurrentPublisher() != nil {
 					slog.Info("standby wake expired; dropping publisher")
-					requestPipelineRestart.Store(true)
+					state.RequestPipelineRestart()
 				}
 			}
 		}
@@ -225,13 +248,13 @@ func main() {
 	// so the same restart machinery the telemetry-poll path uses fires
 	// the rpicam-vid respawn.
 	if cfg.ABREnabled {
-		start := ABRTier{Name: cfg.ABRStartTier}
-		abr := NewABRController(start)
+		start := state.ABRTier{Name: cfg.ABRStartTier}
+		abrCtl := abr.NewABRController(start)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			slog.Info("ABR controller starting", "start_tier", cfg.ABRStartTier)
-			abr.Run(ctx)
+			abrCtl.Run(ctx)
 		}()
 	}
 
@@ -257,7 +280,7 @@ func main() {
 			// telemetry poll) can resume capture without restarting
 			// the daemon. Sleep also stops gpsd queries indirectly —
 			// without capture there's no segment work to gate.
-			for CurrentPowerMode() == PowerModeSleep {
+			for power.CurrentPowerMode() == power.PowerModeSleep {
 				select {
 				case <-ctx.Done():
 					return
@@ -267,7 +290,7 @@ func main() {
 
 			// Wait if server is unreachable — no point capturing segments
 			// that will be evicted before they can upload.
-			for IsServerUnreachable() {
+			for upload.IsServerUnreachable() {
 				slog.Debug("capture paused, server unreachable")
 				select {
 				case <-ctx.Done():
@@ -284,8 +307,8 @@ func main() {
 			// publisher is created — segments still upload to S3 via
 			// ffmpeg, the cellular bandwidth that WHIP would consume
 			// is what's saved.
-			var pub *Publisher
-			wantPublisher := CurrentPowerMode() != PowerModeStandby || StandbyWakeActive()
+			var pub *capture.Publisher
+			wantPublisher := power.CurrentPowerMode() != power.PowerModeStandby || power.StandbyWakeActive()
 			if wantPublisher {
 				// Mint a fresh bearer signature for this WHIP session.
 				// The server enforces a 5-minute timestamp skew, so we
@@ -303,7 +326,11 @@ func main() {
 			}
 			// Publish to telemetry_poll so it can force-close us when the
 			// server reports the WHIP session is missing.
-			currentPublisher.Store(pub)
+			if pub != nil {
+				state.SetCurrentPublisher(pub)
+			} else {
+				state.SetCurrentPublisher(nil)
+			}
 
 			// Clear any stale restart request that fired before we got
 			// here, then watch for new requests. The watcher cancels
@@ -312,7 +339,7 @@ func main() {
 			// a failed initial WHIP connect leaves pub == nil forever
 			// (Publisher.Disconnected can't fire on a publisher that
 			// was never created).
-			requestPipelineRestart.Store(false)
+			state.ResetPipelineRestart()
 			captureCtx, cancelCapture := context.WithCancel(ctx)
 			restartWatcher := time.NewTicker(2 * time.Second)
 			go func() {
@@ -322,7 +349,7 @@ func main() {
 					case <-captureCtx.Done():
 						return
 					case <-restartWatcher.C:
-						if requestPipelineRestart.CompareAndSwap(true, false) {
+						if state.ConsumePipelineRestart() {
 							slog.Warn("pipeline restart requested; cancelling capture")
 							cancelCapture()
 							return
@@ -330,9 +357,9 @@ func main() {
 					}
 				}
 			}()
-			err = StartCapturePipeline(captureCtx, cfg, pub)
+			err = capture.StartCapturePipeline(captureCtx, cfg, pub)
 			cancelCapture()
-			currentPublisher.Store(nil)
+			state.SetCurrentPublisher(nil)
 			if pub != nil {
 				_ = pub.Close()
 			}
@@ -378,13 +405,13 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			RunSegmentWatcher(ctx, cfg.SegmentDir, cfg.DataDir, cfg.LocalStorageCapBytes, segments)
+			upload.RunSegmentWatcher(ctx, cfg.SegmentDir, cfg.DataDir, cfg.LocalStorageCapBytes, segments)
 		}()
 
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			RunUploadLoop(ctx, client, cfg.DataDir, segments)
+			upload.RunUploadLoop(ctx, client, cfg.DataDir, segments)
 		}()
 
 		// fMP4 segments require an init.mp4 (codec moov box) in S3 for the
@@ -395,7 +422,7 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			RunInitUploader(ctx, cfg.SegmentDir, client)
+			upload.RunInitUploader(ctx, cfg.SegmentDir, client)
 		}()
 	} else {
 		slog.Info("recording disabled (recording_mode=never) — skipping segment watcher and upload loop")
@@ -407,19 +434,19 @@ func main() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		StartGpsdReader(ctx)
+		sensors.StartGpsdReader(ctx)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		RunTelemetryPoll(ctx, client, cfg.DataDir)
+		telemetry.RunTelemetryPoll(ctx, client, cfg.DataDir)
 	}()
 
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		RunAudioSilenceSampler(ctx, cfg.SegmentDir, cfg.NoAudio)
+		audio.RunAudioSilenceSampler(ctx, cfg.SegmentDir, cfg.NoAudio)
 	}()
 
 	<-ctx.Done()

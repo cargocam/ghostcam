@@ -44,6 +44,11 @@ type TelemetryPollRequest struct {
 	Telemetry     TelemetryDatagram `json:"telemetry"`
 	FwVersion     string            `json:"fw_version,omitempty"`
 	RollbackEvent string            `json:"rollback_event,omitempty"` // raw JSON from rollback_event.json
+	// DiagBundles drains any diag_bundle command results the camera
+	// captured since the previous poll. Server persists each by DiagID
+	// and clears the camera's pending slice on a 2xx response. Empty in
+	// the common case (no diag_bundle command was issued).
+	DiagBundles []DiagBundle `json:"diag_bundles,omitempty"`
 }
 
 // TelemetryPollResponse contains any pending commands for the camera.
@@ -75,6 +80,13 @@ type TelemetryPollResponse struct {
 //   - set_schedule        → Schedule field       (JSON-encoded windows)
 //   - set_battery_rules   → BatteryRules field   (JSON-encoded thresholds)
 //   - upload_segments     → SegmentIDs field     (lazy-mode on-demand fetch)
+//
+// Diagnostic / rescue commands (see ghostcam#119):
+//   - diag_bundle              → DiagID field; camera returns a DiagBundle
+//                                via TelemetryPollRequest.DiagBundles
+//   - restart_service          → no payload; systemctl restart ghostcam-camera
+//   - restart_modem_manager    → no payload; systemctl restart ModemManager
+//   - restart_network_manager  → no payload; systemctl restart NetworkManager
 type CameraCommand struct {
 	Type       string `json:"type"`
 	Mode       string `json:"mode,omitempty"`       // set_recording_mode
@@ -88,6 +100,38 @@ type CameraCommand struct {
 	Schedule     string   `json:"schedule,omitempty"`      // set_schedule: JSON list of {window, power_mode, upload_mode}
 	BatteryRules string   `json:"battery_rules,omitempty"` // set_battery_rules: JSON list of {threshold_pct, power_mode, upload_mode}
 	SegmentIDs   []string `json:"segment_ids,omitempty"`   // upload_segments: priority-fetch these segments now
+
+	// Diagnostic correlation id. Only set for diag_bundle; copied
+	// verbatim into the resulting DiagBundle so the server can match
+	// asynchronous responses to its issuance audit row.
+	DiagID string `json:"diag_id,omitempty"`
+}
+
+// DiagBundle is the read-only inspection payload the camera returns in
+// response to a diag_bundle command. Every field is captured by running
+// a fixed argv with no operator-supplied input; missing subcommands or
+// non-zero exits leave the field empty rather than failing the whole
+// bundle. Each field is independently truncated to ~32 KB so journalctl
+// / dmesg can't blow up the total response.
+//
+// JSON kept narrow and consistent so the server can store the body as
+// JSONB and add new fields later without a migration.
+type DiagBundle struct {
+	DiagID        string `json:"diag_id"`
+	CapturedAt    int64  `json:"captured_at"` // epoch ms
+	ModemList     string `json:"modem_list,omitempty"`     // mmcli -L
+	ModemDetail   string `json:"modem_detail,omitempty"`   // mmcli -m 0 (omitted if no modem)
+	NMConnections string `json:"nm_connections,omitempty"` // nmcli -t -f NAME,UUID,TYPE,DEVICE con show
+	NMDevices     string `json:"nm_devices,omitempty"`     // nmcli -t -f DEVICE,TYPE,STATE,CONNECTION dev status
+	IPAddr        string `json:"ip_addr,omitempty"`        // ip -4 -o addr
+	IPRoute       string `json:"ip_route,omitempty"`       // ip route
+	ServiceStatus string `json:"service_status,omitempty"` // systemctl --no-pager status ghostcam-camera
+	ServiceLogs   string `json:"service_logs,omitempty"`   // journalctl --no-pager -u ghostcam-camera --since=1h
+	Dmesg         string `json:"dmesg,omitempty"`          // journalctl --no-pager -k --since=1h
+	Disk          string `json:"disk,omitempty"`           // df -h
+	Mem           string `json:"mem,omitempty"`            // free -m
+	Uptime        string `json:"uptime,omitempty"`         // uptime
+	PkgVersion    string `json:"pkg_version,omitempty"`    // dpkg-query -W ghostcam-camera
 }
 
 // PresignRequest requests presigned PUT URLs and confirms previously
