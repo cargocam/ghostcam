@@ -61,7 +61,7 @@ func EnsureWifi(ctx context.Context, ssid string, psk *string) error {
 
 // WaitForRoute blocks until a default route exists in /proc/net/route.
 func WaitForRoute(ctx context.Context) {
-	if readDefaultInterface() != "" {
+	if DefaultInterface() != "" {
 		return
 	}
 	slog.Info("no default route, waiting for network...")
@@ -75,7 +75,7 @@ func WaitForRoute(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			if readDefaultInterface() != "" {
+			if DefaultInterface() != "" {
 				slog.Info("default route appeared", "elapsed_s", time.Since(start).Seconds())
 				return
 			}
@@ -86,7 +86,7 @@ func WaitForRoute(ctx context.Context) {
 // WaitForRouteTimeout waits up to timeout for a default route to appear.
 // Returns true if a route was found, false if the timeout or context expired.
 func WaitForRouteTimeout(ctx context.Context, timeout time.Duration) bool {
-	if readDefaultInterface() != "" {
+	if DefaultInterface() != "" {
 		return true
 	}
 
@@ -101,15 +101,15 @@ func WaitForRouteTimeout(ctx context.Context, timeout time.Duration) bool {
 		case <-ctx.Done():
 			return false
 		case <-ticker.C:
-			if readDefaultInterface() != "" {
+			if DefaultInterface() != "" {
 				return true
 			}
 		}
 	}
 }
 
-// readDefaultInterface reads the default route interface from /proc/net/route.
-func readDefaultInterface() string {
+// DefaultInterface reads the default route interface from /proc/net/route.
+func DefaultInterface() string {
 	data, err := os.ReadFile("/proc/net/route")
 	if err != nil {
 		return ""

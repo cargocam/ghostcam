@@ -89,6 +89,30 @@ type TelemetryDatagram struct {
 	// "5G_NSA", "WCDMA"). Pairs with the existing Sig dBm so the UI
 	// can show "−95 dBm LTE" vs "−95 dBm 3G". Absent when wired.
 	ModemRAT *string `json:"modem_rat,omitempty"`
+	// ModemSigPct: cellular signal quality 0-100 reported by
+	// ModemManager (mmcli "signal quality" line). Distinct from the
+	// wifi-side Sig dBm: mmcli exposes a normalized percentage by
+	// default, with raw RSRP/RSRQ only available after the operator
+	// has enabled `--signal-setup`. The percentage is what soak
+	// validation in #120 needs to correlate ABR / WHIP behavior with
+	// link conditions, so it's the first thing we capture; raw dBm
+	// can land as a follow-up. Absent on wired / wifi-only cameras.
+	ModemSigPct *uint8 `json:"modem_sig_pct,omitempty"`
+	// UplinkIface is the network interface carrying the default route
+	// at telemetry-poll time (e.g. "wwan0", "wlan0", "eth0"). Lets the
+	// server see which uplink the camera is actually using right now
+	// — important during cellular ↔ wifi failover and during soak
+	// runs where the operator wants to confirm cellular is the path.
+	UplinkIface *string `json:"uplink_iface,omitempty"`
+	// UplinkRxBytes / UplinkTxBytes are the kernel byte counters for
+	// UplinkIface (/sys/class/net/<iface>/statistics/{rx,tx}_bytes),
+	// monotonic since boot. The server diffs consecutive samples to
+	// produce per-interval bandwidth — needed to measure the
+	// "standby mode saves ~50% cellular bytes" claim in CLAUDE.md
+	// without an SSH session. uint64 because cellular Pi's can run
+	// for weeks and a 32-bit counter would wrap at 4 GB.
+	UplinkRxBytes *uint64 `json:"uplink_rx_bytes,omitempty"`
+	UplinkTxBytes *uint64 `json:"uplink_tx_bytes,omitempty"`
 	// NetworkRecoveryAttempts: cumulative count of times the daemon
 	// detected an extended telemetry-POST silence (consecutive failures
 	// past a threshold) and forced a network re-association via nmcli
@@ -130,3 +154,4 @@ type TelemetryDatagram struct {
 
 // Ptr helpers for building TelemetryDatagram literals.
 func PtrUint32(v uint32) *uint32 { return &v }
+func PtrUint64(v uint64) *uint64 { return &v }
