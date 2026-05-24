@@ -396,14 +396,20 @@ cmd_wifi_off() {
     echo "SSH will disconnect -- reconnect after ~$((duration + 10))s."
     echo ""
 
+    # No sudo here — `nmcli connection up/down` is authorized via the
+    # polkit rule shipped in pi/debian/polkit/49-ghostcam-nm.rules
+    # (any netdev member, which ghostcam is, may control NetworkManager).
+    # sudo would re-introduce the cargocam/ghostcam-server#28 silent
+    # no-op: this script body is nohup'd with no TTY, and dev-image
+    # sudo requires a password.
     pi_ssh "
 cat > /tmp/wifi-toggle-run.sh << 'SCRIPT'
 #!/bin/bash
 echo \"[\$(date -Iseconds)] Dropping WiFi (\$2) for \${1}s\" > \"\$3\"
-sudo nmcli connection down \"\$2\" >> \"\$3\" 2>&1
+nmcli connection down \"\$2\" >> \"\$3\" 2>&1
 sleep \"\$1\"
 echo \"[\$(date -Iseconds)] Restoring WiFi (\$2)\" >> \"\$3\"
-sudo nmcli connection up \"\$2\" >> \"\$3\" 2>&1
+nmcli connection up \"\$2\" >> \"\$3\" 2>&1
 echo \"[\$(date -Iseconds)] Done\" >> \"\$3\"
 SCRIPT
 chmod +x /tmp/wifi-toggle-run.sh
