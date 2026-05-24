@@ -107,21 +107,21 @@ func ReadTelemetry(ctx context.Context) common.TelemetryDatagram {
 	}
 
 	// Cellular link sample (#120 soak validation). ReadModem shells
-	// out to mmcli with a 3 s timeout; returns a zero ModemSample
-	// on any failure (no modem, mmcli missing, command timeout).
-	if m := ReadModem(ctx); m.RAT != "" || m.SigPct > 0 {
-		if m.RAT != "" {
-			rat := m.RAT
-			d.ModemRAT = &rat
-		}
-		if m.SigPct > 0 {
-			pct := m.SigPct
-			d.ModemSigPct = &pct
-		}
+	// out to mmcli with a 3 s timeout; returns a zero ModemSample on
+	// any failure (no modem, mmcli missing, command timeout). RAT
+	// gates the whole block — a registered modem always emits an
+	// access-tech line. Once we're in, SigPct is recorded as-is
+	// (including a genuine 0%, which is itself a soak-validation
+	// signal — a link that's flatlined under load).
+	if m := ReadModem(ctx); m.RAT != "" {
+		rat := m.RAT
+		d.ModemRAT = &rat
+		pct := m.SigPct
+		d.ModemSigPct = &pct
 	}
 
 	// Uplink interface + monotonic byte counters. Same struct works
-	// for wifi, cellular, or wired — readDefaultInterface picks
+	// for wifi, cellular, or wired — network.DefaultInterface picks
 	// whichever is currently carrying the default route.
 	if u := ReadUplink(); u.Iface != "" {
 		iface := u.Iface
