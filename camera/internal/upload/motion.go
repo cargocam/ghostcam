@@ -2,11 +2,28 @@ package upload
 
 import (
 	"bufio"
+	"context"
 	"log/slog"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// ffprobeMaxRuntime caps how long ffprobe can spend parsing a single
+// segment. Closes cargocam/ghostcam#134: the prior code spawned
+// `ffprobe ... <path>` with no deadline and read its stdout via a
+// bufio.Scanner that blocked forever when ffprobe wedged on a
+// partial / malformed .m4s. SIGUSR1 stack capture pinned the hang
+// inside ffprobe's stdout-pipe read; every other goroutine eventually
+// quiesced (publisher waits for upload, upload waits for segment
+// watcher, segment watcher is the wedged one), producing the
+// "active but silent" daemon symptom.
+//
+// 10 s is generously above ffprobe's typical 100-500 ms runtime on a
+// healthy 3-6 MB segment while still short enough that the segment
+// watcher recovers within one upload cycle when something is wrong.
+const ffprobeMaxRuntime = 10 * time.Second
 
 // motionDetector compares average P-frame sizes across segments to detect motion.
 // H.264 P-frames encode prediction residuals — when visual content changes (motion),
@@ -70,7 +87,9 @@ func (md *motionDetector) avgPFrameSize(path string) float64 {
 		return 0 // known unavailable, skip
 	}
 
-	cmd := exec.Command("ffprobe",
+	ctx, cancel := context.WithTimeout(context.Background(), ffprobeMaxRuntime)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "ffprobe",
 		"-v", "quiet",
 		"-select_streams", "v",
 		"-show_entries", "frame=pict_type,pkt_size",
@@ -106,7 +125,15 @@ func (md *motionDetector) avgPFrameSize(path string) float64 {
 		totalSize += size
 		count++
 	}
-	cmd.Wait()
+	// On ffprobeMaxRuntime expiry CommandContext sends SIGKILL; Wait()
+	// returns the kill signal as an error which we just log and ignore.
+	// The point of the deadline is to unblock this function, not to
+	// rescue a partial measurement — we fall through to count==0.
+	if err := cmd.Wait(); err != nil && ctx.Err() == context.DeadlineExceeded {
+		slog.Warn("ffprobe deadline exceeded, skipping motion measurement",
+			"path", path, "deadline", ffprobeMaxRuntime)
+		return 0
+	}
 
 	if count == 0 {
 		return 0
