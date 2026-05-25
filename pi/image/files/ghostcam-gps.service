@@ -7,6 +7,15 @@ Requires=ModemManager.service
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/local/bin/ghostcam-enable-gps.sh
+# Belt-and-suspenders: if the script gives up despite its internal
+# 60s+30s waits, let systemd retry the whole unit a few more times
+# before falling back to a manual rescue. ModemManager re-runs can
+# also nudge a stuck modem; restarting this unit triggers nothing
+# else, so it's safe.
+Restart=on-failure
+RestartSec=15
+StartLimitBurst=4
+StartLimitIntervalSec=300
 
 [Install]
 WantedBy=multi-user.target
