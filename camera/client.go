@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/cargocam/ghostcam/camera/internal/diag"
+	camnet "github.com/cargocam/ghostcam/camera/internal/network"
 	"github.com/cargocam/ghostcam/camera/internal/sensors"
 	"github.com/cargocam/ghostcam/camera/internal/upload"
 	"github.com/cargocam/ghostcam/common"
@@ -61,12 +62,21 @@ const (
 )
 
 func NewClient(serverURL, deviceID string, identity *Identity) *Client {
+	// Bypass systemd-resolved's DNS path (cargocam/ghostcam#132). On
+	// cellular APNs systemd-resolved gets stuck in a degraded-feature
+	// cascade and produces ten-minute DNS outages even when the
+	// underlying network is healthy. CellularAwareResolver dials
+	// Cloudflare + Google directly over plain UDP, falling through to
+	// the next provider on failure, with a 3 s per-dial budget. Survives
+	// one provider going dark per cellular weather event.
+	dialer := &net.Dialer{
+		Timeout:   10 * time.Second,
+		KeepAlive: 15 * time.Second,
+		Resolver:  camnet.CellularAwareResolver(),
+	}
 	transport := &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: (&net.Dialer{
-			Timeout:   10 * time.Second,
-			KeepAlive: 15 * time.Second,
-		}).DialContext,
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           dialer.DialContext,
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          10,
 		IdleConnTimeout:       30 * time.Second,
