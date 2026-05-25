@@ -94,6 +94,19 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// SIGUSR1 → dump goroutine stacks to a file in DataDir. Workaround
+	// for cargocam/ghostcam#134: the daemon goes quiet on a hidden
+	// deadlock (motion-mode + capture-pipeline restart), but
+	// `systemctl is-active` still shows running, and SIGQUIT crashes
+	// the process — losing the stacks. SIGUSR1 lets the operator
+	// snapshot the runtime state in-situ without killing the daemon:
+	//   kill -USR1 $(pidof ghostcam-camera)
+	//   cat /var/ghostcam/goroutines-<pid>-<ts>.txt
+	// Cheap (~few ms even with hundreds of goroutines), doesn't
+	// allocate against the deadlocked goroutines themselves —
+	// runtime/pprof reads g0 stacks directly.
+	go runStackDumper(cfg.DataDir)
+
 	// Battery HAT registration (#73). Empty BatteryHAT leaves the no-op
 	// default reader in place, so telemetry's battery_pct stays nil and
 	// battery rules never fire. Driver init failure (HAT not actually
