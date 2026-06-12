@@ -129,6 +129,25 @@ func runTestPipeline(ctx context.Context, cfg *state.CameraConfig, pattern, kfIn
 	videoInput := fmt.Sprintf("testsrc2=size=%s:rate=%d,drawtext=fontfile=/usr/share/fonts/dejavu/DejaVuSansMono.ttf:text='%%{localtime\\:%%T}':fontsize=48:fontcolor=white:x=10:y=10", size, cfg.VideoFPS)
 	audioInput := "sine=frequency=440:sample_rate=48000"
 
+	// Rate-cap the synthetic encoder. The real pipeline gets its bitrate
+	// ceiling from rpicam-vid; testsrc2 + libx264 would otherwise run
+	// unbounded VBV at the quality `ultrafast` chooses, which on a static
+	// color-bar pattern is cheap CPU but produces far more bytes than a
+	// real scene at the same resolution — inflating S3/MinIO writes,
+	// upload bandwidth, and the server's in-memory WHIP buffers. Capping
+	// to cfg.VideoBitrate keeps the synthetic fleet's footprint close to
+	// what real cameras produce and lets the dummy-cameras compose profile
+	// dial it down further via GHOSTCAM_VIDEO_BITRATE.
+	bitrate := cfg.VideoBitrate
+	if bitrate == 0 {
+		bitrate = 2_000_000
+	}
+	rateArgs := []string{
+		"-b:v", fmt.Sprintf("%d", bitrate),
+		"-maxrate", fmt.Sprintf("%d", bitrate),
+		"-bufsize", fmt.Sprintf("%d", bitrate*2),
+	}
+
 	// Create pipe for Opus audio output (fd 3 inside ffmpeg).
 	audioPipeR, audioPipeW, err := os.Pipe()
 	if err != nil {
@@ -159,6 +178,9 @@ func runTestPipeline(ctx context.Context, cfg *state.CameraConfig, pattern, kfIn
 			"-c:v", "libx264",
 			"-preset", "ultrafast",
 			"-x264-params", kfInterval,
+		)
+		args = append(args, rateArgs...)
+		args = append(args,
 			"-c:a", "libopus", "-b:a", "32k",
 			"-application", "voip", "-vbr", "off",
 			"-frame_duration", "20",
@@ -178,6 +200,9 @@ func runTestPipeline(ctx context.Context, cfg *state.CameraConfig, pattern, kfIn
 		"-c:v", "libx264",
 		"-preset", "ultrafast",
 		"-x264-params", kfInterval,
+	)
+	args = append(args, rateArgs...)
+	args = append(args,
 		"-f", "h264",
 		"pipe:1",
 		// Output 2: OGG/Opus to fd 3 for WebRTC audio

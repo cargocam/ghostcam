@@ -1,10 +1,16 @@
 #!/bin/sh
-# Manager entrypoint for the `dummy-cameras` compose profile. Runs two
-# synthetic Go camera processes side-by-side in one container, each
-# bound to a different account:
+# Manager entrypoint for the `dummy-cameras` compose profile. Runs N
+# synthetic Go camera processes side-by-side in one container. The first
+# camera is bound to the demo user; any additional cameras are bound to
+# admin:
 #
-#   admin@ghostcam.dev   /var/dummy/admin   (Starter tier — 3-cam allowance)
-#   user@ghostcam.dev    /var/dummy/user    (Free tier — 1-cam trial)
+#   user@ghostcam.dev    /var/dummy/user      (Free tier — 1-cam trial)
+#   admin@ghostcam.dev   /var/dummy/admin[-i] (Starter tier — multi-cam)
+#
+# Count is controlled by DUMMY_CAMERA_COUNT (default 2). Anything above 1
+# adds admin-owned cameras, so admin must be on a tier whose camera limit
+# covers (DUMMY_CAMERA_COUNT - 1) — run scripts/seed-dev.sh to promote
+# admin to Starter, otherwise the extra enrollments 402 at the tier cap.
 #
 # Both processes are the real `ghostcam-camera` binary built with
 # -tags synthetic, so every code path the production camera exercises
@@ -24,6 +30,9 @@ SERVER="${GHOSTCAM_SERVER_URL:-http://server:3000}"
 ADMIN_EMAIL="${ADMIN_EMAIL:-admin@ghostcam.dev}"
 ADMIN_PASSWORD="${ADMIN_PASSWORD:-dev-password}"
 DEMO_USER_EMAIL="${DEMO_USER_EMAIL:-user@ghostcam.dev}"
+# How many synthetic cameras to run. 1 → user only; 2 → user + admin (the
+# historical default); N → user + (N-1) admin cameras.
+DUMMY_CAMERA_COUNT="${DUMMY_CAMERA_COUNT:-2}"
 
 ADMIN_DATA=/var/dummy/admin
 USER_DATA=/var/dummy/user
@@ -98,47 +107,75 @@ fi
 
 USER_PASSWORD=$(cat "$USER_PASSWORD_FILE")
 
-# --- 3. Fork two ghostcam-camera processes side-by-side. --------------------
+# --- 3. Fork N ghostcam-camera processes side-by-side. ----------------------
 #
 # Each invocation reuses the existing camera-entrypoint.sh, which is
-# already exercised by the `test` profile's three-camera fleet. The only
-# difference here is that we run TWO entrypoints in one container, each
-# pointing at its own DATA_DIR and its own owner.
+# already exercised by the `test` profile's camera fleet. We run one
+# entrypoint per camera in this container, each with its own DATA_DIR
+# (distinct identity_key → distinct device ID) and its own owner.
 #
 # The entrypoint's env-var names (GHOSTCAM_ADMIN_EMAIL/PASSWORD) are
 # historical — they're really "login creds for the user who'll own this
-# camera," which is admin for the first instance and the demo user for
-# the second. Renaming them would touch the test profile too; leaving
-# as-is for compatibility.
+# camera." Video tuning (GHOSTCAM_VIDEO_PROFILE / _FPS / _BITRATE) is
+# inherited from this container's environment, so the compose profile can
+# dial the synthetic fleet's footprint up or down without editing this
+# script.
+#
+# Ownership: by default the LAST camera goes to the demo user (so the
+# free-tier path stays exercised) and the rest go to admin — so logging
+# in as admin shows an (N-1)-camera fleet in one dashboard. Set
+# DUMMY_USER_CAMERAS=0 to put every camera under admin, or bump it to
+# hand more cameras to the (Free, 1-cam-limited) demo user. Admin must be
+# on a tier whose limit covers its share — run scripts/seed-dev.sh.
+DUMMY_USER_CAMERAS="${DUMMY_USER_CAMERAS:-1}"
 
-echo "dummy-cameras: starting admin's camera at $ADMIN_DATA"
-GHOSTCAM_DATA_DIR=$ADMIN_DATA \
-GHOSTCAM_SERVER_URL=$SERVER \
-GHOSTCAM_ADMIN_EMAIL="$ADMIN_EMAIL" \
-GHOSTCAM_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
-GHOSTCAM_RECORDING_MODE=motion \
-    /usr/local/bin/camera-entrypoint.sh --test-source &
-ADMIN_PID=$!
+PIDS=""
 
-echo "dummy-cameras: starting user's camera at $USER_DATA"
-GHOSTCAM_DATA_DIR=$USER_DATA \
-GHOSTCAM_SERVER_URL=$SERVER \
-GHOSTCAM_ADMIN_EMAIL="$DEMO_USER_EMAIL" \
-GHOSTCAM_ADMIN_PASSWORD="$USER_PASSWORD" \
-GHOSTCAM_RECORDING_MODE=motion \
-    /usr/local/bin/camera-entrypoint.sh --test-source &
-USER_PID=$!
+# start_camera <data_dir> <owner_email> <owner_password> <label>
+start_camera() {
+    echo "dummy-cameras: starting $4 camera at $1"
+    mkdir -p "$1"
+    GHOSTCAM_DATA_DIR="$1" \
+    GHOSTCAM_SERVER_URL=$SERVER \
+    GHOSTCAM_ADMIN_EMAIL="$2" \
+    GHOSTCAM_ADMIN_PASSWORD="$3" \
+    GHOSTCAM_RECORDING_MODE=motion \
+        /usr/local/bin/camera-entrypoint.sh --test-source &
+    PIDS="$PIDS $!"
+}
 
-echo "dummy-cameras: admin=$ADMIN_PID user=$USER_PID — running"
+# admin_count = total minus the user's share (never negative).
+admin_count=$((DUMMY_CAMERA_COUNT - DUMMY_USER_CAMERAS))
+[ "$admin_count" -lt 0 ] && admin_count=0
+
+# Admin cameras. First keeps the bare /var/dummy/admin dir for device-ID
+# continuity across restarts; subsequent ones get a numbered suffix.
+i=1
+while [ "$i" -le "$admin_count" ]; do
+    if [ "$i" -eq 1 ]; then dir="$ADMIN_DATA"; else dir="$ADMIN_DATA-$i"; fi
+    start_camera "$dir" "$ADMIN_EMAIL" "$ADMIN_PASSWORD" "admin's #$i"
+    i=$((i + 1))
+done
+
+# Demo user cameras (free-tier path). First keeps the bare /var/dummy/user
+# dir; subsequent ones (only if the user tier allowed >1) get a suffix.
+j=1
+while [ "$j" -le "$DUMMY_USER_CAMERAS" ] && [ "$j" -le "$DUMMY_CAMERA_COUNT" ]; do
+    if [ "$j" -eq 1 ]; then dir="$USER_DATA"; else dir="$USER_DATA-$j"; fi
+    start_camera "$dir" "$DEMO_USER_EMAIL" "$USER_PASSWORD" "user's #$j"
+    j=$((j + 1))
+done
+
+echo "dummy-cameras: running ${DUMMY_CAMERA_COUNT} camera(s) — pids$PIDS"
 
 # Forward signals to children so `docker stop` propagates cleanly.
-trap 'echo "dummy-cameras: shutting down"; kill -TERM $ADMIN_PID $USER_PID 2>/dev/null || true; wait' INT TERM
+trap 'echo "dummy-cameras: shutting down"; kill -TERM $PIDS 2>/dev/null || true; wait' INT TERM
 
-# If either process exits, take the other one down and exit with its
-# status — docker's restart policy will bring us back up. Keeping the
-# container alive when one camera has died would mask failures.
+# If any process exits, take the rest down and exit with its status —
+# docker's restart policy brings us back up. Keeping the container alive
+# when one camera has died would mask failures.
 wait -n
 EXIT=$?
-kill -TERM $ADMIN_PID $USER_PID 2>/dev/null || true
+kill -TERM $PIDS 2>/dev/null || true
 wait 2>/dev/null || true
 exit "$EXIT"
