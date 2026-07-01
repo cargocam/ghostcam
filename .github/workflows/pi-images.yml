@@ -36,7 +36,17 @@ jobs:
             --dir pi/image/pkgs
 
       - name: Clone rpi-image-gen
-        run: git clone --depth 1 https://github.com/raspberrypi/rpi-image-gen.git /tmp/rpi-image-gen
+        # Pinned to a known-good commit. Upstream HEAD drifted on
+        # 2026-06-24 (4d9bd2fc "sys: implement apt package cache") and
+        # broke bin/ns with `[[: not found` (bash syntax executed under
+        # dash), failing the build at generate_filesystem. 90ebcfa is the
+        # last commit before the last successful image build (v0.1.0-alpha,
+        # 2026-05-14). Re-evaluate the pin when bumping the base image.
+        env:
+          RPI_IMAGE_GEN_REF: 90ebcfa5313a
+        run: |
+          git clone https://github.com/raspberrypi/rpi-image-gen.git /tmp/rpi-image-gen
+          git -C /tmp/rpi-image-gen checkout "$RPI_IMAGE_GEN_REF"
 
       - name: Install rpi-image-gen dependencies
         run: |
