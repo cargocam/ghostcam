@@ -41,6 +41,7 @@ func LoadConfig() (*CameraConfig, error) {
 		configPath = flag.String("config", "", "path to TOML config file")
 		serverURL      = flag.String("server-url", "", "server HTTPS URL")
 		provisionToken = flag.String("provision-token", "", "one-time token for headless provisioning")
+		provisionHTTPAddr = flag.String("provision-http-addr", "", "bind address (host:port) for the local offline provisioning HTTP server (USB gadget / SoftAP); empty disables it")
 		testSource     = flag.Bool("test-source", false, "use ffmpeg test source instead of real capture")
 		segmentDir = flag.String("segment-dir", "", "directory for segment ring buffer")
 		dataDir    = flag.String("data-dir", "", "data directory")
@@ -81,6 +82,16 @@ func LoadConfig() (*CameraConfig, error) {
 	resolvedProvisionToken := coalesceStr(
 		*provisionToken,
 		envOpt("GHOSTCAM_PROVISION_TOKEN"),
+		"",
+	)
+
+	// Local provisioning HTTP server bind addr: CLI -> env -> disabled.
+	// The gadget/SoftAP systemd layer sets GHOSTCAM_PROVISION_HTTP_ADDR
+	// (e.g. 10.55.0.1:80) once its link interface is up; unset elsewhere
+	// so the server never binds on a device without that link.
+	resolvedProvisionHTTPAddr := coalesceStr(
+		*provisionHTTPAddr,
+		envOpt("GHOSTCAM_PROVISION_HTTP_ADDR"),
 		"",
 	)
 
@@ -226,6 +237,7 @@ func LoadConfig() (*CameraConfig, error) {
 	cfg := &CameraConfig{
 		ServerURL:             resolvedServerURL,
 		ProvisionToken:        resolvedProvisionToken,
+		ProvisionHTTPAddr:     resolvedProvisionHTTPAddr,
 		TestSource:            resolvedTestSource,
 		SegmentDir:            resolvedSegmentDir,
 		DataDir:               resolvedDataDir,

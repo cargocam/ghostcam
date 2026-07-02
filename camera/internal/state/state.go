@@ -29,7 +29,14 @@ const SegmentDurationSecs = 6
 type CameraConfig struct {
 	ServerURL      string
 	ProvisionToken string // one-time token for headless provisioning
-	TestSource     bool
+	// ProvisionHTTPAddr is the bind address (host:port) for the local
+	// offline provisioning HTTP server that races alongside QR/BT during
+	// onboarding (the shared downstream for the USB-gadget + SoftAP
+	// channels). Empty disables it — kept empty by default so the server
+	// stays inert until the gadget/AP link layer, which sets this via env
+	// (e.g. 10.55.0.1:80), actually exists on the device.
+	ProvisionHTTPAddr string
+	TestSource        bool
 	SegmentDir     string
 	DataDir        string
 	NoGPS          bool
