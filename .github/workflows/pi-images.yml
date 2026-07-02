@@ -1,5 +1,19 @@
 name: Build Pi Images
 on:
+  # Fires automatically the moment release.yml publishes a new vX.Y.Z.
+  # Before this trigger existed the workflow was dispatch-only, so every
+  # release shipped a .deb but NO flashable image — the server's Get
+  # Started card kept serving the last image anyone had hand-cranked
+  # (prod was stuck on a stale, non-booting v0.7.8 while the daemon was
+  # already v0.7.9). Building on publish keeps the served image in lockstep
+  # with the release.
+  #
+  # Cost note: this runs a ~15-min qemu image build on every published
+  # release (i.e. every push to main). If that gets expensive, gate it to
+  # minor/major tags — but correctness (prod always has a current image)
+  # beats saving runner minutes, so it builds on every release for now.
+  release:
+    types: [published]
   workflow_dispatch:
     inputs:
       version:
@@ -19,11 +33,34 @@ jobs:
         # are scaffolding; add them back once validated on hardware.
         device: [zero2w]
     steps:
+      # Resolve the target tag from whichever trigger fired: the release
+      # event carries it in release.tag_name, a manual dispatch in the
+      # `version` input. Everything downstream reads $VERSION.
+      - name: Resolve version
+        id: ver
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          VERSION="${RELEASE_TAG:-$INPUT_TAG}"
+          if [ -z "$VERSION" ]; then
+            echo "no version: neither release.tag_name nor inputs.version set" >&2
+            exit 1
+          fi
+          echo "Building images for $VERSION"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # Check out the source at the release tag so pi/image config matches
+      # the release being built, not whatever HEAD happens to be.
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.ver.outputs.version }}
 
       - name: Download .deb from release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           mkdir -p pi/image/pkgs
           # Release workflow produces ghostcam-camera_<ver>_arm64.deb
@@ -31,7 +68,7 @@ jobs:
           # Python-wheel-wrapper _all.deb (Architecture: all → installer
           # treats it as suitable for arm64) so this workflow keeps
           # working for tags from either era.
-          gh release download "${{ github.event.inputs.version }}" \
+          gh release download "$VERSION" \
             --pattern "ghostcam-camera_*.deb" \
             --dir pi/image/pkgs
 
@@ -66,6 +103,7 @@ jobs:
       - name: Compress and upload image to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           # rpi-image-gen writes the assembled image to a deterministic
           # path. `find -name '*.img' | head -1` non-deterministically
@@ -81,9 +119,28 @@ jobs:
           # (still under 450 MB), which costs the user nothing in download
           # time but saves us minutes per iteration.
           sudo xz -6 -T0 "$IMG"
-          IMG_NAME="ghostcam-${{ matrix.device }}-${{ github.event.inputs.version }}.img.xz"
+          IMG_NAME="ghostcam-${{ matrix.device }}-${VERSION}.img.xz"
           sudo cp "${IMG}.xz" "$IMG_NAME"
           # --clobber so re-running the workflow against an existing
           # release replaces the prior `.img.xz` instead of failing.
           # Matches release.yml's behaviour for the .deb/binary.
-          gh release upload "${{ github.event.inputs.version }}" "$IMG_NAME" --clobber
+          gh release upload "$VERSION" "$IMG_NAME" --clobber
+
+      - name: Nudge the server to ingest the new image
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          # The server's firmware webhook (server/firmware.go) ingests
+          # images on release published/released/edited. release.published
+          # already fired when release.yml cut the tag — but the image
+          # didn't exist yet, so the server found nothing to ingest and
+          # fell back to the last image it had. Re-emit a release event by
+          # editing the release; the webhook re-scans assets and picks up
+          # the now-present .img.xz. `gh release edit` re-setting the same
+          # notes is enough to fire release.edited. (GITHUB_TOKEN events
+          # don't spawn new workflow runs, so this can't loop back into
+          # this workflow, and this workflow only triggers on `published`
+          # regardless.)
+          NOTES="$(gh release view "$VERSION" --json body --jq .body)"
+          gh release edit "$VERSION" --notes "$NOTES"
