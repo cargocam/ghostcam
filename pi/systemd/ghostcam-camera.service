@@ -8,6 +8,11 @@ Type=simple
 User=ghostcam
 Group=ghostcam
 SupplementaryGroups=video dialout audio
+# Let the non-root daemon bind the local provisioning server on the gadget
+# link's privileged port (10.55.0.1:80, GHOSTCAM_PROVISION_HTTP_ADDR, #141).
+# Unused/harmless when that addr is unset (e.g. PiOS one-liner installs),
+# where the server never binds.
+AmbientCapabilities=CAP_NET_BIND_SERVICE
 EnvironmentFile=-/etc/ghostcam/env
 EnvironmentFile=-/etc/ghostcam/env.d/00-server.conf
 Environment=MALLOC_ARENA_MAX=2

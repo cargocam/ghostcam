@@ -15,6 +15,10 @@ mmdebstrap:
     - jq
     - curl
     - htop
+    # USB gadget onboarding link (#144): dnsmasq serves DHCP/DNS on usb0,
+    # dosfstools (mkfs.vfat) builds the mass-storage redirect volume.
+    - dnsmasq
+    - dosfstools
 
   customize-hooks:
     # Install ghostcam-camera .deb. apt resolves Depends (ffmpeg,
@@ -59,8 +63,30 @@ mmdebstrap:
     - chmod 755 "$1/usr/local/bin/ghostcam-diag"
     - cp files/ghostcam-diag.service "$1/etc/systemd/system/"
 
-    # NetworkManager + udev for SIM7600 cellular modem.
+    # USB composite gadget for local-first onboarding (#144). Brings up a
+    # driver-free ECM+RNDIS+mass-storage+ACM gadget and pins usb0 to
+    # 10.55.0.1 so a plugged-in laptop/phone lands on the camera's local
+    # provisioning page (served by the daemon's ScanLocalHTTP, #141) with
+    # no server in the loop. See pi/GADGET-SPIKE.md for the #139 findings
+    # + the per-host-OS validation checklist.
+    - cp files/ghostcam-usb-gadget.sh "$1/usr/local/bin/ghostcam-usb-gadget"
+    - chmod 755 "$1/usr/local/bin/ghostcam-usb-gadget"
+    - cp files/ghostcam-usb-gadget.service "$1/etc/systemd/system/"
+    - cp files/ghostcam-usb-dhcp.service "$1/etc/systemd/system/"
+    - cp files/ghostcam-usb-dnsmasq.conf "$1/etc/ghostcam/usb-dnsmasq.conf"
+    - mkdir -p "$1/usr/local/share/ghostcam/usb-msd"
+    - cp files/usb-msd/SETUP.HTM "$1/usr/local/share/ghostcam/usb-msd/SETUP.HTM"
+    # Load dwc2 early so a UDC exists for the gadget.
+    - cp files/ghostcam-usb-modules.conf "$1/etc/modules-load.d/ghostcam-usb.conf"
+    # Keep NetworkManager off usb0 (the gadget owns its addressing).
     - mkdir -p "$1/etc/NetworkManager/conf.d"
+    - cp files/ghostcam-usb0-unmanaged.conf "$1/etc/NetworkManager/conf.d/"
+    # Mask the distro dnsmasq.service — we run a dedicated instance bound
+    # to usb0 (ghostcam-usb-dhcp.service) and don't want the default one
+    # binding all interfaces. Symlink-to-/dev/null is the chroot-safe mask.
+    - ln -sf /dev/null "$1/etc/systemd/system/dnsmasq.service"
+
+    # NetworkManager + udev for SIM7600 cellular modem.
     - cp files/no-connectivity-check.conf "$1/etc/NetworkManager/conf.d/"
     - mkdir -p "$1/etc/NetworkManager/dispatcher.d"
     - cp files/99-keep-cellular-route "$1/etc/NetworkManager/dispatcher.d/"
@@ -76,6 +102,7 @@ mmdebstrap:
         'dtoverlay=googlevoicehat-soundcard' \
         'enable_uart=1' \
         'gpu_mem=128' \
+        'dtoverlay=dwc2,dr_mode=peripheral' \
         >> "$1/boot/firmware/config.txt"
 
     # Enable image-only services (ghostcam-camera is already enabled
@@ -86,6 +113,8 @@ mmdebstrap:
     - $BDEBSTRAP_HOOKS/enable-units "$1" gpsd
     - $BDEBSTRAP_HOOKS/enable-units "$1" ghostcam-firstboot
     - $BDEBSTRAP_HOOKS/enable-units "$1" ghostcam-diag
+    - $BDEBSTRAP_HOOKS/enable-units "$1" ghostcam-usb-gadget
+    - $BDEBSTRAP_HOOKS/enable-units "$1" ghostcam-usb-dhcp
     - $BDEBSTRAP_HOOKS/enable-units "$1" bluetooth
     # sshd is installed (via X-Env-Layer-Requires above) but *not* enabled
     # by default — production cameras don't need remote shell and we don't
