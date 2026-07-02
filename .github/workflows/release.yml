@@ -5,6 +5,11 @@ on:
 
 permissions:
   contents: write
+  # actions: write lets the GITHUB_TOKEN dispatch pi-images.yml
+  # (gh workflow run) after cutting the release. Without it that step
+  # 403s ("Resource not accessible by integration") and the release ships
+  # with no flashable image.
+  actions: write
 
 # Increments patch on every push to main. Builds the Go camera binary
 # for linux/arm64 + a Debian package wrapping it, attaches both to a
