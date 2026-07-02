@@ -1,17 +1,21 @@
 name: Build Pi Images
 on:
-  # Fires automatically the moment release.yml publishes a new vX.Y.Z.
-  # Before this trigger existed the workflow was dispatch-only, so every
-  # release shipped a .deb but NO flashable image — the server's Get
-  # Started card kept serving the last image anyone had hand-cranked
-  # (prod was stuck on a stale, non-booting v0.7.8 while the daemon was
-  # already v0.7.9). Building on publish keeps the served image in lockstep
-  # with the release.
+  # PRIMARY trigger is the explicit `gh workflow run` (workflow_dispatch)
+  # from release.yml — because release.yml creates the release with
+  # GITHUB_TOKEN, and GITHUB_TOKEN-triggered events (like `release`) do NOT
+  # start workflow runs. workflow_dispatch is the exception to that rule,
+  # so the dispatch fires but the `release: published` trigger below does
+  # not for automated releases.
   #
-  # Cost note: this runs a ~15-min qemu image build on every published
-  # release (i.e. every push to main). If that gets expensive, gate it to
-  # minor/major tags — but correctness (prod always has a current image)
-  # beats saving runner minutes, so it builds on every release for now.
+  # Before any of this, the workflow was dispatch-only-by-hand, so every
+  # release shipped a .deb but NO flashable image — the server's Get
+  # Started card kept serving the last image anyone had hand-cranked (prod
+  # was stuck on a stale, non-booting v0.7.8 while the daemon was already
+  # v0.7.9). Now every release builds one.
+  #
+  # `release: published` stays as a fallback for releases published by a
+  # human or a PAT (those DO fire the event). Cost: a ~15-min qemu build
+  # per release; gate to minor/major tags later if runner minutes bite.
   release:
     types: [published]
   workflow_dispatch:
