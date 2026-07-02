@@ -1,0 +1,18 @@
+[Unit]
+Description=Ghostcam USB gadget DHCP/DNS (dnsmasq on usb0)
+Documentation=https://github.com/cargocam/ghostcam
+After=ghostcam-usb-gadget.service
+Requires=ghostcam-usb-gadget.service
+Before=network-online.target
+ConditionPathExists=/sys/class/udc
+
+[Service]
+Type=simple
+# --keep-in-foreground so systemd supervises it directly. Its own conf
+# is the only source of truth; ignore /etc/dnsmasq.conf and .d.
+ExecStart=/usr/sbin/dnsmasq --keep-in-foreground --conf-file=/etc/ghostcam/usb-dnsmasq.conf
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=network-online.target

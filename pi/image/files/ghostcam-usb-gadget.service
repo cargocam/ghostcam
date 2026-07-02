@@ -1,0 +1,23 @@
+[Unit]
+Description=Ghostcam USB composite gadget (onboarding + rescue link)
+Documentation=https://github.com/cargocam/ghostcam
+# The camera daemon runs After=network-online.target and binds its local
+# provisioning server on usb0 (10.55.0.1), so the gadget link must exist
+# first. Order Before=network-online and pull it into the online target.
+DefaultDependencies=no
+After=sysinit.target local-fs.target
+Before=network-online.target network.target shutdown.target
+Wants=network-online.target
+Conflicts=shutdown.target
+# libcomposite/configfs are only present on a real Pi OTG port; skip
+# cleanly on anything without a UDC (the script also guards this).
+ConditionPathExists=/sys/class/udc
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/ghostcam-usb-gadget up
+ExecStop=/usr/local/bin/ghostcam-usb-gadget down
+
+[Install]
+WantedBy=network-online.target

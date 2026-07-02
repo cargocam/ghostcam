@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Mass-storage redirect fallback (#145) for hosts where mDNS
+     (ghostcam.local, #142) is flaky — notably some Windows machines. The
+     read-only gadget volume holds only this file; the user double-clicks
+     it and their default browser opens the camera's local setup page. No
+     reliance on autorun-on-mount (disabled on modern OSes). -->
+<meta http-equiv="refresh" content="0; url=http://10.55.0.1/">
+<title>Set up your Ghostcam</title>
+<style>body{font-family:system-ui,-apple-system,sans-serif;max-width:32rem;margin:3rem auto;padding:0 1rem;line-height:1.5}</style>
+</head>
+<body>
+<h1>Opening Ghostcam setup…</h1>
+<p>If this page doesn't redirect automatically, open
+<a href="http://10.55.0.1/">http://10.55.0.1/</a> (or
+<a href="http://ghostcam.local/">http://ghostcam.local/</a>) in your browser
+while the camera is plugged in.</p>
+</body>
+</html>
