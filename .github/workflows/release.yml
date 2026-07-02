@@ -167,3 +167,21 @@ jobs:
             ghostcam-camera_*.deb \
             ghostcam-camera.sbom.json \
             checksums.txt
+
+      # Kick off the flashable Pi image build for this release.
+      #
+      # pi-images.yml also has a `release: published` trigger, but that
+      # does NOT fire here: this release was created with GITHUB_TOKEN, and
+      # events triggered by GITHUB_TOKEN don't start new workflow runs — so
+      # without this step every release would ship a .deb but no image (the
+      # exact gap that left prod serving a stale, non-booting image). The
+      # ONE exception to that rule is workflow_dispatch, which is precisely
+      # what `gh workflow run` uses, so this dispatch does start the build.
+      # The image job then attaches the .img.xz and nudges the server to
+      # ingest it. The release-event trigger stays as a fallback for
+      # human/PAT-published releases.
+      - name: Trigger Pi image build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NEXT: ${{ steps.ver.outputs.next }}
+        run: gh workflow run pi-images.yml -f version="$NEXT"
