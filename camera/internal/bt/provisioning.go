@@ -35,9 +35,9 @@ type Provisioner func(ctx context.Context, serverURL, token, deviceSerial string
 func RunProvisioning(ctx context.Context, cfg *state.CameraConfig, deviceSerial string, identity *state.Identity, provision Provisioner) (*state.Credentials, error) {
 	token, serverURL := resolveProvisionInputs(cfg)
 
-	// Fallback: race QR scan + BLE GATT peripheral.
+	// Fallback: race QR scan + BLE GATT peripheral + local HTTP server.
 	if token == "" || serverURL == "" {
-		payload, err := raceQRandBT(ctx, identity.DeviceID)
+		payload, err := raceQRandBT(ctx, identity.DeviceID, cfg.ProvisionHTTPAddr)
 		if err != nil {
 			return nil, err
 		}
@@ -88,10 +88,15 @@ func RunProvisioning(ctx context.Context, cfg *state.CameraConfig, deviceSerial 
 	return creds, nil
 }
 
-// raceQRandBT runs ScanQR and ScanBT concurrently and returns the first
-// payload that arrives, cancelling the loser. nil result + nil error
-// means both timed out without a payload.
-func raceQRandBT(ctx context.Context, deviceID string) (*common.QRPayload, error) {
+// raceQRandBT runs the onboarding channels — QR scan, BLE GATT peripheral,
+// and the local offline HTTP server — concurrently and returns the first
+// payload that arrives, cancelling the losers. nil result + nil error
+// means every channel finished empty (all timed out / none configured).
+//
+// httpAddr is the bind address for the local HTTP channel (USB gadget /
+// SoftAP); empty makes that channel a no-op, so on hardware without the
+// gadget link this behaves exactly like the prior QR+BT race.
+func raceQRandBT(ctx context.Context, deviceID, httpAddr string) (*common.QRPayload, error) {
 	raceCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -100,7 +105,8 @@ func raceQRandBT(ctx context.Context, deviceID string) (*common.QRPayload, error
 		err     error
 		source  string
 	}
-	ch := make(chan result, 2)
+	const channels = 3
+	ch := make(chan result, channels)
 
 	go func() {
 		p, err := ScanQR(raceCtx)
@@ -117,17 +123,21 @@ func raceQRandBT(ctx context.Context, deviceID string) (*common.QRPayload, error
 		p, err := ScanBT(raceCtx, prefix)
 		ch <- result{p, err, "bt"}
 	}()
+	go func() {
+		p, err := ScanLocalHTTP(raceCtx, deviceID, httpAddr)
+		ch <- result{p, err, "http"}
+	}()
 
-	// Wait for either a payload or both to finish empty.
+	// Wait for either a payload or all channels to finish empty.
 	var lastErr error
-	for i := 0; i < 2; i++ {
+	for i := 0; i < channels; i++ {
 		r := <-ch
 		if r.payload != nil {
 			slog.Info("onboarding payload accepted", "source", r.source)
 			cancel()
-			// Drain the second goroutine in the background so it can exit
-			// cleanly on its own; don't block the caller.
-			go func() { <-ch }()
+			// Losers get cancelled via raceCtx and their sends land in the
+			// buffered channel (cap == channel count) without blocking, so
+			// they exit cleanly on their own — nothing to drain, no leak.
 			return r.payload, nil
 		}
 		if r.err != nil && !errors.Is(r.err, context.Canceled) {
