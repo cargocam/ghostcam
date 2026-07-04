@@ -1,0 +1,26 @@
+# Spike (#139) EXAMPLE unit — NOT enabled by this spike. #144 will adopt/refine
+# it for the production image. Kept here so the spike records the ordering the
+# eventual unit needs.
+#
+# Ordering is load-bearing: ghostcam-camera.service runs
+# After=network-online.target, so the gadget (which creates usb0, a network
+# interface) must be up Before=network-online.target or the camera can miss it.
+#
+# UDC-gated: on a Pi with no UDC available (dwc2 not in peripheral/otg mode, or
+# the port is currently host-mode for the modem), ConditionPathExists on
+# /sys/class/udc keeps this from failing the boot — it just no-ops.
+[Unit]
+Description=Ghostcam USB composite onboarding gadget (spike #139 / feature #144)
+DefaultDependencies=no
+After=sys-kernel-config.mount
+Before=network-online.target network-pre.target
+ConditionPathExists=/sys/class/udc
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/bin/ghostcam-usb-gadget up
+ExecStop=/usr/local/bin/ghostcam-usb-gadget down
+
+[Install]
+WantedBy=sysinit.target
