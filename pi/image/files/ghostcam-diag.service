@@ -1,13 +1,7 @@
 [Unit]
-Description=Ghostcam late-boot diagnostic snapshot to /boot/firmware/diag.log
+Description=Ghostcam diagnostic snapshot to /boot/firmware/diag.log
 After=multi-user.target NetworkManager.service bluetooth.service ghostcam-camera.service
 
 [Service]
 Type=oneshot
-# Give NM time to associate WiFi and the camera daemon time to settle
-# before we snapshot state. 90s is generous but cheap (this runs once).
-ExecStart=/bin/sh -c 'sleep 90; /usr/local/bin/ghostcam-diag'
-RemainAfterExit=yes
-
-[Install]
-WantedBy=multi-user.target
+ExecStart=/usr/local/bin/ghostcam-diag

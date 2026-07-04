@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/godbus/dbus/v5 v5.1.0
 	github.com/makiuchi-d/gozxing v0.1.1
 	github.com/pion/rtcp v1.2.16
 	github.com/pion/webrtc/v4 v4.2.12
@@ -12,7 +13,6 @@ require (
 
 require (
 	github.com/go-ole/go-ole v1.2.6 // indirect
-	github.com/godbus/dbus/v5 v5.1.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/pion/datachannel v1.6.0 // indirect
 	github.com/pion/dtls/v3 v3.1.2 // indirect

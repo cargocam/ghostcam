@@ -1,0 +1,14 @@
+[Unit]
+Description=Periodic Ghostcam diagnostic snapshot (captures onboarding attempts)
+
+[Timer]
+# First snapshot ~90s after boot — enough for NM to associate and the camera
+# daemon to reach its first BT-advertise window. Then re-run every 3 min so a
+# remote operator's onboarding attempt (and each daemon re-advertise cycle) is
+# captured. ghostcam-diag stops rewriting the SD card once provisioned.
+OnBootSec=90s
+OnUnitActiveSec=3min
+AccuracySec=15s
+
+[Install]
+WantedBy=timers.target

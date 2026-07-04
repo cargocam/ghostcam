@@ -151,6 +151,7 @@ External Go deps the camera relies on:
 
 - `github.com/pion/webrtc/v4`, `pion/rtp`, `pion/rtcp` — WHIP publisher.
 - `tinygo.org/x/bluetooth` — BLE GATT peripheral on Linux (uses BlueZ over D-Bus).
+- `github.com/godbus/dbus/v5` — direct BlueZ D-Bus calls the tinygo API doesn't expose (powering on `hci0` before advertising, reading advertising-manager state for onboarding diagnostics).
 - `github.com/makiuchi-d/gozxing` — QR decode (synthetic mode uses this; real mode currently relies on libzbar via rpicam-still glue but gozxing is the planned migration).
 - `github.com/BurntSushi/toml` — config parsing.
 - `github.com/google/uuid` — segment IDs.
@@ -176,6 +177,7 @@ Pi-side runtime deps (declared in the `.deb`'s `Depends:`):
 - **Identity check**: `/var/ghostcam/identity_key` (private, mode 0600), `/var/ghostcam/identity_key.pub` (hex, mode 0644). Device ID = `sha256(identity_key.pub_bytes)[:16]` in hex.
 - **What's the running version**: `dpkg-query -W -f='${Version}\n' ghostcam-camera` for the apt-level version, or `journalctl -u ghostcam-camera | grep 'camera identity'` for the daemon's own `main.Version` baked at build time.
 - **WHIP not connecting**: check `journalctl -u ghostcam-camera | grep -iE "WHIP|publisher|state"`. Common causes: server URL unreachable, ed25519 signature mismatch (regenerated identity), or the WHIP endpoint returned 4xx.
+- **BT onboarding: Pi doesn't show up as an available device**: the daemon only advertises the `Ghostcam-<id>` GATT peripheral while in provisioning mode (no `server_url`/token yet). It powers on the BlueZ controller itself before advertising — `ScanBT` sets `org.bluez.Adapter1.Powered=true` on `hci0` over D-Bus, because `rfkill unblock` alone leaves the controller un-powered and tinygo's `Advertisement.Start()` doesn't check/power it (unlike Scan/Connect). Check `journalctl -u ghostcam-camera | grep -iE "BT|adapter|advertis"` and `bluetoothctl show` (look for `Powered: yes`). `ghostcam` must be in the `bluetooth` group (deb postinst handles this) for the D-Bus power-on to be permitted.
 - **Segment uploads stuck**: `ls -la /var/ghostcam/segments/` and `journalctl -u ghostcam-camera | grep -iE "presign|upload"`. The daemon writes segments to disk first, then uploads asynchronously — if disk fills up, the OS evicts old segments first.
 
 If a Pi is offline after a routine WPA rekey, the fix landed in 2026-05-17: `connection.autoconnect-retries=0` on every NM connection. Old `.deb`s without this are vulnerable; apt-upgrade to the latest first if you suspect a stuck wifi state.
