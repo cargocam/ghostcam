@@ -51,13 +51,16 @@ mmdebstrap:
     - chmod 755 "$1/usr/local/bin/ghostcam-firstboot"
     - cp files/ghostcam-firstboot.service "$1/etc/systemd/system/"
 
-    # Late-boot diagnostic snapshot. Dumps NM/BT/camera state to
-    # /boot/firmware/diag.log 90s after multi-user.target so the SD card
-    # can be pulled and read on any OS for post-mortem when SSH isn't
-    # reachable. Cheap (runs once) and harmless to leave enabled.
+    # Diagnostic snapshot. Dumps NM/BT/camera state to /boot/firmware/diag.log
+    # so the SD card can be pulled and read on any OS for post-mortem when SSH
+    # isn't reachable. Timer-driven: first fire ~90s after boot, then every
+    # 3 min *while un-onboarded* so a remote operator's BT onboarding attempt
+    # is captured across the whole window (the script stops rewriting the SD
+    # card once the camera is provisioned).
     - cp files/ghostcam-diag.sh "$1/usr/local/bin/ghostcam-diag"
     - chmod 755 "$1/usr/local/bin/ghostcam-diag"
     - cp files/ghostcam-diag.service "$1/etc/systemd/system/"
+    - cp files/ghostcam-diag.timer "$1/etc/systemd/system/"
 
     # NetworkManager + udev for SIM7600 cellular modem.
     - mkdir -p "$1/etc/NetworkManager/conf.d"
@@ -66,6 +69,21 @@ mmdebstrap:
     - cp files/99-keep-cellular-route "$1/etc/NetworkManager/dispatcher.d/"
     - chmod 755 "$1/etc/NetworkManager/dispatcher.d/99-keep-cellular-route"
     - cp files/99-sim7600.rules "$1/etc/udev/rules.d/"
+
+    # Power the Bluetooth controller on at boot. On a headless image BlueZ
+    # otherwise leaves hci0 Powered=false, so the camera's onboarding GATT
+    # peripheral never advertises and the Pi doesn't show up in a BLE scan.
+    # AutoEnable=true (BlueZ [Policy]) powers it before any daemon runs — the
+    # pre-daemon complement to the camera's own D-Bus power-on (which is what
+    # reaches already-deployed units over OTA; this only helps fresh images).
+    # Edit-in-place if the key exists (Debian ships it commented), else append.
+    - |-
+      chroot "$1" sh -c 'f=/etc/bluetooth/main.conf; \
+        if grep -qE "^#?AutoEnable=" "$f" 2>/dev/null; then \
+          sed -i "s/^#\?AutoEnable=.*/AutoEnable=true/" "$f"; \
+        else \
+          printf "\n[Policy]\nAutoEnable=true\n" >> "$f"; \
+        fi'
 
     # Append camera/audio/GPIO settings to config.txt
     - |-
@@ -85,7 +103,8 @@ mmdebstrap:
     - $BDEBSTRAP_HOOKS/enable-units "$1" ghostcam-gps
     - $BDEBSTRAP_HOOKS/enable-units "$1" gpsd
     - $BDEBSTRAP_HOOKS/enable-units "$1" ghostcam-firstboot
-    - $BDEBSTRAP_HOOKS/enable-units "$1" ghostcam-diag
+    # Enable the timer (not the bare service) — the timer owns activation now.
+    - $BDEBSTRAP_HOOKS/enable-units "$1" ghostcam-diag.timer
     - $BDEBSTRAP_HOOKS/enable-units "$1" bluetooth
     # sshd is installed (via X-Env-Layer-Requires above) but *not* enabled
     # by default — production cameras don't need remote shell and we don't
