@@ -86,6 +86,18 @@ EOF
                 /etc/systemd/system/multi-user.target.wants/ghostcam-camera.service
         fi
 
+        # Enable the GPS bring-up oneshot (SIM7600). Same deb-systemd-helper
+        # rationale as ghostcam-camera above. It's a no-op on cameras with
+        # no modem (the script waits, finds none, exits) so enabling it
+        # unconditionally on this hardware-specific firmware is safe.
+        if command -v deb-systemd-helper >/dev/null 2>&1; then
+            deb-systemd-helper enable ghostcam-gps.service >/dev/null 2>&1 || true
+        else
+            install -d /etc/systemd/system/multi-user.target.wants
+            ln -sf /lib/systemd/system/ghostcam-gps.service \
+                /etc/systemd/system/multi-user.target.wants/ghostcam-gps.service
+        fi
+
         # Live-system follow-through: reload systemd + udev rules + start
         # if the unit is enabled. Guarded so mmdebstrap-driven chroot builds
         # skip cleanly (no running daemons to talk to).
@@ -135,6 +147,16 @@ EOF
             # is true on both fresh installs and upgrades.
             if systemctl is-enabled --quiet ghostcam-camera.service; then
                 systemctl start ghostcam-camera.service || true
+            fi
+            # Re-run GPS bring-up now so the fix (attach the SIM7600 NMEA
+            # port to gpsd) applies on self-update without waiting for a
+            # reboot. `restart`, not `start`: ghostcam-gps is a
+            # RemainAfterExit oneshot that has usually already run this
+            # boot, so `start` would be a no-op — restart forces ExecStart
+            # to run its gpsdctl-add again. Harmless failed oneshot when
+            # no modem / no ModemManager.
+            if systemctl is-enabled --quiet ghostcam-gps.service; then
+                systemctl restart ghostcam-gps.service || true
             fi
         fi
         ;;

@@ -31,11 +31,12 @@ mmdebstrap:
     # (carries GHOSTCAM_VIDEO_PROFILE=<device>, set by pi-images.yml).
     - cp files/ghostcam.env "$1/etc/ghostcam/env"
 
-    # GPS service — image-only (the .deb doesn't ship the GPS unit
-    # because GPS is hardware-specific to the SIM7600 modem hat).
-    - cp files/ghostcam-gps.service "$1/etc/systemd/system/"
-    - cp files/ghostcam-enable-gps.sh "$1/usr/local/bin/"
-    - chmod 755 "$1/usr/local/bin/ghostcam-enable-gps.sh"
+    # GPS: the unit (ghostcam-gps.service) and its bring-up script
+    # (ghostcam-enable-gps.sh) now ship in the .deb and are enabled by
+    # its postinst — installed above — so field cameras get GNSS fixes
+    # via firmware self-update, not just reflash. Only /etc/default/gpsd
+    # stays image-side: it's a conffile owned by the gpsd package, so
+    # shipping it in our .deb too would be a dpkg overwrite conflict.
     - cp files/gpsd.conf "$1/etc/default/gpsd"
 
     # ALSA config for INMP441 I2S mic (image-specific hardware).
@@ -96,11 +97,10 @@ mmdebstrap:
         'gpu_mem=128' \
         >> "$1/boot/firmware/config.txt"
 
-    # Enable image-only services (ghostcam-camera is already enabled
-    # by the .deb's postinst). bluetooth.service is enabled by the
-    # bluez postinst but bookworm-minbase's policy-rc.d may suppress
-    # it during chroot install — enable explicitly to be safe.
-    - $BDEBSTRAP_HOOKS/enable-units "$1" ghostcam-gps
+    # Enable image-only services (ghostcam-camera and ghostcam-gps are
+    # already enabled by the .deb's postinst). bluetooth.service is
+    # enabled by the bluez postinst but bookworm-minbase's policy-rc.d
+    # may suppress it during chroot install — enable explicitly to be safe.
     - $BDEBSTRAP_HOOKS/enable-units "$1" gpsd
     - $BDEBSTRAP_HOOKS/enable-units "$1" ghostcam-firstboot
     # Enable the timer (not the bare service) — the timer owns activation now.

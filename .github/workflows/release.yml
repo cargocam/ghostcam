@@ -94,6 +94,19 @@ jobs:
           cp pi/systemd/ghostcam-camera.service "$PKG_DIR/lib/systemd/system/ghostcam-camera.service"
           chmod 644 "$PKG_DIR/lib/systemd/system/ghostcam-camera.service"
 
+          # GPS bring-up for the SIM7600 modem hat: a oneshot that powers
+          # the GNSS engine via ModemManager and hands the NMEA port to
+          # gpsd. Shipped in the .deb (not just the image) so already-
+          # deployed cameras pick up fixes to GNSS bring-up via firmware
+          # self-update instead of only on a reflash. postinst enables it;
+          # /etc/default/gpsd is left to the gpsd package + image layer to
+          # avoid a dpkg conffile conflict (the fix lives in the script,
+          # which attaches the port at runtime regardless of that file).
+          cp pi/image/files/ghostcam-enable-gps.sh "$PKG_DIR/usr/local/bin/ghostcam-enable-gps.sh"
+          chmod 755 "$PKG_DIR/usr/local/bin/ghostcam-enable-gps.sh"
+          cp pi/image/files/ghostcam-gps.service "$PKG_DIR/lib/systemd/system/ghostcam-gps.service"
+          chmod 644 "$PKG_DIR/lib/systemd/system/ghostcam-gps.service"
+
           # Udev rule granting the `video` group access to /dev/dma_heap/*
           # for libcamera DMA buffer allocation from a non-root daemon.
           cp pi/debian/udev/60-ghostcam-camera.rules "$PKG_DIR/lib/udev/rules.d/60-ghostcam-camera.rules"
