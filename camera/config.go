@@ -240,9 +240,12 @@ func LoadConfig() (*CameraConfig, error) {
 
 	// Cellular APN: CLI -> env -> file -> empty (auto). User/Pass: env ->
 	// file. Empty APN leaves cellular to ModemManager/NM auto-config.
-	resolvedCellularAPN := coalesceStr(*cellularAPN, envOpt("GHOSTCAM_CELLULAR_APN"), ptrStr(file.CellularAPN), "")
-	resolvedCellularUser := coalesceStr(envOpt("GHOSTCAM_CELLULAR_USER"), ptrStr(file.CellularUser), "")
-	resolvedCellularPass := coalesceStr(envOpt("GHOSTCAM_CELLULAR_PASS"), ptrStr(file.CellularPass), "")
+	// Stored-file layer (readStoredFile) is how a set_cellular command or
+	// an onboarding-payload APN survives a reboot: the daemon persists to
+	// {dataDir}/cellular_* and picks it back up here on the next boot.
+	resolvedCellularAPN := coalesceStr(*cellularAPN, envOpt("GHOSTCAM_CELLULAR_APN"), ptrStr(file.CellularAPN), readStoredFile(resolvedDataDir, "cellular_apn"), "")
+	resolvedCellularUser := coalesceStr(envOpt("GHOSTCAM_CELLULAR_USER"), ptrStr(file.CellularUser), readStoredFile(resolvedDataDir, "cellular_user"), "")
+	resolvedCellularPass := coalesceStr(envOpt("GHOSTCAM_CELLULAR_PASS"), ptrStr(file.CellularPass), readStoredFile(resolvedDataDir, "cellular_pass"), "")
 
 	cfg := &CameraConfig{
 		ServerURL:             resolvedServerURL,

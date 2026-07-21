@@ -113,6 +113,21 @@ func HandleCommand(ctx context.Context, cmd common.CameraCommand, dataDir string
 				slog.Warn("WiFi config failed", "err", err)
 			}
 		}()
+	case "set_cellular":
+		// Deliver/refresh the cellular APN on a deployed camera without
+		// SSH. Persist so it survives reboots (LoadConfig reads the file),
+		// then apply immediately in the background (nmcli can block on a
+		// cold modem). Empty APN is a no-op guard.
+		slog.Info("set cellular command", "apn", cmd.CellularAPN)
+		if cmd.CellularAPN == "" {
+			break
+		}
+		state.PersistCellular(dataDir, cmd.CellularAPN, cmd.CellularUser, cmd.CellularPass)
+		go func() {
+			if err := network.EnsureCellular(ctx, cmd.CellularAPN, cmd.CellularUser, cmd.CellularPass); err != nil {
+				slog.Warn("set_cellular apply failed", "err", err)
+			}
+		}()
 	case "update_firmware":
 		slog.Info("firmware update command received")
 		if firmware.CheckFirmwareUpdate(ctx, client, dataDir, client.Version()) {

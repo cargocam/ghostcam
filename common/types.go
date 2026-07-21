@@ -101,6 +101,15 @@ type CameraCommand struct {
 	BatteryRules string   `json:"battery_rules,omitempty"` // set_battery_rules: JSON list of {threshold_pct, power_mode, upload_mode}
 	SegmentIDs   []string `json:"segment_ids,omitempty"`   // upload_segments: priority-fetch these segments now
 
+	// set_cellular: provision/update the cellular data APN on a deployed
+	// camera without SSH. The daemon persists these and applies them via
+	// network.EnsureCellular. This is how the field-durable APN fix reaches
+	// already-provisioned cameras (the provisioning payload only covers
+	// onboarding). Empty CellularAPN with type set_cellular is a no-op.
+	CellularAPN  string `json:"cellular_apn,omitempty"`
+	CellularUser string `json:"cellular_user,omitempty"`
+	CellularPass string `json:"cellular_pass,omitempty"`
+
 	// Diagnostic correlation id. Only set for diag_bundle; copied
 	// verbatim into the resulting DiagBundle so the server can match
 	// asynchronous responses to its issuance audit row.
@@ -195,4 +204,12 @@ type QRPayload struct {
 	Token        string `json:"t"`           // one-time provision token
 	WifiSSID     string `json:"w,omitempty"` // optional Wi-Fi SSID to join
 	WifiPassword string `json:"p,omitempty"` // optional Wi-Fi password
+	// Optional cellular APN provisioning. Lets a cellular-only camera be
+	// handed its SIM's APN at onboarding time (nothing in the stack
+	// auto-creates a mobile-broadband connection, so a SIM whose APN
+	// isn't in ModemManager's DB never connects). Short keys to keep the
+	// QR dense. CellularUser/Pass are for the APNs that need PAP/CHAP.
+	CellularAPN  string `json:"ca,omitempty"`
+	CellularUser string `json:"cu,omitempty"`
+	CellularPass string `json:"cp,omitempty"`
 }

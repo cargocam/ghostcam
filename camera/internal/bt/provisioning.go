@@ -55,6 +55,14 @@ func RunProvisioning(ctx context.Context, cfg *state.CameraConfig, deviceSerial 
 			}
 			network.WaitForRoute(ctx)
 		}
+
+		if payload.CellularAPN != "" {
+			state.PersistCellular(cfg.DataDir, payload.CellularAPN, payload.CellularUser, payload.CellularPass)
+			if err := network.EnsureCellular(ctx, payload.CellularAPN, payload.CellularUser, payload.CellularPass); err != nil {
+				slog.Warn("cellular from onboarding payload failed", "apn", payload.CellularAPN, "err", err)
+			}
+			network.WaitForRoute(ctx)
+		}
 	}
 
 	// Ensure server_url is a full URL

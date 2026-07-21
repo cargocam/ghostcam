@@ -11,6 +11,7 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -251,6 +252,27 @@ type Credentials struct {
 // file the next LoadConfig will pick up.
 func WriteStoredFile(dataDir, name, value string) error {
 	return os.WriteFile(filepath.Join(dataDir, name), []byte(value), 0644)
+}
+
+// PersistCellular writes the cellular APN (and optional PAP/CHAP creds) to
+// dataDir so LoadConfig picks them up on the next boot — the durable half
+// of the set_cellular command / onboarding-payload APN delivery. Only
+// non-empty creds are written so an APN-only update doesn't clobber
+// previously stored credentials with blanks. Best-effort: logs on error.
+func PersistCellular(dataDir, apn, user, pass string) {
+	if err := WriteStoredFile(dataDir, "cellular_apn", apn); err != nil {
+		slog.Warn("failed to persist cellular_apn", "err", err)
+	}
+	if user != "" {
+		if err := WriteStoredFile(dataDir, "cellular_user", user); err != nil {
+			slog.Warn("failed to persist cellular_user", "err", err)
+		}
+	}
+	if pass != "" {
+		if err := WriteStoredFile(dataDir, "cellular_pass", pass); err != nil {
+			slog.Warn("failed to persist cellular_pass", "err", err)
+		}
+	}
 }
 
 // ReadTrimmedFile reads path, trims surrounding whitespace, and returns
