@@ -12,6 +12,11 @@ func EnsureWifi(_ context.Context, _ string, _ *string) error {
 	return nil
 }
 
+// EnsureCellular is a no-op on non-Linux platforms.
+func EnsureCellular(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
 // WaitForRoute returns immediately on non-Linux platforms (always has a route).
 func WaitForRoute(_ context.Context) {}
 

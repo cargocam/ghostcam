@@ -56,6 +56,18 @@ type CameraConfig struct {
 	PowerMode             string // "live" | "standby" | "sleep"; loaded from {dataDir}/power_mode
 	BatteryHAT            string // battery HAT driver name; "" = no HAT, "pisugar3" = PiSugar 3 over I²C
 	BatteryI2CBus         string // I²C bus device path for the battery HAT; default "/dev/i2c-1"
+
+	// Cellular data uplink (SIM7600 + ModemManager). When CellularAPN is
+	// set, the daemon provisions a NetworkManager `gsm` connection with
+	// this APN at startup (network.EnsureCellular) so a mobile-broadband
+	// bearer actually comes up — nothing else in the stack creates one, so
+	// a SIM whose APN isn't auto-detected would otherwise enable the modem
+	// but never connect. Empty = leave cellular to ModemManager/NM
+	// auto-config (works for SIMs in MM's provider database). User/Pass are
+	// optional PAP/CHAP credentials some APNs require.
+	CellularAPN  string
+	CellularUser string
+	CellularPass string
 }
 
 // Power-mode strings. Mirrored from the server's CameraCommand.PowerMode

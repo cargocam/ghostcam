@@ -59,6 +59,85 @@ func EnsureWifi(ctx context.Context, ssid string, psk *string) error {
 	return nil
 }
 
+// EnsureCellular provisions a NetworkManager `gsm` connection for the
+// SIM7600 data bearer when an APN is configured. Nothing else in the
+// stack creates one, so a SIM whose APN isn't in ModemManager's provider
+// database enables the modem but never connects — the camera then has no
+// cellular uplink even though the hardware is fine. This is the missing
+// piece behind "cellular doesn't work" on such SIMs.
+//
+// Behaviour:
+//   - apn == "": no-op (leave cellular to MM/NM auto-config).
+//   - our connection already exists: modify it in place (keeps APN/creds
+//     in sync if the operator changed them).
+//   - some *other* gsm connection already exists: leave it untouched —
+//     the image or operator configured cellular deliberately; we don't
+//     clobber it.
+//   - none exists: create ours (autoconnect on, infinite retries like
+//     EnsureWifi so a transient blip can't permanently block it).
+//
+// Runs as the non-root `ghostcam` user; the netdev polkit rule
+// (49-ghostcam-nm.rules) grants the NetworkManager actions. Best-effort:
+// logs and returns nil on nmcli errors so a modem-less camera isn't held
+// up. Safe to run every boot (idempotent).
+func EnsureCellular(ctx context.Context, apn, user, pass string) error {
+	if apn == "" {
+		return nil
+	}
+	if _, err := exec.LookPath("nmcli"); err != nil {
+		slog.Warn("nmcli not available, cannot provision cellular", "err", err)
+		return nil
+	}
+
+	out, err := exec.CommandContext(ctx, "nmcli", "-t", "-f", "NAME,TYPE", "connection", "show").Output()
+	if err != nil {
+		slog.Warn("cellular: nmcli connection show failed", "err", err)
+		return nil
+	}
+	hasGSM, hasOurs := scanCellularConns(string(out), cellularConnName)
+
+	switch {
+	case hasOurs:
+		slog.Info("cellular: syncing existing connection", "con", cellularConnName, "apn", apn)
+		args := []string{"connection", "modify", cellularConnName,
+			"gsm.apn", apn,
+			"connection.autoconnect", "yes",
+			"connection.autoconnect-retries", "0"}
+		args = append(args, cellularCredArgs(user, pass)...)
+		if o, e := exec.CommandContext(ctx, "nmcli", args...).CombinedOutput(); e != nil {
+			slog.Warn("cellular: modify failed", "err", e, "output", strings.TrimSpace(string(o)))
+			return nil
+		}
+	case hasGSM:
+		slog.Info("cellular: a gsm connection already exists, leaving it as-is")
+		return nil
+	default:
+		slog.Info("cellular: creating connection", "con", cellularConnName, "apn", apn)
+		args := []string{"connection", "add", "type", "gsm",
+			"con-name", cellularConnName,
+			"ifname", "*",
+			"gsm.apn", apn,
+			"connection.autoconnect", "yes",
+			"connection.autoconnect-retries", "0"}
+		args = append(args, cellularCredArgs(user, pass)...)
+		if o, e := exec.CommandContext(ctx, "nmcli", args...).CombinedOutput(); e != nil {
+			slog.Warn("cellular: add failed", "err", e, "output", strings.TrimSpace(string(o)))
+			return nil
+		}
+	}
+
+	// Nudge it up now. NM's autoconnect would bring it up on its own, but
+	// an explicit `up` shortens time-to-first-bearer on a cold boot. Non-
+	// fatal — the modem may still be enumerating; autoconnect covers that.
+	if o, e := exec.CommandContext(ctx, "nmcli", "connection", "up", cellularConnName).CombinedOutput(); e != nil {
+		slog.Info("cellular: initial 'up' did not connect yet (autoconnect will retry)",
+			"output", strings.TrimSpace(string(o)))
+	} else {
+		slog.Info("cellular: connection up", "con", cellularConnName)
+	}
+	return nil
+}
+
 // WaitForRoute blocks until a default route exists in /proc/net/route.
 func WaitForRoute(ctx context.Context) {
 	if DefaultInterface() != "" {

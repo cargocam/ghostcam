@@ -94,6 +94,20 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// Provision the cellular data bearer (SIM7600) when an APN is set.
+	// Nothing else in the stack creates a NetworkManager gsm connection, so
+	// a SIM whose APN isn't auto-detected enables the modem but never
+	// connects — no cellular uplink despite healthy hardware. Runs early
+	// and independent of provisioning (a cellular-only camera needs this
+	// up to even reach the server), in its own goroutine because
+	// `nmcli connection up` can block on a cold modem. No-op when no APN is
+	// configured or on synthetic / non-Linux builds.
+	go func() {
+		if err := network.EnsureCellular(ctx, cfg.CellularAPN, cfg.CellularUser, cfg.CellularPass); err != nil {
+			slog.Warn("cellular provisioning failed", "err", err)
+		}
+	}()
+
 	// SIGUSR1 → dump goroutine stacks to a file in DataDir. Workaround
 	// for cargocam/ghostcam#134: the daemon goes quiet on a hidden
 	// deadlock (motion-mode + capture-pipeline restart), but

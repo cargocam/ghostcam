@@ -32,6 +32,9 @@ type cameraConfigFile struct {
 	VideoFPS             *uint32 `toml:"video_fps"`
 	VideoBitrate         *uint32 `toml:"video_bitrate"`
 	VideoKeyframeInterval *uint32 `toml:"video_keyframe_interval"`
+	CellularAPN          *string `toml:"cellular_apn"`
+	CellularUser         *string `toml:"cellular_user"`
+	CellularPass         *string `toml:"cellular_pass"`
 }
 
 // LoadConfig parses flags, env vars, and an optional TOML config file.
@@ -51,6 +54,7 @@ func LoadConfig() (*CameraConfig, error) {
 		audioGainDB = flag.Int("audio-gain-db", 0, "ffmpeg -af volume in dB; 20-30 dB typical for I2S MEMS mics (INMP441 etc.); 0 disables")
 		abrEnabled  = flag.Bool("abr", false, "adaptive bitrate: ratchet resolution/bitrate based on observed packet loss")
 		abrStartTier = flag.String("abr-start-tier", "", "starting ABR tier name (minimum/low/medium/high); default minimum")
+		cellularAPN = flag.String("cellular-apn", "", "APN for the cellular data connection; when set, the daemon provisions a NetworkManager gsm connection with it at startup")
 		showVersion = flag.Bool("version", false, "print version and exit")
 	)
 	flag.Parse()
@@ -234,6 +238,12 @@ func LoadConfig() (*CameraConfig, error) {
 	batteryHAT := envOpt("GHOSTCAM_BATTERY_HAT")
 	batteryI2CBus := coalesceStr(envOpt("GHOSTCAM_BATTERY_I2C_BUS"), "/dev/i2c-1")
 
+	// Cellular APN: CLI -> env -> file -> empty (auto). User/Pass: env ->
+	// file. Empty APN leaves cellular to ModemManager/NM auto-config.
+	resolvedCellularAPN := coalesceStr(*cellularAPN, envOpt("GHOSTCAM_CELLULAR_APN"), ptrStr(file.CellularAPN), "")
+	resolvedCellularUser := coalesceStr(envOpt("GHOSTCAM_CELLULAR_USER"), ptrStr(file.CellularUser), "")
+	resolvedCellularPass := coalesceStr(envOpt("GHOSTCAM_CELLULAR_PASS"), ptrStr(file.CellularPass), "")
+
 	cfg := &CameraConfig{
 		ServerURL:             resolvedServerURL,
 		ProvisionToken:        resolvedProvisionToken,
@@ -257,6 +267,9 @@ func LoadConfig() (*CameraConfig, error) {
 		PowerMode:             powerMode,
 		BatteryHAT:            batteryHAT,
 		BatteryI2CBus:         batteryI2CBus,
+		CellularAPN:           resolvedCellularAPN,
+		CellularUser:          resolvedCellularUser,
+		CellularPass:          resolvedCellularPass,
 	}
 
 	if cfg.DataDir == "" {

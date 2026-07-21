@@ -135,6 +135,10 @@ The pattern across `camera/sensors_*.go`, `camera/network_*.go`, `camera/qr_*.go
 
 Once provisioned, the daemon signs every authenticated request with the ed25519 key at `/var/ghostcam/identity_key`. `device_id` is deterministic: SHA-256 of the public key, first 16 bytes hex. So a re-provisioned camera shows up as the same device on the same server.
 
+### Cellular data uplink (APN)
+
+Nothing in the stack creates a NetworkManager mobile-broadband connection on its own, so a SIM whose APN isn't in ModemManager's provider database will *enable* the modem but never *connect* a data bearer — the camera then has no cellular uplink despite healthy hardware. Set `GHOSTCAM_CELLULAR_APN` (env in `/etc/ghostcam/env`, `--cellular-apn`, or `cellular_apn` in the TOML config; optional `GHOSTCAM_CELLULAR_USER`/`GHOSTCAM_CELLULAR_PASS` for PAP/CHAP APNs) and the daemon provisions a `gsm` connection named `ghostcam-cellular` at startup (autoconnect on, infinite retries), via `network.EnsureCellular`. It runs as the non-root `ghostcam` user — permitted by the `netdev` polkit rule that already backs the WiFi path — so the fix rides firmware OTA in the binary, not just a reflash. Idempotent, and it won't clobber a pre-existing gsm connection the image/operator set up. Empty APN leaves cellular entirely to MM/NM auto-config. Check with `nmcli -t -f NAME,TYPE,STATE connection show` (look for `ghostcam-cellular:gsm:activated`) and `mmcli -m 0` (`state: connected` + a bearer with an IP).
+
 ## Code Conventions
 
 ### Go
