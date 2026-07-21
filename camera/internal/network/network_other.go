@@ -17,6 +17,11 @@ func EnsureCellular(_ context.Context, _, _, _ string) error {
 	return nil
 }
 
+// SetWifiRadio is a no-op on non-Linux platforms.
+func SetWifiRadio(_ context.Context, _ bool) error {
+	return nil
+}
+
 // WaitForRoute returns immediately on non-Linux platforms (always has a route).
 func WaitForRoute(_ context.Context) {}
 

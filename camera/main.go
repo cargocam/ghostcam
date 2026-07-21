@@ -24,6 +24,7 @@ import (
 	"github.com/cargocam/ghostcam/camera/internal/sensors"
 	"github.com/cargocam/ghostcam/camera/internal/state"
 	"github.com/cargocam/ghostcam/camera/internal/telemetry"
+	"github.com/cargocam/ghostcam/camera/internal/uplink"
 	"github.com/cargocam/ghostcam/camera/internal/upload"
 )
 
@@ -107,6 +108,13 @@ func main() {
 			slog.Warn("cellular provisioning failed", "err", err)
 		}
 	}()
+
+	// Force-cellular watchdog. Enforces the persisted force_cellular
+	// deadline (set by the force_cellular command) — takes WiFi down while
+	// active and restores it the moment the deadline passes, including
+	// across a restart, so a bad cellular link can't strand the camera.
+	// Inert until a force is requested; no-op on synthetic / non-Linux.
+	go uplink.RunForceCellularWatchdog(ctx, cfg.DataDir)
 
 	// SIGUSR1 → dump goroutine stacks to a file in DataDir. Workaround
 	// for cargocam/ghostcam#134: the daemon goes quiet on a hidden

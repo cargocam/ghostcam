@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/cargocam/ghostcam/camera/internal/battery"
 	"github.com/cargocam/ghostcam/camera/internal/diag"
@@ -12,6 +13,7 @@ import (
 	"github.com/cargocam/ghostcam/camera/internal/network"
 	"github.com/cargocam/ghostcam/camera/internal/power"
 	"github.com/cargocam/ghostcam/camera/internal/state"
+	"github.com/cargocam/ghostcam/camera/internal/uplink"
 	"github.com/cargocam/ghostcam/common"
 )
 
@@ -128,6 +130,14 @@ func HandleCommand(ctx context.Context, cmd common.CameraCommand, dataDir string
 				slog.Warn("set_cellular apply failed", "err", err)
 			}
 		}()
+	case "force_cellular":
+		// Dev/diagnostic: force the camera onto cellular by taking WiFi
+		// down for N seconds, then auto-restore. We only persist the
+		// deadline here — the uplink watchdog (started in main) does the
+		// enforcement and the reboot-surviving revert, so a failed cellular
+		// link can't strand the camera. seconds<=0 reverts immediately.
+		slog.Info("force cellular command", "seconds", cmd.ForceCellularSeconds)
+		uplink.SetForce(dataDir, time.Now().UnixMilli(), cmd.ForceCellularSeconds)
 	case "update_firmware":
 		slog.Info("firmware update command received")
 		if firmware.CheckFirmwareUpdate(ctx, client, dataDir, client.Version()) {
