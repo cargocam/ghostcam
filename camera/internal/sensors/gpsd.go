@@ -57,7 +57,30 @@ var (
 	gpsdMu    sync.RWMutex
 	gpsdLast  gpsdFix
 	gpsdReady bool
+
+	// gpsdDevices is the number of devices gpsd currently has attached,
+	// tracked from the WATCH stream's DEVICES/DEVICE messages. The
+	// direct-serial NMEA fallback (nmea_reader_linux.go) reads /dev/ttyUSB1
+	// only while this is 0 — reading the tty from both gpsd and the daemon
+	// would split the byte stream. Defaults to 0 (gpsd absent → fallback
+	// may run); set to a positive count once gpsd reports it owns a device.
+	gpsdDeviceMu sync.RWMutex
+	gpsdDevices  int
 )
+
+// gpsdOwnsDevice reports whether gpsd currently has at least one device
+// attached. When false, the direct NMEA reader may open the port itself.
+func gpsdOwnsDevice() bool {
+	gpsdDeviceMu.RLock()
+	defer gpsdDeviceMu.RUnlock()
+	return gpsdDevices > 0
+}
+
+func setGpsdDevices(n int) {
+	gpsdDeviceMu.Lock()
+	gpsdDevices = n
+	gpsdDeviceMu.Unlock()
+}
 
 // gpsdQuery returns the most recently cached fix, or nils if no fix is
 // available or the last update is older than gpsdStaleAfter. Sub-
@@ -85,10 +108,21 @@ func gpsdQuery() (*float64, *float64, *float32, *uint8) {
 // (subsequent calls just spawn another reader which will fight for the
 // cache — don't do that).
 func StartGpsdReader(ctx context.Context) {
+	// Direct-serial fallback: reads /dev/ttyUSB1 itself whenever gpsd has
+	// no device attached (the SIM7600 cold-boot race, cargocam/ghostcam
+	// GPS self-update work). No-op when the port is absent (synthetic /
+	// non-SIM7600). Runs alongside the gpsd reader, arbitrated by
+	// gpsdOwnsDevice() so only one of them touches the tty at a time.
+	go startDirectNMEAReader(ctx)
+
 	for {
 		if ctx.Err() != nil {
 			return
 		}
+		// gpsd stream is about to (re)connect; assume no device until it
+		// tells us otherwise, so the direct reader can cover a gpsd that's
+		// down or attached to nothing.
+		setGpsdDevices(0)
 		if err := gpsdReadOnce(ctx); err != nil && ctx.Err() == nil {
 			// Couldn't connect or stream died — back off and retry.
 		}
@@ -130,7 +164,28 @@ func gpsdReadOnce(ctx context.Context) error {
 		var head struct {
 			Class string `json:"class"`
 		}
-		if json.Unmarshal(line, &head) != nil || head.Class != "TPV" {
+		if json.Unmarshal(line, &head) != nil {
+			continue
+		}
+		// Track device attachment so the direct-serial fallback knows
+		// whether gpsd owns the port. gpsd emits DEVICES (the full list,
+		// on connect + on change) and DEVICE (a single add/activate).
+		switch head.Class {
+		case "DEVICES":
+			var dl struct {
+				Devices []json.RawMessage `json:"devices"`
+			}
+			if json.Unmarshal(line, &dl) == nil {
+				setGpsdDevices(len(dl.Devices))
+			}
+			continue
+		case "DEVICE":
+			// A DEVICE message means gpsd is activating/holding a device.
+			setGpsdDevices(1)
+			continue
+		case "TPV":
+			// fall through to TPV handling below
+		default:
 			continue
 		}
 		var tpv tpvReport
