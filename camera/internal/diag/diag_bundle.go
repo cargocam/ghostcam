@@ -115,7 +115,23 @@ func CaptureDiagBundle(ctx context.Context, diagID string) common.DiagBundle {
 		clbs = probeCLBS(ctx)
 	}()
 
+	// mmcli --location-get: the 3GPP serving-cell block the coarse-location
+	// fallback depends on. Captured here (as the non-root daemon, so it
+	// reflects exactly what the daemon can read) to diagnose why telemetry
+	// isn't reporting cell_op — empty output means 3GPP location isn't
+	// enabled or isn't readable without privilege. Appended to ModemDetail
+	// to avoid a DiagBundle contract field.
+	var locGet string
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		locGet = runFixedArgv(ctx, []string{"mmcli", "-m", "0", "--location-get"})
+	}()
+
 	wg.Wait()
+	if locGet != "" {
+		bundle.ModemDetail += "\n\n=== mmcli -m 0 --location-get ===\n" + locGet
+	}
 	if clbs != "" {
 		bundle.ModemDetail += "\n\n=== AT+CLBS probe (ttyUSB3, SIMCom LBS) ===\n" + clbs
 	}
