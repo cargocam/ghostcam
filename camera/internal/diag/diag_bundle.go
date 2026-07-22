@@ -103,7 +103,22 @@ func CaptureDiagBundle(ctx context.Context, diagID string) common.DiagBundle {
 			*c.field = runFixedArgv(ctx, c.argv)
 		}(c)
 	}
+
+	// SIMCom AT+CLBS coarse-location probe (raw serial on the spare AT
+	// port — not a fixed-argv subcommand). Runs concurrently; result is
+	// appended to ModemDetail after the wait so we don't add a contract
+	// field (and force a server module bump) for a validation probe.
+	var clbs string
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		clbs = probeCLBS(ctx)
+	}()
+
 	wg.Wait()
+	if clbs != "" {
+		bundle.ModemDetail += "\n\n=== AT+CLBS probe (ttyUSB3, SIMCom LBS) ===\n" + clbs
+	}
 	return bundle
 }
 
