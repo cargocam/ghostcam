@@ -15,6 +15,43 @@ type ModemSample struct {
 	SigPct uint8  // 0-100, 0 if unknown
 }
 
+// CellLocation is the serving-cell 3GPP identifiers from
+// `mmcli -m 0 --location-get`. All fields are "" when the corresponding
+// line is missing (3GPP location disabled, no modem, etc.).
+type CellLocation struct {
+	Operator string // MCC+MNC, e.g. "310410"
+	LAC      string // location area code (2G/3G)
+	TAC      string // tracking area code (LTE)
+	CID      string // cell id (often hex)
+}
+
+var (
+	cellOpRE  = regexp.MustCompile(`(?i)operator code\s*:\s*([0-9]+)`)
+	cellLACRE = regexp.MustCompile(`(?i)location area code\s*:\s*([0-9A-Fa-f]+)`)
+	cellTACRE = regexp.MustCompile(`(?i)tracking area code\s*:\s*([0-9A-Fa-f]+)`)
+	cellCIDRE = regexp.MustCompile(`(?i)cell id\s*:\s*([0-9A-Fa-f]+)`)
+)
+
+// parseCellLocation is the pure-text half of the cell-location reader.
+// mmcli prints "--" for fields it has no value for; the regexes only
+// match real digits/hex, so those come back "".
+func parseCellLocation(out string) CellLocation {
+	c := CellLocation{}
+	if m := cellOpRE.FindStringSubmatch(out); len(m) == 2 {
+		c.Operator = m[1]
+	}
+	if m := cellLACRE.FindStringSubmatch(out); len(m) == 2 {
+		c.LAC = m[1]
+	}
+	if m := cellTACRE.FindStringSubmatch(out); len(m) == 2 {
+		c.TAC = m[1]
+	}
+	if m := cellCIDRE.FindStringSubmatch(out); len(m) == 2 {
+		c.CID = m[1]
+	}
+	return c
+}
+
 // mmcliAccessTechRE matches the `access tech:` line in `mmcli -m 0`.
 // mmcli prints lowercase short tokens (e.g. "lte", "5gnr", "umts");
 // we normalize to the upper-case shorthand the UI expects.

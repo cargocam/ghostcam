@@ -75,9 +75,22 @@ func NewClient(serverURL, deviceID string, identity *Identity) *Client {
 		Resolver:  camnet.CellularAwareResolver(),
 	}
 	transport := &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           dialer.DialContext,
-		ForceAttemptHTTP2:     true,
+		Proxy:       http.ProxyFromEnvironment,
+		DialContext: dialer.DialContext,
+		// HTTP/1.1 only (cargocam/ghostcam#125/#167). The API endpoints are
+		// tiny sequential sub-1KB POSTs, so h2 multiplexing buys nothing —
+		// and it actively breaks route-flip recovery: after a wifi→cellular
+		// default-route change the old h2 *ClientConn* is bound to a now-dead
+		// socket but the h2 pool still advertises it as reusable, so the
+		// `CloseIdleConnections()` purge in do() doesn't evict it (h2 conns
+		// aren't "idle" the way h1 keep-alives are). The next request queues
+		// onto the stale conn and fails — the "2 failed attempts instead of
+		// 1" in #125. With h2 off, a completed request leaves an idle h1
+		// keep-alive that CloseIdleConnections *does* kill, restoring
+		// single-failure recovery. Since a custom DialContext is set, Go
+		// only attempts h2 when ForceAttemptHTTP2 is true, so leaving it
+		// false disables h2 here.
+		ForceAttemptHTTP2:     false,
 		MaxIdleConns:          10,
 		IdleConnTimeout:       30 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,

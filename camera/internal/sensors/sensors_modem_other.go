@@ -10,3 +10,8 @@ import "context"
 func ReadModem(_ context.Context) ModemSample {
 	return ModemSample{}
 }
+
+// ReadCellLocation is a no-op on non-linux / synthetic builds.
+func ReadCellLocation(_ context.Context) CellLocation {
+	return CellLocation{}
+}

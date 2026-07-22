@@ -120,6 +120,25 @@ func ReadTelemetry(ctx context.Context) common.TelemetryDatagram {
 		d.ModemSigPct = &pct
 	}
 
+	// Serving-cell identifiers for coarse (cell-tower) geolocation — the
+	// GPS fallback the server resolves to lat/lon. Only reported when
+	// there's no GPS fix (d.Lat set above), so we don't spend bytes or
+	// server geolocation calls when real GPS is available. Each field is
+	// set only when non-empty so mmcli's "--" placeholders stay out of the
+	// envelope.
+	if d.Lat == nil {
+		if c := ReadCellLocation(ctx); c.Operator != "" && c.CID != "" {
+			d.CellOp = &c.Operator
+			d.CellCID = &c.CID
+			if c.LAC != "" {
+				d.CellLAC = &c.LAC
+			}
+			if c.TAC != "" {
+				d.CellTAC = &c.TAC
+			}
+		}
+	}
+
 	// Uplink interface + monotonic byte counters. Same struct works
 	// for wifi, cellular, or wired — network.DefaultInterface picks
 	// whichever is currently carrying the default route.

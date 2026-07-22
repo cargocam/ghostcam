@@ -98,6 +98,27 @@ type TelemetryDatagram struct {
 	// link conditions, so it's the first thing we capture; raw dBm
 	// can land as a follow-up. Absent on wired / wifi-only cameras.
 	ModemSigPct *uint8 `json:"modem_sig_pct,omitempty"`
+	// Serving-cell identifiers from ModemManager's 3GPP location
+	// (`mmcli -m 0 --location-get`), for coarse cell-tower geolocation as
+	// a GPS fallback. The camera only reports the raw identifiers; the
+	// server resolves them to lat/lon via a geolocation provider (keyed,
+	// no-op without a key). Absent when there's no modem or 3GPP location
+	// isn't enabled. CellOp is the operator code MCC+MNC (e.g. "310410");
+	// LAC/TAC/CID are as mmcli prints them (CID is usually hex). Both LAC
+	// and TAC are reported when present so the server can map correctly
+	// per RAT (LTE uses TAC, 2G/3G use LAC).
+	CellOp  *string `json:"cell_op,omitempty"`
+	CellLAC *string `json:"cell_lac,omitempty"`
+	CellTAC *string `json:"cell_tac,omitempty"`
+	CellCID *string `json:"cell_cid,omitempty"`
+	// LocationSource / LocationAccuracyM are *server-set*, not reported by
+	// the camera: when the server resolves the cell identifiers above to a
+	// coarse lat/lon (via its geolocation provider) because there's no GPS
+	// fix, it stamps Lat/Lon and marks the source "cell" (vs "gps") plus a
+	// rough accuracy in metres, so the UI can render the point as
+	// approximate. The camera always leaves these nil.
+	LocationSource    *string `json:"location_source,omitempty"`
+	LocationAccuracyM *uint32 `json:"location_accuracy_m,omitempty"`
 	// UplinkIface is the network interface carrying the default route
 	// at telemetry-poll time (e.g. "wwan0", "wlan0", "eth0"). Lets the
 	// server see which uplink the camera is actually using right now
