@@ -23,7 +23,11 @@ case "$1" in
         # cellular-only camera that wants to drop to WiFi via BT
         # onboarding would otherwise stay on cellular forever). getent
         # guards against distros where one of these isn't standard.
-        for g in video audio dialout bluetooth netdev; do
+        # systemd-journal so the daemon (and its diag-bundle capture, which
+        # runs as this user) can read `journalctl` — otherwise the diag
+        # bundle's service_logs comes back "insufficient permissions" and
+        # remote debugging is blind to the daemon's own logs (GH #168).
+        for g in video audio dialout bluetooth netdev systemd-journal; do
             if getent group "$g" >/dev/null; then
                 adduser ghostcam "$g" >/dev/null 2>&1 || true
             fi

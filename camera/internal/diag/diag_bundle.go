@@ -121,16 +121,36 @@ func CaptureDiagBundle(ctx context.Context, diagID string) common.DiagBundle {
 	// isn't reporting cell_op — empty output means 3GPP location isn't
 	// enabled or isn't readable without privilege. Appended to ModemDetail
 	// to avoid a DiagBundle contract field.
-	var locGet string
+	var locGet, locStatus, gpsPipe string
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		locGet = runFixedArgv(ctx, []string{"mmcli", "-m", "0", "--location-get"})
 	}()
+	// GPS diagnostics so a stuck GNSS is debuggable remotely (no SSH):
+	// --location-status shows which location sources are enabled;
+	// gpspipe -w shows whether gpsd has a device attached and is
+	// receiving fixes (the DEVICES / TPV messages). Both read-only.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		locStatus = runFixedArgv(ctx, []string{"mmcli", "-m", "0", "--location-status"})
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		gpsPipe = runFixedArgv(ctx, []string{"gpspipe", "-w", "-n", "5"})
+	}()
 
 	wg.Wait()
+	if locStatus != "" {
+		bundle.ModemDetail += "\n\n=== mmcli -m 0 --location-status ===\n" + locStatus
+	}
 	if locGet != "" {
 		bundle.ModemDetail += "\n\n=== mmcli -m 0 --location-get ===\n" + locGet
+	}
+	if gpsPipe != "" {
+		bundle.ModemDetail += "\n\n=== gpspipe -w -n 5 (gpsd devices + fixes) ===\n" + gpsPipe
 	}
 	if clbs != "" {
 		bundle.ModemDetail += "\n\n=== AT+CLBS probe (ttyUSB3, SIMCom LBS) ===\n" + clbs
