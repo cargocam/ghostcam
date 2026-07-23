@@ -36,6 +36,16 @@ Environment=MALLOC_ARENA_MAX=2
 #      current binary to PREV, extract the new one from the .deb, set
 #      PENDING_VERIFY so the NEXT boot can verify it. Reset HEALTHY_MINUTES
 #      to 0 so a long-running prior install's counter doesn't get inherited.
+#      Then SYNC the .deb's other packaged system files (both units, the
+#      GPS oneshot script, udev + polkit rules) into place and reload
+#      polkit/udev — so OTA delivers system-file fixes, not just the
+#      binary. This is best-effort and runs only AFTER the authoritative
+#      binary swap, so a sync failure can never block the update or defeat
+#      the rollback gate. (ExecStartPre runs as root via the `+` prefix,
+#      so it may write /etc, /lib, /usr — the daemon itself can't.)
+#      NOTE: this smarter updater is itself a unit-file change, so it only
+#      reaches an already-deployed camera via one reflash/apt-install;
+#      from then on that camera gets all system-file changes over OTA.
 #   3. Always clear BOOT_OK so the current run's success is signalled
 #      fresh by the camera writing it after telemetry.
 #
@@ -85,6 +95,14 @@ ExecStartPre=+/bin/sh -c '\
       chown ghostcam:ghostcam "$$PENDING_VERIFY"; \
       rm -f "$$HEALTHY_MINUTES"; \
       echo "Installed staged firmware from $$STAGED (pending verify)"; \
+      for f in lib/systemd/system/ghostcam-camera.service lib/systemd/system/ghostcam-gps.service usr/local/bin/ghostcam-enable-gps.sh lib/udev/rules.d/60-ghostcam-camera.rules etc/polkit-1/rules.d/49-ghostcam-nm.rules etc/polkit-1/rules.d/49-ghostcam-mm.rules; do \
+        if [ -f "$$tmp/$$f" ]; then install -D -m 0644 "$$tmp/$$f" "/$$f" || true; fi; \
+      done; \
+      if [ -f /usr/local/bin/ghostcam-enable-gps.sh ]; then chmod 0755 /usr/local/bin/ghostcam-enable-gps.sh || true; fi; \
+      systemctl reload polkit >/dev/null 2>&1 || true; \
+      udevadm control --reload-rules >/dev/null 2>&1 || true; \
+      systemctl restart ghostcam-gps >/dev/null 2>&1 || true; \
+      echo "Synced packaged system files from staged .deb"; \
     else \
       echo "Staged firmware extract failed, discarding"; \
     fi; \
