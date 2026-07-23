@@ -138,24 +138,6 @@ func EnsureCellular(ctx context.Context, apn, user, pass string) error {
 	return nil
 }
 
-// SetWifiRadio enables or disables the WiFi radio via `nmcli radio wifi
-// on|off`. Used by the force-cellular watchdog to push the camera onto
-// its cellular bearer (off) and to restore normal operation (on). Runs as
-// the non-root ghostcam user — the netdev polkit rule covers the
-// enable-disable-wifi action. When re-enabled, NetworkManager autoconnect
-// brings the stored WiFi connection back on its own.
-func SetWifiRadio(ctx context.Context, on bool) error {
-	state := "off"
-	if on {
-		state = "on"
-	}
-	out, err := exec.CommandContext(ctx, "nmcli", "radio", "wifi", state).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("nmcli radio wifi %s: %s: %w", state, strings.TrimSpace(string(out)), err)
-	}
-	return nil
-}
-
 // WaitForRoute blocks until a default route exists in /proc/net/route.
 func WaitForRoute(ctx context.Context) {
 	if DefaultInterface() != "" {

@@ -120,16 +120,6 @@ type CameraCommand struct {
 	// not acceptable in production.
 	Command string `json:"command,omitempty"`
 
-	// force_cellular: dev/diagnostic uplink control. Bring WiFi down for
-	// ForceCellularSeconds so the camera is forced onto its cellular bearer
-	// (to verify cellular actually carries traffic), then auto-restore
-	// WiFi. The revert is deadline-driven and survives a daemon restart —
-	// the camera persists an expiry and a watchdog restores WiFi once it
-	// passes — so a cellular link that fails to come up can't permanently
-	// black-hole the camera. 0 (or negative) = revert immediately. The
-	// daemon clamps the value to a hard ceiling regardless of what's sent.
-	ForceCellularSeconds int `json:"force_cellular_seconds,omitempty"`
-
 	// Diagnostic correlation id. Only set for diag_bundle; copied
 	// verbatim into the resulting DiagBundle so the server can match
 	// asynchronous responses to its issuance audit row.
