@@ -21,12 +21,23 @@ func ReadModem(parent context.Context) ModemSample {
 	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, "mmcli", "-m", "0").Output()
+	idx := modemIndex(ctx)
+	out, err := exec.CommandContext(ctx, "mmcli", "-m", idx).Output()
 	if err != nil {
-		slog.Debug("mmcli -m 0 failed", "err", err)
+		slog.Debug("mmcli -m failed", "idx", idx, "err", err)
 		return ModemSample{}
 	}
 	return parseMmcliOutput(string(out))
+}
+
+// modemIndex resolves the current modem index via `mmcli -L`. Falls back
+// to "0". Needed because the SIM7600 gets a new index after a reset.
+func modemIndex(ctx context.Context) string {
+	out, err := exec.CommandContext(ctx, "mmcli", "-L").Output()
+	if err != nil {
+		return "0"
+	}
+	return parseModemIndex(string(out))
 }
 
 // ReadCellLocation queries ModemManager's 3GPP location (serving cell)
@@ -41,9 +52,10 @@ func ReadCellLocation(parent context.Context) CellLocation {
 	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 	defer cancel()
 
-	out, err := exec.CommandContext(ctx, "mmcli", "-m", "0", "--location-get").Output()
+	idx := modemIndex(ctx)
+	out, err := exec.CommandContext(ctx, "mmcli", "-m", idx, "--location-get").Output()
 	if err != nil {
-		slog.Debug("mmcli --location-get failed", "err", err)
+		slog.Debug("mmcli --location-get failed", "idx", idx, "err", err)
 		return CellLocation{}
 	}
 	return parseCellLocation(string(out))

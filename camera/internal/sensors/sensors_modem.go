@@ -26,11 +26,33 @@ type CellLocation struct {
 }
 
 var (
+	// mmcli's `--location-get` 3GPP block prints the operator as separate
+	// `operator mcc:` / `operator mnc:` lines (verified on SIM7600G-H,
+	// ModemManager 1.x); older/other builds print a combined
+	// `operator code:` line. Handle both — the operator string we produce
+	// is MCC+MNC concatenated, which the server splits back apart.
 	cellOpRE  = regexp.MustCompile(`(?i)operator code\s*:\s*([0-9]+)`)
+	cellMCCRE = regexp.MustCompile(`(?i)operator mcc\s*:\s*([0-9]+)`)
+	cellMNCRE = regexp.MustCompile(`(?i)operator mnc\s*:\s*([0-9]+)`)
 	cellLACRE = regexp.MustCompile(`(?i)location area code\s*:\s*([0-9A-Fa-f]+)`)
 	cellTACRE = regexp.MustCompile(`(?i)tracking area code\s*:\s*([0-9A-Fa-f]+)`)
 	cellCIDRE = regexp.MustCompile(`(?i)cell id\s*:\s*([0-9A-Fa-f]+)`)
+
+	modemPathRE = regexp.MustCompile(`/Modem/(\d+)`)
 )
+
+// parseModemIndex extracts the first modem index from `mmcli -L` output
+// (e.g. ".../Modem/2" → "2"), falling back to "0" when nothing matches.
+// The SIM7600 re-enumerates with a NEW index after a reset/brownout, so
+// the daemon must resolve the index at read time rather than hardcoding
+// `-m 0` — otherwise a single modem reset silently blanks modem_rat and
+// the cell/coarse-location fields even though the modem is alive.
+func parseModemIndex(mmcliListOut string) string {
+	if m := modemPathRE.FindStringSubmatch(mmcliListOut); len(m) == 2 {
+		return m[1]
+	}
+	return "0"
+}
 
 // parseCellLocation is the pure-text half of the cell-location reader.
 // mmcli prints "--" for fields it has no value for; the regexes only
@@ -39,6 +61,17 @@ func parseCellLocation(out string) CellLocation {
 	c := CellLocation{}
 	if m := cellOpRE.FindStringSubmatch(out); len(m) == 2 {
 		c.Operator = m[1]
+	} else {
+		var mcc, mnc string
+		if m := cellMCCRE.FindStringSubmatch(out); len(m) == 2 {
+			mcc = m[1]
+		}
+		if m := cellMNCRE.FindStringSubmatch(out); len(m) == 2 {
+			mnc = m[1]
+		}
+		if mcc != "" && mnc != "" {
+			c.Operator = mcc + mnc
+		}
 	}
 	if m := cellLACRE.FindStringSubmatch(out); len(m) == 2 {
 		c.LAC = m[1]
