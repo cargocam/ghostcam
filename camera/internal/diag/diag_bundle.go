@@ -121,7 +121,23 @@ func CaptureDiagBundle(ctx context.Context, diagID string) common.DiagBundle {
 	// isn't reporting cell_op — empty output means 3GPP location isn't
 	// enabled or isn't readable without privilege. Appended to ModemDetail
 	// to avoid a DiagBundle contract field.
+	// Power / throttling — the definitive remote signal for the modem
+	// brownouts: vcgencmd get_throttled bit 0 = under-voltage now, bit 16 =
+	// under-voltage occurred since boot. Usable by the ghostcam user
+	// (member of the `video` group). Appended to ModemDetail since the
+	// power question is what's resetting the modem.
+	var throttled, volts string
 	var locGet, locStatus, gpsPipe string
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		throttled = runFixedArgv(ctx, []string{"vcgencmd", "get_throttled"})
+	}()
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		volts = runFixedArgv(ctx, []string{"vcgencmd", "measure_volts"})
+	}()
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -143,6 +159,9 @@ func CaptureDiagBundle(ctx context.Context, diagID string) common.DiagBundle {
 	}()
 
 	wg.Wait()
+	if throttled != "" || volts != "" {
+		bundle.ModemDetail += "\n\n=== power: vcgencmd get_throttled / measure_volts ===\n" + throttled + volts
+	}
 	if locStatus != "" {
 		bundle.ModemDetail += "\n\n=== mmcli -m 0 --location-status ===\n" + locStatus
 	}
