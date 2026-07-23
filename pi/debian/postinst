@@ -108,10 +108,12 @@ EOF
             # daemon doesn't have to wait for a reboot to see the fix.
             udevadm control --reload-rules >/dev/null 2>&1 || true
             udevadm trigger --subsystem-match=dma_heap >/dev/null 2>&1 || true
-            # Reload polkit so the netdev → NetworkManager rule (shipped
-            # in /etc/polkit-1/rules.d/49-ghostcam-nm.rules) takes effect
-            # without a reboot. polkit watches the rules dir but a daemon
-            # already running won't pick up new files until reload.
+            # Reload polkit so our netdev rules take effect without a
+            # reboot: 49-ghostcam-nm.rules (NetworkManager, for unattended
+            # wifi/cellular config) and 49-ghostcam-mm.rules (ModemManager
+            # Location, so the daemon can read `mmcli --location-get` for
+            # coarse cell-tower geolocation). polkit watches the rules dir
+            # but a running daemon won't pick up new files until reload.
             systemctl reload polkit >/dev/null 2>&1 || true
             # Set autoconnect-retries=0 (infinite) on every existing NM
             # connection. NM's default of 4 retries is fatal on a headless

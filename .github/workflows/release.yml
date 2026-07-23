@@ -117,6 +117,12 @@ jobs:
           cp pi/debian/polkit/49-ghostcam-nm.rules "$PKG_DIR/etc/polkit-1/rules.d/49-ghostcam-nm.rules"
           chmod 644 "$PKG_DIR/etc/polkit-1/rules.d/49-ghostcam-nm.rules"
 
+          # Polkit rule granting `netdev` the ModemManager Location action
+          # so the non-root daemon can read `mmcli --location-get` (coarse
+          # cell-tower geolocation / GPS fallback). Scoped to Location only.
+          cp pi/debian/polkit/49-ghostcam-mm.rules "$PKG_DIR/etc/polkit-1/rules.d/49-ghostcam-mm.rules"
+          chmod 644 "$PKG_DIR/etc/polkit-1/rules.d/49-ghostcam-mm.rules"
+
           # Maintainer scripts: postinst creates the ghostcam user, data
           # dir, env skeleton; enables + reloads the unit. prerm stops
           # the service on remove/upgrade. Both are idempotent and

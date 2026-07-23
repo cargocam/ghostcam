@@ -45,9 +45,17 @@ echo "Enabling GPS on modem $IDX (state=$STATE)"
 # ModemManager occasionally returns "operation not allowed" while it
 # settles plugin state. Idempotent on success: re-enabling already-
 # enabled location is a no-op.
+#
+# --location-enable-3gpp turns on the 3GPP serving-cell source (MCC/MNC/
+# LAC/TAC/CID) that the daemon reads for coarse cell-tower geolocation as
+# a GPS fallback. ModemManager doesn't persist location settings across
+# reboots, so — like the GPS sources — it must be re-enabled here every
+# boot. The daemon reads it via `mmcli --location-get`, which the
+# ghostcam user is allowed to do by the ModemManager polkit rule shipped
+# in the .deb (pi/debian/polkit/49-ghostcam-mm.rules).
 enabled=0
 for i in $(seq 1 15); do
-    if mmcli -m "$IDX" --location-enable-gps-nmea --location-enable-gps-raw; then
+    if mmcli -m "$IDX" --location-enable-gps-nmea --location-enable-gps-raw --location-enable-3gpp; then
         enabled=1
         break
     fi

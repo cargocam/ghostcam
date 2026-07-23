@@ -1,0 +1,30 @@
+// Allow the ghostcam camera daemon (unprivileged `ghostcam` system user,
+// member of `netdev`) to read the modem's location from ModemManager
+// unattended. `mmcli -m 0 --location-get` is polkit-gated under the
+// `org.freedesktop.ModemManager1.Location` action, which bookworm ships
+// as `auth_admin_keep` — so a GUI-less daemon call fails with
+// "PolicyKit authorization failed: not authorized", and the coarse
+// cell-tower geolocation fallback (server resolves the reported
+// MCC/MNC/LAC/CID to an approximate lat/lon when there's no GPS fix)
+// never gets any cell data to report.
+//
+// Scoped to the `Location` action ONLY — deliberately NOT the blanket
+// `org.freedesktop.ModemManager1.*` the way 49-ghostcam-nm.rules grants
+// NetworkManager. ModemManager also gates Messaging (send SMS), Voice
+// (place calls), and Contacts under separate actions; a camera has no
+// business doing those, and on a metered/roaming SIM an errant SMS costs
+// real money. The Location action covers both reading location and
+// enabling location sources, which is all the daemon needs.
+//
+// Scoped to the netdev group (not the `ghostcam` user by name) so it
+// composes with operator-added admin accounts, matching the NM rule.
+// polkit reads rules at reload; the .deb postinst runs
+// `systemctl reload polkit` after dropping it in place.
+polkit.addRule(function (action, subject) {
+    if (
+        action.id.indexOf("org.freedesktop.ModemManager1.Location") === 0 &&
+        subject.isInGroup("netdev")
+    ) {
+        return polkit.Result.YES;
+    }
+});
