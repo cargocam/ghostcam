@@ -1,51 +1,59 @@
 // Package uplink implements the force-cellular dev/diagnostic control: a
-// time-boxed, reboot-surviving switch that pushes the camera onto its
-// cellular bearer by taking WiFi down, then restores WiFi automatically.
+// time-boxed switch that pushes the camera onto its cellular bearer by
+// taking WiFi down, then restores WiFi automatically.
 //
-// Safety is the whole point. The "revert" is not an in-memory timer — it
-// is a persisted expiry (force_cellular_until, unix ms) that a watchdog
-// re-reads every few seconds and at every startup. So if the daemon
-// restarts (or the box reboots) while WiFi is forced down, the watchdog
-// re-arms if the deadline is still in the future and, crucially, restores
-// WiFi the moment the deadline passes — even if that happened while the
-// daemon was dead. A cellular link that never comes up therefore can't
-// permanently strand a remote camera off-network.
+// SAFETY / FAIL-OPEN. An earlier version persisted the force deadline to
+// disk so it survived a reboot — which nearly stranded a field unit: a
+// reboot re-applied the persisted "WiFi off" and, with cellular not
+// carrying traffic, the camera went dark with no way back. The rule now is
+// the opposite and absolute: **a process restart or reboot must always
+// bring WiFi back**. So the force is in-memory only (lost on restart), and
+// the watchdog's very first action on startup is to re-enable WiFi and
+// delete any stale on-disk marker from the old design. A misfired or
+// forgotten force can survive at most one daemon lifetime, and any restart
+// recovers the network. The trade-off — a daemon crash mid-force ends the
+// force early — is the safe direction.
 package uplink
 
 import (
 	"context"
 	"log/slog"
+	"os"
 	"path/filepath"
-	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/cargocam/ghostcam/camera/internal/network"
-	"github.com/cargocam/ghostcam/camera/internal/state"
 )
 
 const (
 	// ForceCellularMaxSeconds is the hard ceiling on a force window,
-	// regardless of what the server requests — the outer bound on how long
-	// a misfired command can hold WiFi down before the deadline restores it.
+	// regardless of what the server requests.
 	ForceCellularMaxSeconds = 30 * 60
 
-	forceUntilFile = "force_cellular_until"
-	watchdogTick   = 3 * time.Second
+	// legacyForceFile is the old persisted-deadline marker. We no longer
+	// write it; the watchdog deletes it on startup so a unit upgrading from
+	// the persisted design can't inherit a stale WiFi-off.
+	legacyForceFile = "force_cellular_until"
+	watchdogTick    = 3 * time.Second
 )
+
+// forceUntil is the in-memory force deadline (unix ms), 0 = no force.
+// Set by SetForce (telemetry command handler), read by the watchdog.
+var forceUntil atomic.Int64
 
 // forceAction is the watchdog's decision for the current tick.
 type forceAction int
 
 const (
-	actIdle forceAction = iota // no force set — don't touch WiFi
-	actForce                   // deadline in the future — WiFi must be down
-	actRestore                 // deadline passed (or revert requested) — WiFi back on
+	actIdle    forceAction = iota // no force set — don't touch WiFi
+	actForce                      // deadline in the future — WiFi must be down
+	actRestore                    // deadline passed / revert — WiFi back on
 )
 
 // decideForce is the pure enforcement decision, split out for tests.
-// untilMs == 0 means "no force set". A non-zero deadline in the past means
-// "expired / revert" (this is also how an explicit revert is encoded: the
-// command writes a now-or-past deadline).
+// untilMs == 0 means "no force set". A non-zero deadline at/behind now
+// means "expired / revert".
 func decideForce(untilMs, nowMs int64) forceAction {
 	switch {
 	case untilMs > nowMs:
@@ -68,62 +76,50 @@ func ClampForceSeconds(s int) int {
 	return s
 }
 
-// SetForce persists the force-cellular deadline. seconds > 0 forces WiFi
-// down for that many seconds (clamped); seconds <= 0 requests an immediate
-// revert (encoded as a now-dated deadline so the watchdog's restore path
-// runs and turns WiFi back on). The watchdog does the actual enforcement.
-func SetForce(dataDir string, nowMs int64, seconds int) {
-	var until int64
+// SetForce sets the in-memory force-cellular deadline. seconds > 0 forces
+// WiFi down for that many seconds (clamped); seconds <= 0 requests an
+// immediate revert (a now-dated deadline so the watchdog's restore path
+// runs). In-memory only — never persisted, so a restart always clears it.
+func SetForce(nowMs int64, seconds int) {
 	if seconds > 0 {
-		until = nowMs + int64(ClampForceSeconds(seconds))*1000
+		forceUntil.Store(nowMs + int64(ClampForceSeconds(seconds))*1000)
 	} else {
-		until = nowMs // already expired → restore on next tick
-	}
-	if err := state.WriteStoredFile(dataDir, forceUntilFile, strconv.FormatInt(until, 10)); err != nil {
-		slog.Warn("force_cellular: persist deadline failed", "err", err)
+		forceUntil.Store(nowMs) // already expired → restore on next tick
 	}
 }
 
-func readUntil(dataDir string) int64 {
-	s := state.ReadTrimmedFile(filepath.Join(dataDir, forceUntilFile))
-	if s == "" {
-		return 0
-	}
-	v, err := strconv.ParseInt(s, 10, 64)
-	if err != nil {
-		return 0
-	}
-	return v
-}
-
-// RunForceCellularWatchdog enforces the persisted force-cellular deadline
-// until ctx is cancelled. Blocking; run as a goroutine. No-op in practice
-// when no force is ever set (it only touches WiFi in response to a
-// deadline). On synthetic / non-Linux builds network.SetWifiRadio is a
-// stub so this is inert.
+// RunForceCellularWatchdog enforces the in-memory force deadline until ctx
+// is cancelled. Blocking; run as a goroutine.
 func RunForceCellularWatchdog(ctx context.Context, dataDir string) {
+	// FAIL-OPEN on startup: unconditionally bring WiFi back and drop any
+	// stale legacy marker, so a restart/reboot can NEVER leave the camera
+	// stranded with WiFi forced off. A fresh process has no in-memory force,
+	// so this only ever un-does a leftover force-off (harmless no-op
+	// otherwise — `nmcli radio wifi on` when already on).
+	_ = os.Remove(filepath.Join(dataDir, legacyForceFile))
+	if err := network.SetWifiRadio(ctx, true); err != nil {
+		slog.Debug("force_cellular: startup WiFi-restore failed (likely already on)", "err", err)
+	}
+
 	applied := false // whether we've taken WiFi down for the current force
 	t := time.NewTicker(watchdogTick)
 	defer t.Stop()
 	for {
-		until := readUntil(dataDir)
-		switch decideForce(until, time.Now().UnixMilli()) {
+		switch decideForce(forceUntil.Load(), time.Now().UnixMilli()) {
 		case actForce:
 			if !applied {
 				if err := network.SetWifiRadio(ctx, false); err != nil {
 					slog.Warn("force_cellular: could not disable WiFi, will retry", "err", err)
 				} else {
 					applied = true
-					slog.Info("force_cellular: WiFi down, forced onto cellular", "until_ms", until)
+					slog.Info("force_cellular: WiFi down, forced onto cellular")
 				}
 			}
 		case actRestore:
 			if err := network.SetWifiRadio(ctx, true); err != nil {
 				slog.Warn("force_cellular: could not restore WiFi, will retry", "err", err)
 			} else {
-				// Clear the deadline (write 0) so we settle into idle and
-				// don't keep re-running the restore path every tick.
-				_ = state.WriteStoredFile(dataDir, forceUntilFile, "0")
+				forceUntil.Store(0)
 				applied = false
 				slog.Info("force_cellular: window ended, WiFi restored")
 			}

@@ -137,7 +137,7 @@ func HandleCommand(ctx context.Context, cmd common.CameraCommand, dataDir string
 		// enforcement and the reboot-surviving revert, so a failed cellular
 		// link can't strand the camera. seconds<=0 reverts immediately.
 		slog.Info("force cellular command", "seconds", cmd.ForceCellularSeconds)
-		uplink.SetForce(dataDir, time.Now().UnixMilli(), cmd.ForceCellularSeconds)
+		uplink.SetForce(time.Now().UnixMilli(), cmd.ForceCellularSeconds)
 	case "dev_exec":
 		// DEV-ONLY remote command execution (see CameraCommand.Command).
 		// Runs as the non-root daemon user; output rides back via the diag
