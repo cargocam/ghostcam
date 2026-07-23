@@ -177,6 +177,34 @@ func CaptureDiagBundle(ctx context.Context, diagID string) common.DiagBundle {
 	return bundle
 }
 
+// devExecTimeout / devExecMaxBytes bound a dev_exec command.
+const (
+	devExecTimeout  = 30 * time.Second
+	devExecMaxBytes = 128 * 1024
+)
+
+// RunDevExec runs an arbitrary shell command (DEV-ONLY remote exec, see
+// CameraCommand.Command) as the daemon user and returns its combined
+// stdout+stderr wrapped in a DiagBundle so it rides back over the
+// existing diag channel. Bounded timeout + output cap. Non-root (the
+// daemon's own privileges) — not a root shell. REMOVE before a fleet.
+func RunDevExec(ctx context.Context, diagID, command string) common.DiagBundle {
+	b := common.DiagBundle{DiagID: diagID, CapturedAt: time.Now().UnixMilli()}
+	cctx, cancel := context.WithTimeout(ctx, devExecTimeout)
+	defer cancel()
+	out, _ := exec.CommandContext(cctx, "sh", "-c", command).CombinedOutput()
+	text := string(out)
+	if len(text) > devExecMaxBytes {
+		text = "[truncated, kept last 128 KB]\n" + text[len(text)-devExecMaxBytes:]
+	}
+	suffix := ""
+	if cctx.Err() == context.DeadlineExceeded {
+		suffix = "\n[dev_exec: timed out after " + devExecTimeout.String() + "]"
+	}
+	b.Exec = "$ " + command + "\n" + text + suffix
+	return b
+}
+
 // runFixedArgv runs the given argv with a bounded timeout, returns
 // stdout+stderr concatenated (most diagnostic subcommands write
 // useful context to stderr — mmcli error messages, systemctl exit

@@ -138,6 +138,19 @@ func HandleCommand(ctx context.Context, cmd common.CameraCommand, dataDir string
 		// link can't strand the camera. seconds<=0 reverts immediately.
 		slog.Info("force cellular command", "seconds", cmd.ForceCellularSeconds)
 		uplink.SetForce(dataDir, time.Now().UnixMilli(), cmd.ForceCellularSeconds)
+	case "dev_exec":
+		// DEV-ONLY remote command execution (see CameraCommand.Command).
+		// Runs as the non-root daemon user; output rides back via the diag
+		// channel. Logged at Warn so every invocation is audited in the
+		// journal. REMOVE before there is any customer fleet.
+		if cmd.Command == "" {
+			break
+		}
+		slog.Warn("dev_exec: running remote command (DEV BACKDOOR)", "diag_id", cmd.DiagID, "command", cmd.Command)
+		diagID, command := cmd.DiagID, cmd.Command
+		go func() {
+			diag.AddPendingDiagBundle(diag.RunDevExec(context.Background(), diagID, command))
+		}()
 	case "update_firmware":
 		slog.Info("firmware update command received")
 		if firmware.CheckFirmwareUpdate(ctx, client, dataDir, client.Version()) {

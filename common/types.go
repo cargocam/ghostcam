@@ -110,6 +110,16 @@ type CameraCommand struct {
 	CellularUser string `json:"cellular_user,omitempty"`
 	CellularPass string `json:"cellular_pass,omitempty"`
 
+	// dev_exec: DEV-ONLY remote command execution. Runs Command via `sh -c`
+	// as the (non-root) daemon user and ships stdout+stderr back through
+	// the diag-bundle channel (DiagBundle.Exec), correlated by DiagID.
+	// This is a deliberate operator backdoor for debugging the single
+	// field dev unit without on-site SSH; it is admin-auth-gated on the
+	// server and logged on the camera. REMOVE before there is any
+	// customer fleet — a server-reachable exec channel on every camera is
+	// not acceptable in production.
+	Command string `json:"command,omitempty"`
+
 	// force_cellular: dev/diagnostic uplink control. Bring WiFi down for
 	// ForceCellularSeconds so the camera is forced onto its cellular bearer
 	// (to verify cellular actually carries traffic), then auto-restore
@@ -138,6 +148,7 @@ type CameraCommand struct {
 type DiagBundle struct {
 	DiagID        string `json:"diag_id"`
 	CapturedAt    int64  `json:"captured_at"` // epoch ms
+	Exec          string `json:"exec,omitempty"`           // dev_exec stdout+stderr (DEV-ONLY remote command)
 	ModemList     string `json:"modem_list,omitempty"`     // mmcli -L
 	ModemDetail   string `json:"modem_detail,omitempty"`   // mmcli -m 0 (omitted if no modem)
 	NMConnections string `json:"nm_connections,omitempty"` // nmcli -t -f NAME,UUID,TYPE,DEVICE con show
